@@ -1,4 +1,6 @@
 *.pyc
+*.exe
+UAV_SHA256SUMS.txt
 *.mp4
 *.DS_store
 .idea/

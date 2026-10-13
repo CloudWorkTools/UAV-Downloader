@@ -12,6 +12,8 @@ import shutil
 import webbrowser
 import threading
 import queue
+import subprocess
+import platform
 import concurrent.futures
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -53,6 +55,10 @@ from uav_downloader.ui.translation_settings import (
 from uav_downloader.core.video_identity import (
     normalize_source_subtitle_evidence,
     trusted_chinese_subtitle_evidence,
+)
+from uav_downloader.core.history import (
+    get_history_manager,
+    is_same_video,
 )
 from uav_downloader.ui.theme import (
     ACCENT, ACCENT_HOVER, ACCENT_DIM,
@@ -118,6 +124,96 @@ _SUBTITLE_STATE_BY_STAGE = {
     'translate_en': '字幕翻譯中',
     'translate_zh': '字幕翻譯中',
 }
+
+
+def _open_folder_path(path: str):
+    """Open the destination folder in the native file manager."""
+    if not path:
+        return
+    folder = os.path.abspath(path)
+    if os.path.isfile(folder):
+        folder = os.path.dirname(folder)
+    if not os.path.isdir(folder):
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except Exception:
+            pass
+    system = platform.system()
+    try:
+        if system == 'Windows':
+            os.startfile(folder)
+        elif system == 'Darwin':
+            subprocess.Popen(['open', folder])
+        else:
+            subprocess.Popen(['xdg-open', folder])
+    except Exception as exc:
+        print(f'[History] Failed to open folder {folder}: {exc}', flush=True)
+
+
+class HoverTooltip:
+    """Lightweight floating tooltip for CustomTkinter widgets with click action."""
+
+    def __init__(self, widget, text_getter, click_callback=None):
+        self.widget = widget
+        self.text_getter = text_getter if callable(text_getter) else (lambda: text_getter)
+        self.click_callback = click_callback
+        self.tip_window = None
+        self._bind()
+
+    def _bind(self):
+        for w in (self.widget,):
+            w.bind('<Enter>', self.show_tip, add='+')
+            w.bind('<Leave>', self.hide_tip, add='+')
+            if self.click_callback:
+                w.bind('<Button-1>', self._on_click, add='+')
+                try:
+                    w.configure(cursor='hand2')
+                except Exception:
+                    pass
+
+    def _on_click(self, event=None):
+        self.hide_tip()
+        if self.click_callback:
+            self.click_callback()
+        return 'break'
+
+    def show_tip(self, event=None):
+        if self.tip_window:
+            return
+        try:
+            if not self.widget.winfo_exists():
+                return
+            text = self.text_getter()
+            if not text:
+                return
+            x = self.widget.winfo_rootx() + 4
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            try:
+                tw.attributes('-topmost', True)
+            except Exception:
+                pass
+            frame = tk.Frame(
+                tw, bg='#141424', bd=1, relief='solid',
+                highlightthickness=1, highlightbackground='#383854')
+            frame.pack(fill='both', expand=True)
+            lbl = tk.Label(
+                frame, text=text, justify='left',
+                bg='#141424', fg='#e2e8f0',
+                font=(ui_font(), 9), padx=8, pady=5)
+            lbl.pack()
+        except Exception:
+            pass
+
+    def hide_tip(self, event=None):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
 
 
 def _visible_window(items, cap):
@@ -805,6 +901,15 @@ class DownloadManager:
                     item.error = ''
                 if state != '下載中':
                     item.speed = ''
+                if state == '已下載':
+                    try:
+                        get_history_manager().record_download(
+                            url=url,
+                            title=item.name,
+                            dest_dir=item.dest,
+                        )
+                    except Exception as hist_err:
+                        print(f'[History] Record download failed: {hist_err}', flush=True)
 
     def _on_progress(self, url: str, done: int, total: int, speed_bps: float):
         if total <= 0:
@@ -3040,7 +3145,81 @@ class ModernApp(ctk.CTk):
             )
             sel_btn.pack(side='right')
 
-            self._card_widgets[url] = {'card': card, 'sel_btn': sel_btn}
+            # Left badges container
+            status_row = ctk.CTkFrame(bottom, fg_color='transparent')
+            status_row.pack(side='left', fill='x', expand=True, padx=(0, 6))
+
+            history_mgr = get_history_manager()
+            v_status = history_mgr.check_video_status(
+                v,
+                selected_urls=self._selected_urls,
+                queue_items=self._dlmgr.get_items(),
+            )
+
+            # 1. Downloaded badge with hover tooltip & click to open folder
+            if v_status['is_downloaded']:
+                dest_dir = v_status.get('dest_dir', '')
+                dl_badge = ctk.CTkButton(
+                    status_row,
+                    text=T('badge_downloaded'),
+                    width=72,
+                    height=26,
+                    corner_radius=CONTROL_RADIUS,
+                    fg_color=SUCCESS_DIM,
+                    border_width=1,
+                    border_color=SUCCESS,
+                    hover_color='#14532d',
+                    text_color=SUCCESS,
+                    font=(ui_font(), 9, 'bold'),
+                    command=lambda d=dest_dir: _open_folder_path(d),
+                )
+                dl_badge.pack(side='left', padx=(0, 4))
+                tooltip_txt = (
+                    f"📁 {T('tooltip_downloaded_folder')}: {dest_dir or T('unknown_location')}\n"
+                    f"💡 {T('tooltip_click_to_open')}"
+                )
+                HoverTooltip(dl_badge, text_getter=tooltip_txt, click_callback=lambda d=dest_dir: _open_folder_path(d))
+
+            # 2. In Queue badge
+            if v_status['is_in_queue']:
+                q_badge = ctk.CTkLabel(
+                    status_row,
+                    text=T('badge_in_queue'),
+                    fg_color=WARNING_DIM,
+                    text_color=WARNING,
+                    corner_radius=4,
+                    height=24,
+                    font=(ui_font(), 9, 'bold'),
+                    padx=6,
+                )
+                q_badge.pack(side='left', padx=(0, 4))
+                HoverTooltip(
+                    q_badge,
+                    text_getter=lambda st=v_status['queue_state']: T('tooltip_in_queue', state=st or T('state_waiting'))
+                )
+
+            # 3. Duplicate of selected item badge (can dynamically toggle)
+            dup_badge = ctk.CTkLabel(
+                status_row,
+                text=T('badge_selected_dup'),
+                fg_color='#451a03',
+                text_color='#fbbf24',
+                corner_radius=4,
+                height=24,
+                font=(ui_font(), 9, 'bold'),
+                padx=6,
+            )
+            HoverTooltip(dup_badge, text_getter=lambda: T('tooltip_selected_dup'))
+            if v_status['is_selected_duplicate'] and not is_sel:
+                dup_badge.pack(side='left', padx=(0, 4))
+
+            self._card_widgets[url] = {
+                'card': card,
+                'sel_btn': sel_btn,
+                'status_row': status_row,
+                'dup_badge': dup_badge,
+                'video': v,
+            }
 
             # Clickable card
             def _bind_click(widget, video_url=url):
@@ -3138,11 +3317,39 @@ class ModernApp(ctk.CTk):
                 pass
         self._update_selection_count()
 
+    def _update_duplicate_badges(self):
+        """Update the duplicate warning badge for all visible cards in-place."""
+        for u, w in self._card_widgets.items():
+            dup_badge = w.get('dup_badge')
+            v = w.get('video')
+            if not dup_badge or not v:
+                continue
+            is_sel = u in self._selected_urls
+            if is_sel:
+                dup_badge.pack_forget()
+            else:
+                is_dup = False
+                for sel_u in self._selected_urls:
+                    same, _ = is_same_video(v, {'url': sel_u, 'title': ''})
+                    if same:
+                        is_dup = True
+                        break
+                try:
+                    if is_dup:
+                        if not dup_badge.winfo_ismapped():
+                            dup_badge.pack(side='left', padx=(0, 4))
+                    else:
+                        if dup_badge.winfo_ismapped():
+                            dup_badge.pack_forget()
+                except Exception:
+                    pass
+
     def _update_selection_count(self):
         n = len(self._selected_urls)
         self._sel_lbl.configure(
             text=f'{n} {T("selected")}',
             text_color=ACCENT if n else TEXT_SEC)
+        self._update_duplicate_badges()
 
     def _set_card_selected(self, url: str, is_sel: bool):
         w = self._card_widgets.get(url)
