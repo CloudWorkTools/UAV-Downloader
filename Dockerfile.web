@@ -1,0 +1,53 @@
+# ── Multi-stage Dockerfile for UAV Downloader Web on NAS ───────────────────
+# Stage 1: Build the Rust Web server with embedded UI
+FROM rust:1.80-slim AS rust-builder
+
+WORKDIR /build
+COPY uav-web/Cargo.toml /build/Cargo.toml
+COPY uav-web/src /build/src
+COPY uav-web/frontend /build/frontend
+
+RUN cargo build --release
+
+# Stage 2: Final runtime container with Python & FFmpeg
+FROM python:3.11-slim
+
+# Install ffmpeg and curl for health check
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        curl \
+        gosu && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python crawler dependencies
+COPY requirements-docker.txt /app/
+RUN pip install --no-cache-dir -r requirements-docker.txt
+
+# Install UAV Downloader source code
+COPY pyproject.toml /app/
+COPY src /app/src
+RUN pip install --no-cache-dir -e .
+
+# Copy compiled Rust binary
+COPY --from=rust-builder /build/target/release/uav-web /usr/local/bin/uav-web
+
+# Entrypoint script for PUID/PGID handling on NAS
+COPY scripts/entrypoint-web.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV DOWNLOAD_DIR=/downloads \
+    CONFIG_DIR=/config \
+    UAV_HOST=0.0.0.0 \
+    UAV_PORT=8080 \
+    PUID=1000 \
+    PGID=1000
+
+EXPOSE 8080
+
+VOLUME ["/downloads", "/config"]
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uav-web"]

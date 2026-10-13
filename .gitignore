@@ -28,3 +28,7 @@ CLAUDE.md
 .wrangler/
 *.log
 crash_log.txt
+
+# Rust build artifacts
+target/
+**/target/

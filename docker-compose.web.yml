@@ -1,0 +1,21 @@
+services:
+  uav-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: ghcr.io/alos21750/uav-downloader:web
+    container_name: uav-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Taipei
+      - UAV_PORT=8080
+      - DOWNLOAD_DIR=/downloads
+      - CONFIG_DIR=/config
+      - RESOLUTION=highest
+    volumes:
+      - /path/to/nas/downloads:/downloads
+      - /path/to/nas/config:/config

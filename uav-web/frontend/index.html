@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UAV Downloader Web</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#fff1f2',
+              500: '#f43f5e',
+              600: '#e11d48',
+              700: '#be123c',
+            },
+            dark: {
+              bg: '#121217',
+              card: '#1e1e24',
+              hover: '#282832',
+              border: '#2e2e3a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #121217; }
+    ::-webkit-scrollbar-thumb { background: #2e2e3a; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4a4a5a; }
+  </style>
+</head>
+<body class="bg-[#121217] text-gray-100 min-h-screen flex flex-col font-sans selection:bg-brand-500 selection:text-white">
+
+  <!-- Header -->
+  <header class="bg-[#1a1a22] border-b border-[#2e2e3a] sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-brand-600 to-rose-400 flex items-center justify-center font-bold text-white shadow-lg shadow-brand-600/30">
+          U
+        </div>
+        <span class="font-bold text-lg tracking-wider text-white">UAV <span class="text-brand-500">Downloader</span></span>
+        <span id="daemon-status-badge" class="ml-3 px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> 連線正常
+        </span>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="flex items-center space-x-1 sm:space-x-2">
+        <button onclick="switchTab('browse')" id="tab-btn-browse" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white shadow-sm shadow-brand-600/30">
+          🔍 瀏覽
+        </button>
+        <button onclick="switchTab('queue')" id="tab-btn-queue" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832] relative">
+          ⬇️ 下載佇列
+          <span id="queue-badge" class="hidden ml-1 px-1.5 py-0.2 text-[10px] bg-brand-600 text-white rounded-full">0</span>
+        </button>
+        <button onclick="switchTab('watcher')" id="tab-btn-watcher" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
+          ⏱️ 追新監控
+        </button>
+        <button onclick="switchTab('history')" id="tab-btn-history" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
+          📜 歷史記錄
+        </button>
+        <button onclick="switchTab('settings')" id="tab-btn-settings" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
+          ⚙️ 設定
+        </button>
+      </nav>
+
+      <!-- Quick Download URL Button -->
+      <button onclick="openQuickDownloadModal()" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[#282832] hover:bg-[#343442] border border-[#3e3e4e] rounded-lg text-gray-200 transition">
+        ➕ 貼上網址
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+
+    <!-- TAB 1: BROWSE -->
+    <section id="tab-browse" class="tab-content space-y-6">
+      <!-- Site Switcher & Search Bar -->
+      <div class="bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] flex flex-col md:flex-row gap-4 justify-between items-center shadow-lg">
+        <!-- Site Buttons -->
+        <div class="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-1 md:pb-0">
+          <button onclick="selectSite('JableTV')" class="site-btn px-4 py-1.5 rounded-lg text-sm font-medium bg-brand-600 text-white" data-site="JableTV">JableTV</button>
+          <button onclick="selectSite('MissAV')" class="site-btn px-4 py-1.5 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="MissAV">MissAV</button>
+          <button onclick="selectSite('SupJav')" class="site-btn px-4 py-1.5 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="SupJav">SupJav</button>
+          <button onclick="selectSite('Hanime1')" class="site-btn px-4 py-1.5 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="Hanime1">Hanime1</button>
+        </div>
+
+        <!-- Category Dropdown & Search -->
+        <div class="flex items-center gap-3 w-full md:w-auto">
+          <select id="category-select" onchange="onCategoryChange()" class="bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 py-2 outline-none focus:border-brand-500 max-w-[180px]">
+            <option value="">載入分類中...</option>
+          </select>
+          <div class="flex items-center gap-1 flex-1 md:w-64">
+            <input type="text" id="search-input" placeholder="搜尋番號或演員..." onkeydown="if(event.key==='Enter') executeSearch()" class="w-full bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 py-2 outline-none focus:border-brand-500">
+            <button onclick="executeSearch()" class="px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium">搜尋</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Video Grid -->
+      <div id="video-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <!-- Cards injected dynamically -->
+      </div>
+
+      <!-- Loading Spinner -->
+      <div id="browse-loading" class="hidden py-16 text-center text-gray-400">
+        <svg class="animate-spin h-8 w-8 mx-auto text-brand-500 mb-3" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+        </svg>
+        <span>載入影片中...</span>
+      </div>
+
+      <!-- Pagination -->
+      <div id="pagination-bar" class="flex justify-center items-center gap-3 pt-4">
+        <button onclick="changePage(-1)" id="btn-prev-page" class="px-4 py-2 bg-[#282832] hover:bg-[#343442] border border-[#3e3e4e] text-sm rounded-lg disabled:opacity-40">上一頁</button>
+        <span id="page-indicator" class="text-sm text-gray-400 font-medium">第 1 頁</span>
+        <button onclick="changePage(1)" id="btn-next-page" class="px-4 py-2 bg-[#282832] hover:bg-[#343442] border border-[#3e3e4e] text-sm rounded-lg">下一頁</button>
+      </div>
+    </section>
+
+    <!-- TAB 2: DOWNLOAD QUEUE -->
+    <section id="tab-queue" class="tab-content hidden space-y-6">
+      <div class="flex justify-between items-center bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a]">
+        <div>
+          <h2 class="text-base font-bold text-white">任務佇列管理</h2>
+          <p class="text-xs text-gray-400">實時監控下載進度、速度與狀態</p>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="openQuickDownloadModal()" class="px-3.5 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
+            ➕ 新增網址
+          </button>
+        </div>
+      </div>
+
+      <!-- Tasks List Table / Cards -->
+      <div id="tasks-container" class="space-y-3">
+        <!-- Injected dynamically -->
+      </div>
+    </section>
+
+    <!-- TAB 3: WATCHER -->
+    <section id="tab-watcher" class="tab-content hidden space-y-6">
+      <div class="bg-[#1a1a22] p-6 rounded-xl border border-[#2e2e3a] space-y-4">
+        <div class="border-b border-[#2e2e3a] pb-4">
+          <h2 class="text-lg font-bold text-white">UAV Watcher 無人值守追新設定</h2>
+          <p class="text-xs text-gray-400 mt-1">定時掃描所選分類，自動去重並下載最新影片至 NAS</p>
+        </div>
+
+        <!-- Target Site Selection for Watcher -->
+        <div class="flex gap-2" id="watcher-site-tabs">
+          <button onclick="loadWatcherSite('JableTV')" class="watcher-site-btn px-4 py-1.5 text-xs font-medium rounded-lg bg-brand-600 text-white" data-wsite="JableTV">JableTV</button>
+          <button onclick="loadWatcherSite('MissAV')" class="watcher-site-btn px-4 py-1.5 text-xs font-medium rounded-lg bg-[#282832] text-gray-300" data-wsite="MissAV">MissAV</button>
+          <button onclick="loadWatcherSite('SupJav')" class="watcher-site-btn px-4 py-1.5 text-xs font-medium rounded-lg bg-[#282832] text-gray-300" data-wsite="SupJav">SupJav</button>
+          <button onclick="loadWatcherSite('Hanime1')" class="watcher-site-btn px-4 py-1.5 text-xs font-medium rounded-lg bg-[#282832] text-gray-300" data-wsite="Hanime1">Hanime1</button>
+        </div>
+
+        <!-- Target Groups Container -->
+        <div id="watcher-targets-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto p-2">
+          <!-- Populated from API -->
+        </div>
+
+        <div class="pt-4 border-t border-[#2e2e3a] flex flex-col sm:flex-row justify-between items-center gap-4">
+          <div class="flex items-center gap-4 text-xs text-gray-300">
+            <label>檢查間隔：
+              <select class="bg-[#282832] border border-[#3e3e4e] rounded px-2 py-1 text-white">
+                <option value="6">每 6 小時</option>
+                <option value="12">每 12 小時</option>
+                <option value="24" selected>每 24 小時</option>
+              </select>
+            </label>
+          </div>
+          <button onclick="alert('已儲存 Watcher 追新排程設定！')" class="px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg shadow-md transition">
+            儲存監控排程
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: HISTORY -->
+    <section id="tab-history" class="tab-content hidden space-y-6">
+      <div class="bg-[#1a1a22] p-6 rounded-xl border border-[#2e2e3a] space-y-4">
+        <div class="flex justify-between items-center border-b border-[#2e2e3a] pb-4">
+          <div>
+            <h2 class="text-lg font-bold text-white">下載歷史紀錄</h2>
+            <p class="text-xs text-gray-400 mt-1">已下載完成的番號與影片，提供模糊比對去重</p>
+          </div>
+          <span id="history-count" class="text-xs px-2.5 py-1 bg-[#282832] border border-[#3e3e4e] rounded-full text-gray-300">0 部影片</span>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm text-gray-300">
+            <thead class="text-xs text-gray-400 bg-[#282832]/60 uppercase border-b border-[#2e2e3a]">
+              <tr>
+                <th class="px-4 py-3">番號 / 標題</th>
+                <th class="px-4 py-3">站點</th>
+                <th class="px-4 py-3">儲存路徑</th>
+                <th class="px-4 py-3">下載時間</th>
+              </tr>
+            </thead>
+            <tbody id="history-table-body" class="divide-y divide-[#2e2e3a]">
+              <!-- Injected dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: SETTINGS -->
+    <section id="tab-settings" class="tab-content hidden space-y-6">
+      <div class="bg-[#1a1a22] p-6 rounded-xl border border-[#2e2e3a] max-w-3xl space-y-6">
+        <h2 class="text-lg font-bold text-white border-b border-[#2e2e3a] pb-4">系統與下載設定</h2>
+
+        <div class="space-y-4 text-sm">
+          <div>
+            <label class="block text-gray-300 font-medium mb-1">NAS 下載目錄 (DOWNLOAD_DIR)</label>
+            <input type="text" id="setting-download-dir" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-gray-300 font-medium mb-1">畫質偏好</label>
+              <select id="setting-resolution" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+                <option value="highest">最高畫質 (Highest)</option>
+                <option value="1080">1080p</option>
+                <option value="720">720p</option>
+                <option value="480">480p</option>
+                <option value="lowest">最低畫質 (Lowest)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-gray-300 font-medium mb-1">檔名格式</label>
+              <select id="setting-filename-mode" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+                <option value="full-title">番號 + 完整標題</option>
+                <option value="code-only">僅番號 (例如 FC2-PPV-123456)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-gray-300 font-medium mb-1">同時下載影片數 (1-32)</label>
+              <input type="number" id="setting-concurrency" min="1" max="32" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+            </div>
+            <div>
+              <label class="block text-gray-300 font-medium mb-1">單片下載執行緒 (1-16)</label>
+              <input type="number" id="setting-workers" min="1" max="16" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+            </div>
+          </div>
+
+          <!-- AI Subtitle Setting -->
+          <div class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-2">
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="font-medium text-white">AI 自動生成字幕</span>
+                <p class="text-xs text-gray-400">日語音軌辨識並輸出 .srt（NAS 上預設停用以降低 CPU 負載）</p>
+              </div>
+              <input type="checkbox" id="setting-subtitles" class="w-5 h-5 accent-brand-600 rounded">
+            </div>
+            <div id="subtitles-options" class="hidden pt-2 grid grid-cols-2 gap-2 text-xs">
+              <label><input type="radio" name="sub_mode" value="zh" checked> 繁體中文 (.zh-TW.srt)</label>
+              <label><input type="radio" name="sub_mode" value="all"> 三語 (日 / 英 / 繁中)</label>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-gray-300 font-medium mb-1">代理伺服器 (Proxy URL)</label>
+            <input type="text" id="setting-proxy-url" placeholder="例如 http://127.0.0.1:7890 或 socks5://..." class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+          </div>
+        </div>
+
+        <div class="pt-4 border-t border-[#2e2e3a] flex justify-end">
+          <button onclick="saveSettings()" class="px-6 py-2 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg transition shadow-md">
+            儲存所有設定
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Quick Download Modal -->
+  <div id="quick-modal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-[#1a1a22] border border-[#2e2e3a] rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+      <div class="flex justify-between items-center">
+        <h3 class="text-base font-bold text-white">手動加入下載網址</h3>
+        <button onclick="closeQuickDownloadModal()" class="text-gray-400 hover:text-white text-lg">&times;</button>
+      </div>
+      <p class="text-xs text-gray-400">支援 JableTV, MissAV, SupJav, Hanime1 影片網址（每行一個）：</p>
+      <textarea id="modal-urls-input" rows="4" placeholder="https://jable.tv/videos/abc-123/&#10;https://missav.ai/..." class="w-full bg-[#282832] border border-[#3e3e4e] text-sm text-white rounded-lg p-3 outline-none focus:border-brand-500"></textarea>
+      <div class="flex justify-end gap-2">
+        <button onclick="closeQuickDownloadModal()" class="px-4 py-2 bg-[#282832] text-gray-300 rounded-lg text-sm">取消</button>
+        <button onclick="submitModalUrls()" class="px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg text-sm shadow-md">開始下載</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Floating Selection Bar -->
+  <div id="selection-bar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a22] border border-[#3e3e4e] px-6 py-3 rounded-full shadow-2xl flex items-center gap-4 z-40">
+    <span class="text-sm font-medium text-white">已選取 <span id="selected-count" class="text-brand-500 font-bold">0</span> 部影片</span>
+    <button onclick="downloadSelectedVideos()" class="px-4 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-full shadow transition">加入佇列下載</button>
+    <button onclick="clearSelection()" class="text-xs text-gray-400 hover:text-white">取消全選</button>
+  </div>
+
+  <!-- Client-side Logic -->
+  <script>
+    let currentSite = 'JableTV';
+    let currentPage = 1;
+    let currentCategoryUrl = '';
+    let selectedUrls = new Set();
+    let watcherTargetsData = {};
+
+    // WebSocket connection
+    let ws = null;
+    function initWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        document.getElementById('daemon-status-badge').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> 連線正常';
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'tasks') {
+            renderTasks(msg.data);
+          } else if (msg.type === 'daemon_status' && !msg.connected) {
+            document.getElementById('daemon-status-badge').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> 守護進程重新連線中...';
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        document.getElementById('daemon-status-badge').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span> 連線中斷，重試中...';
+        setTimeout(initWebSocket, 2000);
+      };
+    }
+
+    // Tabs switching
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('bg-brand-600', 'text-white', 'shadow-brand-600/30');
+        btn.classList.add('text-gray-400', 'hover:text-white', 'hover:bg-[#282832]');
+      });
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+
+      const activeBtn = document.getElementById(`tab-btn-${tabId}`);
+      if (activeBtn) {
+        activeBtn.classList.add('bg-brand-600', 'text-white', 'shadow-brand-600/30');
+        activeBtn.classList.remove('text-gray-400', 'hover:text-white', 'hover:bg-[#282832]');
+      }
+      document.getElementById(`tab-${tabId}`).classList.remove('hidden');
+
+      if (tabId === 'history') loadHistory();
+      if (tabId === 'settings') loadSettings();
+      if (tabId === 'watcher') loadWatcherTargets();
+    }
+
+    // Site selection
+    async function selectSite(site) {
+      currentSite = site;
+      currentPage = 1;
+      document.querySelectorAll('.site-btn').forEach(btn => {
+        if (btn.dataset.site === site) {
+          btn.classList.add('bg-brand-600', 'text-white');
+          btn.classList.remove('bg-[#282832]', 'text-gray-300');
+        } else {
+          btn.classList.remove('bg-brand-600', 'text-white');
+          btn.classList.add('bg-[#282832]', 'text-gray-300');
+        }
+      });
+      await loadCategories();
+      await fetchBrowse();
+    }
+
+    // Category loading
+    async function loadCategories() {
+      const select = document.getElementById('category-select');
+      select.innerHTML = '<option value="">載入中...</option>';
+      try {
+        const resp = await fetch(`/api/categories?site=${currentSite}`);
+        const data = await resp.json();
+        select.innerHTML = '';
+        (data.categories || []).forEach((cat, idx) => {
+          const opt = document.createElement('option');
+          opt.value = cat.url;
+          opt.textContent = cat.name;
+          if (idx === 0) currentCategoryUrl = cat.url;
+          select.appendChild(opt);
+        });
+      } catch (e) {
+        select.innerHTML = '<option value="">分類讀取失敗</option>';
+      }
+    }
+
+    function onCategoryChange() {
+      currentCategoryUrl = document.getElementById('category-select').value;
+      currentPage = 1;
+      fetchBrowse();
+    }
+
+    // Browse videos
+    async function fetchBrowse() {
+      const grid = document.getElementById('video-grid');
+      const loader = document.getElementById('browse-loading');
+      grid.innerHTML = '';
+      loader.classList.remove('hidden');
+
+      try {
+        const resp = await fetch('/api/browse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            site: currentSite,
+            url: currentCategoryUrl,
+            page: currentPage
+          })
+        });
+        const res = await resp.json();
+        loader.classList.add('hidden');
+        renderVideos(res.videos || []);
+        document.getElementById('page-indicator').textContent = `第 ${currentPage} 頁`;
+        document.getElementById('btn-prev-page').disabled = (currentPage <= 1);
+      } catch (e) {
+        loader.classList.add('hidden');
+        grid.innerHTML = '<div class="col-span-full py-12 text-center text-rose-400">載入失敗，可能被網站 Cloudflare 阻擋或網路中斷</div>';
+      }
+    }
+
+    function renderVideos(videos) {
+      const grid = document.getElementById('video-grid');
+      grid.innerHTML = '';
+      if (!videos.length) {
+        grid.innerHTML = '<div class="col-span-full py-12 text-center text-gray-400">沒有找到影片</div>';
+        return;
+      }
+
+      videos.forEach(v => {
+        const card = document.createElement('div');
+        card.className = 'group relative bg-[#1a1a22] rounded-xl overflow-hidden border border-[#2e2e3a] hover:border-brand-600/50 transition shadow-md flex flex-col';
+
+        const isChecked = selectedUrls.has(v.url) ? 'checked' : '';
+
+        card.innerHTML = `
+          <div class="relative aspect-video bg-[#282832] overflow-hidden">
+            <img src="${v.thumbnail || ''}" alt="" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+            ${v.duration ? `<span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[11px] bg-black/80 font-medium rounded text-white">${v.duration}</span>` : ''}
+            <input type="checkbox" onchange="toggleSelectVideo('${v.url}', this.checked)" ${isChecked} class="absolute top-2 left-2 w-4 h-4 accent-brand-600 rounded cursor-pointer z-10">
+          </div>
+          <div class="p-3 flex-1 flex flex-col justify-between">
+            <h4 class="text-xs font-semibold text-gray-200 line-clamp-2 leading-snug group-hover:text-brand-500 transition" title="${v.title}">
+              ${v.title}
+            </h4>
+            <div class="mt-2.5 flex items-center justify-between text-[11px] text-gray-400">
+              <span>${v.date || currentSite}</span>
+              <button onclick="startSingleDownload('${v.url}')" class="px-2 py-1 bg-[#282832] hover:bg-brand-600 hover:text-white rounded border border-[#3e3e4e] transition text-gray-200">
+                立即下載
+              </button>
+            </div>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function toggleSelectVideo(url, checked) {
+      if (checked) selectedUrls.add(url);
+      else selectedUrls.delete(url);
+      updateSelectionBar();
+    }
+
+    function updateSelectionBar() {
+      const bar = document.getElementById('selection-bar');
+      const countEl = document.getElementById('selected-count');
+      countEl.textContent = selectedUrls.size;
+      if (selectedUrls.size > 0) bar.classList.remove('hidden');
+      else bar.classList.add('hidden');
+    }
+
+    function clearSelection() {
+      selectedUrls.clear();
+      updateSelectionBar();
+      document.querySelectorAll('#video-grid input[type="checkbox"]').forEach(c => c.checked = false);
+    }
+
+    async function downloadSelectedVideos() {
+      const urls = Array.from(selectedUrls);
+      for (const url of urls) {
+        await startSingleDownload(url, false);
+      }
+      clearSelection();
+      switchTab('queue');
+    }
+
+    async function startSingleDownload(url, navigate = true) {
+      try {
+        const resp = await fetch('/api/download/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        const res = await resp.json();
+        if (res.success && navigate) switchTab('queue');
+      } catch (e) {
+        alert('加入下載佇列失敗: ' + e);
+      }
+    }
+
+    function changePage(delta) {
+      currentPage = Math.max(1, currentPage + delta);
+      fetchBrowse();
+    }
+
+    async function executeSearch() {
+      const q = document.getElementById('search-input').value.trim();
+      if (!q) return;
+      currentPage = 1;
+      const grid = document.getElementById('video-grid');
+      const loader = document.getElementById('browse-loading');
+      grid.innerHTML = '';
+      loader.classList.remove('hidden');
+
+      try {
+        const resp = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ site: currentSite, query: q, page: 1 })
+        });
+        const res = await resp.json();
+        loader.classList.add('hidden');
+        renderVideos(res.videos || []);
+      } catch (e) {
+        loader.classList.add('hidden');
+        alert('搜尋失敗: ' + e);
+      }
+    }
+
+    // Render Tasks in Downloads Tab
+    function renderTasks(tasks) {
+      const container = document.getElementById('tasks-container');
+      const badge = document.getElementById('queue-badge');
+      const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'preparing').length;
+
+      if (activeCount > 0) {
+        badge.textContent = activeCount;
+        badge.classList.remove('hidden');
+      } else {
+        badge.classList.add('hidden');
+      }
+
+      if (!tasks.length) {
+        container.innerHTML = '<div class="py-16 text-center text-gray-500 bg-[#1a1a22] rounded-xl border border-[#2e2e3a]">目前沒有下載任務</div>';
+        return;
+      }
+
+      container.innerHTML = tasks.map(t => {
+        let statusBadge = '';
+        if (t.status === 'downloading') {
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded font-medium">下載中 (${t.speed_formatted})</span>`;
+        } else if (t.status === 'completed') {
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-medium">已完成</span>`;
+        } else if (t.status === 'cancelled') {
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-gray-500/20 text-gray-400 border border-gray-500/30 rounded font-medium">已取消</span>`;
+        } else if (t.status === 'failed') {
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded font-medium" title="${t.error || ''}">失敗: ${t.error || ''}</span>`;
+        } else {
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded font-medium">${t.status}</span>`;
+        }
+
+        return `
+          <div class="bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] space-y-3">
+            <div class="flex justify-between items-start gap-4">
+              <div class="flex-1 min-w-0">
+                <h4 class="text-sm font-semibold text-white truncate">${t.name || t.url}</h4>
+                <p class="text-xs text-gray-400 truncate mt-0.5">${t.url}</p>
+              </div>
+              <div class="flex items-center gap-2">
+                ${statusBadge}
+                ${(t.status === 'downloading' || t.status === 'pending' || t.status === 'preparing') ?
+                  `<button onclick="cancelTask('${t.task_id}')" class="px-2.5 py-1 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
+              </div>
+            </div>
+            <!-- Progress Bar -->
+            <div class="space-y-1">
+              <div class="w-full bg-[#282832] h-2 rounded-full overflow-hidden">
+                <div class="bg-gradient-to-r from-brand-600 to-rose-400 h-full transition-all duration-300" style="width: ${t.progress}%"></div>
+              </div>
+              <div class="flex justify-between text-[11px] text-gray-400">
+                <span>分段: ${t.downloaded_segments} / ${t.total_segments}</span>
+                <span>${t.progress}%</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function cancelTask(taskId) {
+      await fetch('/api/download/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId })
+      });
+    }
+
+    // Modal
+    function openQuickDownloadModal() {
+      document.getElementById('quick-modal').classList.remove('hidden');
+    }
+    function closeQuickDownloadModal() {
+      document.getElementById('quick-modal').classList.add('hidden');
+      document.getElementById('modal-urls-input').value = '';
+    }
+    async function submitModalUrls() {
+      const text = document.getElementById('modal-urls-input').value;
+      const urls = text.split('\n').map(u => u.trim()).filter(u => u && !u.startsWith('#'));
+      for (const url of urls) {
+        await startSingleDownload(url, false);
+      }
+      closeQuickDownloadModal();
+      switchTab('queue');
+    }
+
+    // History
+    async function loadHistory() {
+      try {
+        const resp = await fetch('/api/history?limit=100');
+        const data = await resp.json();
+        document.getElementById('history-count').textContent = `${data.total} 部影片`;
+        const tbody = document.getElementById('history-table-body');
+        tbody.innerHTML = (data.entries || []).map(e => `
+          <tr class="hover:bg-[#23232c] transition">
+            <td class="px-4 py-3 font-medium text-white max-w-xs truncate" title="${e.title}">
+              <span class="text-brand-500 font-bold mr-1.5">${e.code || ''}</span>${e.title}
+            </td>
+            <td class="px-4 py-3 text-xs text-gray-400">${e.site || ''}</td>
+            <td class="px-4 py-3 text-xs text-gray-400 max-w-xs truncate">${e.dest_dir || ''}</td>
+            <td class="px-4 py-3 text-xs text-gray-500">${e.downloaded_at ? e.downloaded_at.slice(0, 10) : ''}</td>
+          </tr>
+        `).join('');
+      } catch (e) {}
+    }
+
+    // Watcher targets
+    async function loadWatcherTargets() {
+      try {
+        const resp = await fetch('/api/watcher/targets');
+        const data = await resp.json();
+        watcherTargetsData = data.targets || {};
+        loadWatcherSite('JableTV');
+      } catch (e) {}
+    }
+
+    function loadWatcherSite(site) {
+      document.querySelectorAll('.watcher-site-btn').forEach(btn => {
+        if (btn.dataset.wsite === site) {
+          btn.classList.add('bg-brand-600', 'text-white');
+          btn.classList.remove('bg-[#282832]', 'text-gray-300');
+        } else {
+          btn.classList.remove('bg-brand-600', 'text-white');
+          btn.classList.add('bg-[#282832]', 'text-gray-300');
+        }
+      });
+
+      const container = document.getElementById('watcher-targets-container');
+      const groups = watcherTargetsData[site] || [];
+      container.innerHTML = groups.map(g => `
+        <div class="bg-[#23232c] p-3 rounded-lg border border-[#3e3e4e]">
+          <h4 class="text-xs font-bold text-gray-200 border-b border-[#3e3e4e] pb-1.5 mb-2">${g.name}</h4>
+          <div class="space-y-1.5 max-h-40 overflow-y-auto text-xs">
+            ${(g.targets || []).map(t => `
+              <label class="flex items-center gap-2 text-gray-300 hover:text-white cursor-pointer">
+                <input type="checkbox" class="accent-brand-600">
+                <span class="truncate">${t.name}</span>
+              </label>
+            `).join('')}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Settings
+    async function loadSettings() {
+      try {
+        const resp = await fetch('/api/settings');
+        const data = await resp.json();
+        document.getElementById('setting-download-dir').value = data.download_dir || '';
+        document.getElementById('setting-resolution').value = data.resolution || 'highest';
+        document.getElementById('setting-filename-mode').value = data.filename_mode || 'full-title';
+        document.getElementById('setting-concurrency').value = data.download_concurrency || 2;
+        document.getElementById('setting-workers').value = data.max_workers_per_video || 4;
+        document.getElementById('setting-proxy-url').value = data.proxy_url || '';
+        document.getElementById('setting-subtitles').checked = data.subtitle_pref && data.subtitle_pref !== 'none';
+      } catch (e) {}
+    }
+
+    async function saveSettings() {
+      const payload = {
+        download_dir: document.getElementById('setting-download-dir').value,
+        resolution: document.getElementById('setting-resolution').value,
+        filename_mode: document.getElementById('setting-filename-mode').value,
+        download_concurrency: parseInt(document.getElementById('setting-concurrency').value),
+        max_workers_per_video: parseInt(document.getElementById('setting-workers').value),
+        proxy_url: document.getElementById('setting-proxy-url').value,
+        subtitle_pref: document.getElementById('setting-subtitles').checked ? 'zh' : 'none'
+      };
+
+      try {
+        const resp = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const res = await resp.json();
+        if (res.success) alert('設定已成功儲存！');
+      } catch (e) {
+        alert('儲存失敗: ' + e);
+      }
+    }
+
+    // Init
+    window.addEventListener('DOMContentLoaded', () => {
+      initWebSocket();
+      selectSite('JableTV');
+    });
+  </script>
+</body>
+</html>

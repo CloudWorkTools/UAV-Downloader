@@ -42,6 +42,8 @@ Issues = "https://github.com/Alos21750/UAV-Downloader/issues"
 uav = "uav_downloader.cli.main:main"
 uav-downloader = "uav_downloader.cli.main:main"
 uav-downloader-cli = "uav_downloader.cli.headless:main"
+uav-daemon = "uav_downloader.daemon.server:main"
+uav-downloader-daemon = "uav_downloader.daemon.server:main"
 
 [project.gui-scripts]
 uav-browser = "uav_downloader.entrypoints.browse:main"
