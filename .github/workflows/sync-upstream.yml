@@ -1,0 +1,74 @@
+name: Sync with Upstream
+
+on:
+  schedule:
+    # Run every 12 hours (00:00 and 12:00 UTC)
+    - cron: '0 0,12 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync upstream
+        id: sync
+        run: |
+          UPSTREAM_URL="https://github.com/Alos21750/UAV-Downloader.git"
+          UPSTREAM_BRANCH="master"
+
+          echo "Adding upstream remote: $UPSTREAM_URL"
+          git remote add upstream "$UPSTREAM_URL" || git remote set-url upstream "$UPSTREAM_URL"
+          git fetch upstream "$UPSTREAM_BRANCH"
+
+          # Check if upstream is already an ancestor of HEAD
+          if git merge-base --is-ancestor upstream/$UPSTREAM_BRANCH HEAD; then
+            echo "Already up to date with upstream."
+            exit 0
+          fi
+
+          echo "Upstream has new updates. Merging upstream/$UPSTREAM_BRANCH..."
+          if git merge upstream/$UPSTREAM_BRANCH --no-edit -m "chore(sync): merge upstream changes from Alos21750/UAV-Downloader"; then
+            echo "Merge succeeded. Pushing changes to origin/master..."
+            git push origin master
+          else
+            echo "Merge conflict detected! Aborting merge."
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Create issue on conflict
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueTitle = "⚠️ Upstream Sync Merge Conflict";
+            const issueBody = `自動同步上游倉庫 \`Alos21750/UAV-Downloader\` 時發生衝突，請手動合併：\n\n\`\`\`bash\ngit fetch upstream\ngit merge upstream/master\n# 解決衝突後\ngit commit -m "chore: merge upstream conflicts"\ngit push origin master\n\`\`\``;
+            
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open'
+            });
+            const exists = issues.data.some(i => i.title === issueTitle);
+            if (!exists) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: issueBody
+              });
+            }
