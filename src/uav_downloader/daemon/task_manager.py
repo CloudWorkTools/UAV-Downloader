@@ -667,7 +667,7 @@ class TaskManager:
             try:
                 storage.close()
             except OSError as exc:
-                warning = f"NAS 暫存鎖無法清除：{exc}；請確認連線後清除 .uav-*.lock"
+                warning = f"NAS 連線或下載鎖釋放失敗：{exc}；請確認連線後重試"
                 task.error = f"{task.error}；{warning}" if task.error else warning
                 if task.cancelled_event.is_set():
                     task.status = "failed"

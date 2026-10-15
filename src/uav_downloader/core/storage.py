@@ -121,6 +121,22 @@ class LocalStorage:
     def open(self, path, mode, *args, **kwargs):
         return open(path, mode, *args, **kwargs)
 
+    def lock(self, path):
+        # Keep the inode: unlinking a POSIX lock lets another process bypass its owner.
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        handle = os.fdopen(descriptor, 'r+b')
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            handle.close()
+            raise
+        return handle
+
     def stat(self, path, **kwargs):
         return os.stat(path, **kwargs)
 

@@ -15,6 +15,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uav_downloader.core.storage import StorageWriteError
 
 
+def smb_lock(path, **options):
+    import smbclient
+    from smbprotocol.header import NtStatus
+    from smbprotocol.open import CreateOptions, FilePipePrinterAccessMask as Access
+    try:
+        return smbclient.open_file(
+            path, mode='a+b', share_access=None,
+            desired_access=Access.GENERIC_READ | Access.GENERIC_WRITE | Access.DELETE,
+            create_options=CreateOptions.FILE_DELETE_ON_CLOSE, **options)
+    except OSError as exc:
+        if getattr(exc, 'ntstatus', None) in (NtStatus.STATUS_SHARING_VIOLATION, NtStatus.STATUS_DELETE_PENDING):
+            raise BlockingIOError(errno.EBUSY, 'NAS 下載鎖仍由其他連線持有') from None
+        raise
+
+
 class SmbStorage:
     remote = True
 
@@ -57,6 +72,9 @@ class SmbStorage:
         if 'r' in mode and '+' not in mode:
             kwargs.setdefault('share_access', 'r')
         return self._call(self.client.open_file, path, mode=mode, buffering=buffering, **kwargs)
+
+    def lock(self, path):
+        return self._call(smb_lock, path)
 
     def stat(self, path, **kwargs):
         return self._call(self.client.stat, path, **kwargs)

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from uav_downloader.core.smb_storage import SmbStorage
-from uav_downloader.core.storage import SMB_PATH_ROOT, StorageWriteError, registered_storage, storage_fs, storage_open
+from uav_downloader.core.storage import LocalStorage, SMB_PATH_ROOT, StorageWriteError, registered_storage, storage_fs, storage_open
 from uav_downloader.daemon import nas
 from uav_downloader.daemon.task_manager import TaskManager
 from uav_downloader.sites import base
@@ -32,7 +32,23 @@ def smb(monkeypatch, tmp_path):
         return folder.joinpath(*remote[len('\\\\nas\\share'):].strip('\\').split('\\'))
     monkeypatch.setattr(smbclient, 'register_session', MagicMock())
     monkeypatch.setattr(smbclient, 'reset_connection_cache', MagicMock())
-    monkeypatch.setattr(smbclient, 'open_file', lambda name, mode, **kw: open(path(name), mode, **{k:v for k,v in kw.items() if k not in ('connection_cache', 'share_access')}))
+    def open_file(name, mode, **kwargs):
+        if kwargs.get('create_options'):
+            from smbprotocol.open import CreateOptions
+            assert kwargs['create_options'] == CreateOptions.FILE_DELETE_ON_CLOSE
+            assert kwargs.get('share_access') is None
+            handle = LocalStorage().lock(path(name))
+            class Lock:
+                def close(self):
+                    path(name).unlink(missing_ok=True)
+                    handle.close()
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    self.close()
+            return Lock()
+        return open(path(name), mode, **{k:v for k,v in kwargs.items() if k not in ('connection_cache', 'share_access')})
+    monkeypatch.setattr(smbclient, 'open_file', open_file)
     monkeypatch.setattr(smbclient, 'listdir', lambda name, **kw: os.listdir(path(name)))
     monkeypatch.setattr(smbclient, 'stat', lambda name, **kw: path(name).stat(follow_symlinks=kw.get('follow_symlinks', True)))
     monkeypatch.setattr(smbclient, 'makedirs', lambda name, **kw: path(name).mkdir(parents=True, exist_ok=kw.get('exist_ok', False)))
@@ -335,3 +351,28 @@ def test_media_bridge_supports_overlapping_smb_read_handles(smb, monkeypatch):
         with smb.backend.media_source(path) as url:
             with opener.open(urllib.request.Request(url, headers={'Range': 'bytes=3-6'})) as response:
                 assert response.read() == b'3456'
+
+
+def test_smb_old_unheld_lock_is_reused_and_removed_on_close(smb):
+    lock = smb.folder / nas._target_lock_name('retry.mp4')
+    lock.write_bytes(b'')
+    with nas.reserve_direct_target(smb.settings, 'retry.mp4'):
+        assert lock.exists()
+        with pytest.raises(nas.NasError, match='任務使用中'):
+            with nas.reserve_direct_target(smb.settings, 'retry.mp4'):
+                pytest.fail('Must not steal an active lock')
+    assert not lock.exists()
+
+
+def test_smb_sharing_violation_is_reported_as_busy(monkeypatch):
+    from smbprotocol.exceptions import SMBOSError
+    from smbprotocol.header import NtStatus
+    import smbclient
+    def busy(*args, **kwargs):
+        raise SMBOSError(NtStatus.STATUS_SHARING_VIOLATION, 'private-host-path')
+    monkeypatch.setattr(smbclient, 'open_file', busy)
+    from uav_downloader.core.smb_storage import smb_lock
+    with pytest.raises(BlockingIOError) as error:
+        smb_lock('private-host-path')
+    assert error.value.errno == errno.EBUSY
+    assert 'private-host-path' not in str(error.value)

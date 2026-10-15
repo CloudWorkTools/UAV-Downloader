@@ -59,21 +59,31 @@ class Remote:
         self.files = {}
         self.directories = set()
         self.fail = False
+        self.active_locks = set()
         self.path = self
 
     @contextmanager
     def open_file(self, path, mode, **kwargs):
-        assert mode == 'xb'
+        assert mode in ('xb', 'a+b')
         if self.fail:
             raise OSError('private credentials should never escape')
-        if path in self.files:
+        locking = mode == 'a+b'
+        if path in self.active_locks:
+            raise BlockingIOError(16, 'active lock')
+        if not locking and path in self.files:
             raise FileExistsError(path)
+        if locking:
+            self.active_locks.add(path)
         self.files[path] = b''
         stream = io.BytesIO()
         try:
             yield stream
         finally:
-            self.files[path] = stream.getvalue()
+            if locking:
+                self.active_locks.remove(path)
+                self.files.pop(path, None)
+            else:
+                self.files[path] = stream.getvalue()
 
     def makedirs(self, path, exist_ok=False, **kwargs):
         assert exist_ok
@@ -250,7 +260,7 @@ def test_direct_queue_overrides_local_default_and_skips_upload(direct_profile, m
     assert task.status == 'completed'
     assert Path(task.dest, 'movie.mp4').read_bytes() == b'video directly on NAS'
     assert not local.exists()
-    assert not list(Path(task.dest).glob('.uav-*.lock'))
+    assert list(Path(task.dest).glob('.uav-*.lock'))
 
 
 def test_unmounted_direct_destination_fails_before_downloader(direct_profile, monkeypatch):
@@ -277,17 +287,18 @@ def test_direct_reservation_preserves_existing_file_and_blocks_duplicates(direct
         with nas.reserve_direct_target(direct_profile, 'movie.mp4'):
             pytest.fail('must not replace existing video')
     assert target.read_bytes() == b'existing video'
-    assert not list(target.parent.glob('.uav-*.lock'))
+    assert list(target.parent.glob('.uav-*.lock'))
 
 
 def test_upload_respects_direct_mode_reservation(profile, remote, tmp_path):
     video = tmp_path / 'movie.mp4'
     video.write_bytes(b'local video')
     lock = ntpath.join('\\\\' + profile['host'], profile['share'], profile['directory'], nas._target_lock_name(video.name))
-    remote.files[lock] = b'direct download active'
-    with pytest.raises(nas.NasError):
-        nas.upload_video(profile, video, threading.Event())
-    assert remote.files == {lock: b'direct download active'}
+    with nas.smb_lock(lock):
+        with pytest.raises(nas.NasError):
+            nas.upload_video(profile, video, threading.Event())
+        assert lock in remote.files
+    assert not remote.files
     assert video.read_bytes() == b'local video'
 
 
@@ -376,3 +387,45 @@ def test_interrupted_upload_cleanup_can_retry_after_nas_reconnect(profile, remot
     nas.cleanup_upload(profile, owned)
     assert not remote.files
     assert not owned
+
+
+def test_inactive_lock_from_interrupted_download_does_not_block_retry(direct_profile):
+    lock = Path(direct_profile['direct_path'], nas._target_lock_name('retry.mp4'))
+    lock.write_bytes(b'')
+    with nas.reserve_direct_target(direct_profile, 'retry.mp4'):
+        assert not lock.parent.joinpath('retry.mp4').exists()
+    with nas.reserve_direct_target(direct_profile, 'retry.mp4'):
+        pass
+
+
+def test_upload_recovers_abandoned_lock_without_overwriting_files(profile, remote, tmp_path):
+    video = tmp_path / 'recovered.mp4'
+    video.write_bytes(b'video')
+    root = ntpath.join('\\\\' + profile['host'], profile['share'], profile['directory'])
+    lock = ntpath.join(root, nas._target_lock_name(video.name))
+    remote.files[lock] = b''
+    nas.upload_video(profile, video, threading.Event())
+    assert lock not in remote.files
+    assert remote.files[ntpath.join(root, video.name)] == b'video'
+    assert video.read_bytes() == b'video'
+
+
+def test_mounted_lock_releases_after_process_exit(direct_profile):
+    import subprocess, sys
+    folder = direct_profile['direct_path']
+    lock = str(Path(folder, nas._target_lock_name('after-crash.mp4')))
+    child = subprocess.Popen([sys.executable, '-c',
+        'import sys,time; from uav_downloader.core.storage import LocalStorage; '
+        'handle=LocalStorage().lock(sys.argv[1]); print("locked",flush=True); time.sleep(60)', lock],
+        stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == 'locked'
+        with pytest.raises(nas.NasError, match='任務使用中'):
+            with nas.reserve_direct_target(direct_profile, 'after-crash.mp4'):
+                pytest.fail('Live process lock must not be stolen')
+    finally:
+        child.kill()
+        child.wait(5)
+        child.stdout.close()
+    with nas.reserve_direct_target(direct_profile, 'after-crash.mp4'):
+        pass

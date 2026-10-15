@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 from contextlib import contextmanager
 import hashlib
 import ipaddress
@@ -18,6 +19,7 @@ from urllib.parse import unquote, urlsplit
 from Crypto.Cipher import AES
 from uav_downloader.core.paths import product_data_dir
 from uav_downloader.core.storage import SMB_PATH_ROOT, registered_storage, storage_fs
+from uav_downloader.core.smb_storage import smb_lock
 
 _lock = threading.RLock()
 _FIELDS = ('enabled', 'mode', 'host', 'share', 'directory', 'username', 'direct_path')
@@ -211,12 +213,10 @@ def upload_video(settings, video_file, cancelled, published=None):
                              if p.is_file() and p.name.startswith(video.stem + '.') and p.suffix == '.srt')
     with _connection(settings) as (smb, root, options):
         lock = ntpath.join(root, _target_lock_name(video.name))
-        reserved = False
         if published is None:
             published = []
         try:
-            with smb.open_file(lock, mode='xb', **options):
-                reserved = True
+            with smb_lock(lock, **options):
                 for source in files:
                     if cancelled.is_set():
                         return
@@ -241,12 +241,8 @@ def upload_video(settings, video_file, cancelled, published=None):
                         if temporary in published:
                             published.remove(temporary)
         finally:
-            try:
-                if cancelled.is_set():
-                    _remove_uploaded(smb, published, options)
-            finally:
-                if reserved:
-                    smb.remove(lock, **options)
+            if cancelled.is_set():
+                _remove_uploaded(smb, published, options)
 
 
 def _remove_uploaded(smb, published, options):
@@ -348,15 +344,14 @@ def reserve_direct_target(settings, filename):
     lock = os.path.join(folder, _target_lock_name(filename))
     filesystem = storage_fs(folder)
     try:
-        handle = filesystem.open(lock, 'xb')
-    except FileExistsError:
-        raise NasError('此 NAS 檔案已有下載任務使用中，請勿重複下載；若服務曾異常中止，請確認後清除 .uav-*.lock') from None
-    except OSError:
-        raise NasError('NAS 無法保留下載位置，請確認連線與寫入權限') from None
+        handle = filesystem.lock(lock)
+    except OSError as exc:
+        if exc.errno in (errno.EAGAIN, errno.EBUSY) or isinstance(exc, BlockingIOError):
+            raise NasError('此 NAS 檔案已有下載任務使用中，請等待該任務結束後再試') from None
+        raise NasError('NAS 無法取得下載鎖，請確認連線及讀寫、刪除權限') from None
     try:
         if filesystem.exists(target) or filesystem.islink(target):
             raise NasError('NAS 已存在同名影片，已停止下載以避免覆寫')
         yield
     finally:
         handle.close()
-        filesystem.remove(lock)
