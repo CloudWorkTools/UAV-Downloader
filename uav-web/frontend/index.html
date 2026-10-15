@@ -195,7 +195,7 @@
       <p id="queue-action-status" role="status" class="text-sm text-gray-300 whitespace-pre-line"></p>
       <p id="destination-test-status" role="status" class="text-sm text-gray-400"></p>
       <!-- Tasks List Table / Cards -->
-      <div id="tasks-container" class="space-y-3">
+      <div id="tasks-container" class="space-y-2">
         <!-- Injected dynamically -->
       </div>
     </section>
@@ -938,36 +938,33 @@
         }
 
         return `
-          <div class="bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] space-y-3">
-            <div class="flex flex-wrap sm:flex-nowrap justify-between items-start gap-4">
+          <div class="bg-[#1a1a22] px-3 py-2 rounded-lg border border-[#2e2e3a] space-y-1.5">
+            <div class="flex flex-wrap sm:flex-nowrap justify-between items-center gap-2">
               ${taskSelection.canCancel(t) || taskSelection.canAction(t, 'retry') ? `<input type="checkbox" data-task-id="${t.task_id}" aria-label="選取 ${safe(t.name || t.url)}" onchange="taskSelection.toggle('${t.task_id}', this.checked)" ${taskSelection.has(t.task_id) ? 'checked' : ''} class="mt-1 w-4 h-4 shrink-0 accent-brand-600">` : ''}
-              <div class="flex-1 min-w-0">
+              <div class="flex-1 min-w-0 flex items-center gap-2">
                 <h4 title="${safe(downloadInfo)}" class="text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
-                <p class="text-xs text-gray-400 truncate mt-0.5">${safe(t.url)}</p>
-                <p class="text-xs text-gray-400 break-all mt-1">儲存：${safe(t.dest)}${t.final_dest && t.final_dest !== t.dest ? ` → ${safe(t.final_dest)}` : ''} · 字幕：${safe(({none: '不生成', ja: '日文', en: '英文', zh: '繁體中文', all: '全部語言'})[t.subtitle_mode] || '不生成')}</p>
-                <span class="relative inline-block group mt-1"><button type="button" aria-label="${safe(downloadInfo)}" class="text-xs text-brand-500 underline underline-offset-2">ⓘ 下載資訊</button><span role="tooltip" class="hidden group-hover:block group-focus-within:block absolute left-0 top-full mt-1 z-50 w-72 max-w-[75vw] p-3 bg-[#282832] border border-[#3e3e4e] rounded-lg shadow-xl text-xs text-gray-200 whitespace-pre-wrap break-words">${safe(downloadInfo)}</span></span>
+                <span class="relative inline-block group shrink-0"><button type="button" aria-label="${safe(downloadInfo)}" class="text-xs text-brand-500 px-1" title="下載資訊">ⓘ</button><span role="tooltip" class="hidden group-hover:block group-focus-within:block absolute left-0 top-full mt-1 z-50 w-72 max-w-[75vw] p-3 bg-[#282832] border border-[#3e3e4e] rounded-lg shadow-xl text-xs text-gray-200 whitespace-pre-wrap break-words">${safe(downloadInfo)}</span></span>
               </div>
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
-                ${taskSelection.canAction(t, 'edit') ? `<button onclick="taskSelection.edit('${t.task_id}')" class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded">設定</button>` : ''}
-                ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
-                ${t.status === 'completed' && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
+                ${taskSelection.canAction(t, 'edit') ? `<button onclick="taskSelection.edit('${t.task_id}')" class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded">設定</button>` : ''}
+                ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
+                ${t.status === 'completed' && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
                 ${taskSelection.canCancel(t) ?
-                  `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-10 px-3.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
+                  `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-8 px-2.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
               </div>
             </div>
-            ${t.phase ? `<p class="text-xs text-gray-400">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
-            ${t.error ? `<p role="alert" class="text-sm text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : ''}
+            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 truncate">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 truncate">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
             <!-- Progress Bar -->
-            <div class="space-y-1">
-              <div class="w-full bg-[#282832] h-2 rounded-full overflow-hidden">
+            ${t.total_segments > 0 && !['completed', 'skipped', 'cancelled'].includes(t.status) ? `<div class="space-y-1">
+              <div class="w-full bg-[#282832] h-1 rounded-full overflow-hidden">
                 <div class="bg-gradient-to-r from-brand-600 to-rose-400 h-full transition-all duration-300" style="width: ${t.progress}%"></div>
               </div>
               <div class="flex justify-between text-[11px] text-gray-400">
                 <span>分段: ${t.downloaded_segments} / ${t.total_segments}</span>
                 <span>${t.progress}%</span>
               </div>
-            </div>
+            </div>` : ''}
           </div>
         `;
       }).join('');
