@@ -169,6 +169,15 @@ async function run() {
   assert.equal(element('page-indicator').textContent, '第 2 頁');
   assert.equal(element('btn-next-page').disabled, true);
   assert.match(element('search-warning').textContent, /已到最後一頁/);
+  const interruptedIndex = pending.length;
+  const interrupted = context.fetchBrowse();
+  respond(pending[interruptedIndex], {videos:[{url:'keep-confirmed'}],pending:true,search_id:'123',has_more:true});
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+  respond(pending[interruptedIndex+1], {error:'來源暫時無法使用'}, false);
+  await interrupted;
+  assert.match(cards.at(-1).innerHTML, /keep-confirmed/, 'A later source failure must preserve already confirmed results');
+  assert.match(element('search-warning').textContent, /保留.*來源暫時無法使用/);
   const cancelIndex = pending.length;
   const cancelled = context.fetchBrowse();
   const jobId = JSON.parse(pending[cancelIndex].options.body).request_id;

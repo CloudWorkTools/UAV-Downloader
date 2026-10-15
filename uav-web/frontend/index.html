@@ -637,6 +637,7 @@
       const requestId = ++browseRequestId;
       const grid = document.getElementById('video-grid');
       const loader = document.getElementById('browse-loading');
+      let shownVideos = [];
       grid.innerHTML = '';
       selection.setVisible([]);
       browseLoading = true;
@@ -651,6 +652,7 @@
       try {
         let res;
         let reachedEnd = false;
+        let endWarning = '';
         while (requestId === browseRequestId) {
           const resp = await fetch(currentSearchQuery ? '/api/search' : '/api/browse', {
             method: 'POST',
@@ -667,13 +669,18 @@
           if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
           if (res.cancelled) throw new Error('查詢已取消');
           if (res.search_id) searchSession = res.search_id;
-          if (currentSearchQuery && res.complete && !res.videos?.length && currentPage > 1) {
+          if (currentSearchQuery && (res.complete || res.has_more === false) && !res.videos?.length && currentPage > 1) {
             currentPage -= 1;
             reachedEnd = true;
+            endWarning = res.warning || '已到最後一頁，沒有更多符合條件的影片。';
             continue;
           }
           if (res.pending) {
-            if (res.videos?.length) renderVideos(res.videos);
+            if (res.videos?.length) {
+              shownVideos = res.videos;
+              renderVideos(shownVideos);
+            }
+            document.getElementById('search-warning').textContent = res.warning || '';
             document.getElementById('page-indicator').textContent = `第 ${currentPage} 頁`;
             document.getElementById('btn-next-page').disabled = true;
             document.getElementById('browse-loading-message').textContent = `本頁已找到 ${res.videos?.length || 0} / 24 筆，正在接續補滿本頁…`;
@@ -687,7 +694,7 @@
         document.getElementById('cancel-search-button').classList.add('hidden');
         loader.classList.add('hidden');
         renderVideos(res.videos || []);
-        document.getElementById('search-warning').textContent = reachedEnd ? '已到最後一頁，沒有更多符合條件的影片。' : res.warning || '';
+        document.getElementById('search-warning').textContent = reachedEnd ? endWarning : res.warning || '';
         document.getElementById('btn-next-page').disabled = res.has_more === false;
         document.getElementById('page-indicator').textContent = `第 ${currentPage} 頁`;
         document.getElementById('btn-prev-page').disabled = (currentPage <= 1);
@@ -696,7 +703,13 @@
         browseLoading = false;
         document.getElementById('cancel-search-button').classList.add('hidden');
         loader.classList.add('hidden');
-        showBrowseError('清單讀取失敗：' + e.message);
+        if (shownVideos.length) {
+          document.getElementById('search-warning').textContent = '已保留本頁確認的結果，接續載入中斷：' + e.message;
+          document.getElementById('btn-next-page').disabled = true;
+          document.getElementById('btn-prev-page').disabled = currentPage <= 1;
+        } else {
+          showBrowseError('清單讀取失敗：' + e.message);
+        }
       }
     }
 

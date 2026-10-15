@@ -125,8 +125,12 @@ def test_repeated_source_page_reports_incomplete_scan(monkeypatch):
         (term, page): [video('a')] for term in ('a', 'b') for page in range(1, 5)
     })
     assert BrowseService.search_videos('SupJav', 'a b')['videos'] == [video('a')]
-    with pytest.raises(RuntimeError, match='無法確認完整搜尋結果'):
-        BrowseService.search_videos('SupJav', 'a b', 2)
+    result = resolved_page('SupJav', 'a b')
+    assert result['videos'] == [video('a')]
+    assert not result['complete'] and result['total'] is None
+    assert not result['pending'] and not result['has_more']
+    assert '重複分頁' in result['warning'] and '保留' in result['warning']
+    assert max(page for _, page in calls) == 2
 
 
 def test_intersection_scans_beyond_twenty_pages(monkeypatch):
@@ -515,3 +519,28 @@ def test_empty_condition_interrupts_other_worker_wait(monkeypatch):
     result = BrowseService.search_videos('SupJav', 'broad empty')
     assert result['complete'] and result['total'] == 0
     assert interrupted.is_set(), 'Do not wait out other keyword workers after zero results are proven'
+
+
+def test_repeated_native_source_keeps_scanning_valid_tag_source(monkeypatch):
+    monkeypatch.setattr(BrowseService, '_search_tags', classmethod(lambda cls,site,bucket: (
+        ('a', 'https://supjav.com/tag/a'), ('b', 'https://supjav.com/tag/b'))))
+    calls = []
+    def fetch(site, url, page):
+        calls.append((url, page))
+        if '/tag/' in url:
+            return {'videos': [video('tag-' + str(page))] if page <= 2 else []}
+        return {'videos': [video('native')]}
+    monkeypatch.setattr(BrowseService, 'fetch_videos', staticmethod(fetch))
+    items, result = all_results('SupJav', 'a b')
+    assert items == [video('native'), video('tag-1'), video('tag-2')]
+    assert '重複分頁' in result['warning']
+    assert result['total'] is None and not result['complete'] and not result['has_more']
+    assert max(page for url, page in calls if '/tag/' not in url) == 2
+    assert any('/tag/' in url and page == 3 for url, page in calls)
+
+
+def test_invalid_source_data_is_not_a_verified_empty_intersection(monkeypatch):
+    mock_pages(monkeypatch, {('a', 1): [{'url': ''}], ('b', 1): [video('valid')]})
+    result = resolved_page('SupJav', 'a b')
+    assert result['videos'] == [] and result['total'] is None and not result['complete']
+    assert '無效影片資料' in result['warning'] and not result['has_more']

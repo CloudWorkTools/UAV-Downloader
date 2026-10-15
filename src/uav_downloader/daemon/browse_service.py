@@ -34,6 +34,10 @@ SITES = {
 }
 
 
+class _SearchWarning(str):
+    """A source stopped without proving its complete result set."""
+
+
 class _SearchSession:
     """Freeze returned pages while advancing only enough sources for the next one."""
 
@@ -45,14 +49,18 @@ class _SearchSession:
 
     def _reset(self):
         self.states = [{'pages': self.service._search_pages(self.site, term, self.bucket),
-                        'videos': {}, 'done': False} for term in self.terms]
+                        'videos': {}, 'done': False, 'warnings': []} for term in self.terms]
         self.pages, self.buffer, self.matches = [], [], {}
         self.complete, self.failed = False, False
 
     @staticmethod
     def _advance(state):
         try:
-            state['videos'].update(next(state['pages']))
+            batch = next(state['pages'])
+            if isinstance(batch, _SearchWarning):
+                state['warnings'].append(str(batch))
+            else:
+                state['videos'].update(batch)
         except StopIteration:
             state['done'] = True
 
@@ -121,10 +129,13 @@ class _SearchSession:
             if pending and page == len(self.pages) + 1:
                 selected = self.buffer[:24]
             activity.report(f'已確認 {len(self.matches)} 筆交集結果' + ('，繼續比對中' if pending else '，本頁已就緒'))
-            return dict(videos=selected[:], count=len(selected), total=len(self.matches) if self.complete else None,
-                        complete=self.complete, pending=pending,
+            warnings = list(dict.fromkeys(warning for state in self.states for warning in state['warnings']))
+            verified = self.complete and not warnings
+            return dict(videos=selected[:], count=len(selected), total=len(self.matches) if verified else None,
+                        complete=verified, pending=pending,
                         has_more=page < len(self.pages) or bool(self.buffer) or not self.complete,
-                        warning='' if self.complete else '下一頁會接續搜尋，已顯示的結果均符合全部條件。')
+                        warning=('已保留確認符合全部條件的結果；部分來源已停止，無法確認完整搜尋結果：' + '；'.join(warnings))
+                        if warnings else ('' if self.complete else '下一頁會接續搜尋，已顯示的結果均符合全部條件。'))
 
 
 class BrowseService:
@@ -374,7 +385,12 @@ class BrowseService:
                     key = (parsed.path.rstrip('/'), parsed.query)
                     videos[key] = video
                 if not videos or not set(videos) - source['seen']:
-                    raise RuntimeError('原站重複分頁或回傳無效影片，無法確認完整搜尋結果')
+                    source['done'] = True
+                    reason = '重複分頁' if videos else '無效影片資料'
+                    message = f'條件「{term}」第 {page} 頁回傳{reason}，已停止此來源'
+                    activity.report(message, part=term)
+                    yield _SearchWarning(message)
+                    continue
                 source['seen'].update(videos)
                 source['page'] += 1
                 activity.report(f'條件「{term}」：已讀第 {page} 頁，累計 {len(source["seen"])} 筆', part=term)
