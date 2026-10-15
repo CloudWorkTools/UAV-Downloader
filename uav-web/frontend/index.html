@@ -34,6 +34,8 @@
     }
   </script>
   <style>
+    .backend-work-list { display: flex; gap: 12px; overflow-x: auto; margin-top: 8px; padding-bottom: 4px; min-width: 0; }
+    .backend-work-card { flex: 0 0 320px; max-width: 100%; height: 88px; overflow-y: auto; overflow-wrap: anywhere; }
     /* Custom scrollbars */
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: #121217; }
@@ -98,11 +100,7 @@
 
   <!-- Main Content Container -->
   <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
-    <details open class="mb-5 bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-4">
-      <summary class="cursor-pointer text-sm font-semibold">後端工作動態 <span id="backend-work-count" class="text-gray-400 font-normal ml-2">等待連線</span></summary>
-      <p id="backend-last-update" class="text-xs text-gray-500 mt-2">等待後端回報，連線後約每秒更新</p>
-      <div id="backend-work-list" class="mt-3 max-h-48 overflow-y-auto space-y-2 text-xs text-gray-300">等待後端回報工作狀態</div>
-    </details>
+
 
     <!-- TAB 1: BROWSE -->
     <section id="tab-browse" class="tab-content space-y-6">
@@ -395,6 +393,14 @@
     </section>
 
   </main>
+
+  <footer class="max-w-7xl w-full min-w-0 mx-auto px-4 sm:px-6 pb-4" aria-label="後端工作狀態">
+    <details id="backend-activity-panel" class="bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-3 min-w-0">
+      <summary class="cursor-pointer text-sm font-semibold">後端工作動態 <span id="backend-work-count" class="text-gray-400 font-normal ml-2">等待連線</span></summary>
+      <p id="backend-last-update" class="text-xs text-gray-500 mt-2">等待後端回報，連線後約每秒更新</p>
+      <div id="backend-work-list" class="backend-work-list text-xs text-gray-300">等待後端回報工作狀態</div>
+    </details>
+  </footer>
 
   <!-- Quick Download Modal -->
   <div id="quick-modal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
@@ -705,9 +711,9 @@
       const rows = [...running, ...recent].map(item => {
         const state = item.state === 'running' ? '執行中' : item.state === 'failed' ? '失敗' : '完成';
         const parts = Object.values(item.parts || {}).map(message => `<div class="text-gray-400 ml-3 mt-1">${safe(message)}</div>`).join('');
-        return `<div class="border-l-2 ${item.state === 'failed' ? 'border-rose-500' : 'border-brand-600'} pl-3"><span class="text-white">${safe(item.title)} ${safe(item.site)}</span> · ${state} · ${safe(item.elapsed_seconds)} 秒<div class="mt-1">${safe(item.message)}</div>${parts}</div>`;
+        return `<div class="backend-work-card border-l-2 ${item.state === 'failed' ? 'border-rose-500' : 'border-brand-600'} pl-3"><span class="text-white">${safe(item.title)} ${safe(item.site)}</span> · ${state} · ${safe(item.elapsed_seconds)} 秒<div class="mt-1">${safe(item.message)}</div>${parts}</div>`;
       });
-      rows.splice(running.length, 0, ...downloads.map(task => `<div class="border-l-2 border-sky-500 pl-3"><span class="text-white">${safe(task.name || '下載任務')}</span><div class="mt-1">${safe(task.phase || task.status)}${task.phase_total ? ` · ${safe(task.phase_done)} / ${safe(task.phase_total)}` : ''}</div></div>`));
+      rows.splice(running.length, 0, ...downloads.map(task => `<div class="backend-work-card border-l-2 border-sky-500 pl-3"><span class="text-white">${safe(task.name || '下載任務')}</span><div class="mt-1">${safe(task.phase || task.status)}${task.phase_total ? ` · ${safe(task.phase_done)} / ${safe(task.phase_total)}` : ''}</div></div>`));
       document.getElementById('backend-work-list').innerHTML = rows.join('') || '目前沒有執行中的工作';
       if (browseLoading) {
         const current = running.find(item => item.site === currentSite && item.page === currentPage &&

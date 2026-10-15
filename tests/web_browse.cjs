@@ -123,6 +123,10 @@ async function run() {
   context.renderBackendActivity({activities:[{title:'<script>',state:'failed',message:'<img onerror=alert(1)>',elapsed_seconds:1}]});
   assert.ok(!element('backend-work-list').innerHTML.includes('<img onerror'));
   assert.match(element('backend-work-list').innerHTML, /&lt;img/);
+  assert.ok(html.indexOf('id="backend-activity-panel"') > html.indexOf('</main>'), 'Work activity belongs below the main content');
+  assert.match(html, /<details id="backend-activity-panel" class=/);
+  assert.ok(!/<details[^>]*id="backend-activity-panel"[^>]*\bopen\b/.test(html), 'Activity starts collapsed');
+  assert.match(element('backend-work-list').innerHTML, /backend-work-card/);
   console.log('Search pagination, page reset, category/site reset, preview and request races: PASS');
 }
 run().catch(e => {console.error(e);process.exitCode=1;});
