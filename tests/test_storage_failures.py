@@ -194,3 +194,26 @@ def test_subtitle_atomic_write_classifies_device_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(engine.tempfile, 'mkstemp', broken)
     with pytest.raises(StorageWriteError):
         engine._atomic_write_text(str(tmp_path / 'video.en.srt'), 'subtitle')
+
+
+def test_publish_never_overwrites_existing_video(tmp_path):
+    from uav_downloader.core.storage import storage_fs
+    source, target = tmp_path / 'new.part', tmp_path / 'existing.mp4'
+    source.write_bytes(b'new')
+    target.write_bytes(b'keep')
+    with pytest.raises(FileExistsError):
+        storage_fs(source).publish(source, target)
+    assert source.read_bytes() == b'new'
+    assert target.read_bytes() == b'keep'
+
+
+def test_publish_supports_filesystems_without_hard_links(tmp_path, monkeypatch):
+    from uav_downloader.core import storage
+    source, target = tmp_path / 'new.part', tmp_path / 'new.mp4'
+    source.write_bytes(b'video')
+    def unsupported(*args):
+        raise OSError(errno.EOPNOTSUPP, 'unsupported')
+    monkeypatch.setattr(storage.os, 'link', unsupported)
+    storage.storage_fs(source).publish(source, target)
+    assert target.read_bytes() == b'video'
+    assert not source.exists()

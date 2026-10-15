@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 from uav_downloader import sites as M3U8Sites
 from uav_downloader.core import config
 from uav_downloader.daemon import nas
+from uav_downloader.daemon.download_files import DownloadFiles, existing_video, video_key
 from uav_downloader.core.history import get_history_manager
 from uav_downloader.core.storage import StorageWriteError, storage_fs
 from uav_downloader.core.video_identity import site_from_url
@@ -30,8 +31,10 @@ class DownloadTask:
     enable_subtitles: bool = False
     subtitle_mode: str = "none"
     nas_settings: dict = field(default_factory=dict, repr=False)
+    files: Any = field(default=None, repr=False)
+    remote_files: list = field(default_factory=list, repr=False)
     name: str = ""
-    status: str = "pending"  # pending, preparing, downloading, subtitles, completed, failed, cancelled
+    status: str = "pending"  # pending, preparing, downloading, subtitles, uploading, cancelling, cancelled, completed, skipped, failed
     progress: float = 0.0
     downloaded_segments: int = 0
     total_segments: int = 0
@@ -145,7 +148,11 @@ class TaskManager:
 
         with self._lock:
             self._tasks[task_id] = task
-            self._queue.append(task_id)
+            reason = self._duplicate_reason(task)
+            if reason:
+                task.status, task.error = "skipped", reason
+            else:
+                self._queue.append(task_id)
 
         self.start_dispatcher()
         return task
@@ -159,23 +166,56 @@ class TaskManager:
             # Return ordered list, newest first
             return [task.to_dict() for task in reversed(list(self._tasks.values()))]
 
+    def _duplicate_reason(self, task):
+        key = video_key(task.url, task.name)
+        for other in self._tasks.values():
+            if (other is not task and other.status not in ("failed", "cancelled", "skipped")
+                    and video_key(other.url, other.name) == key):
+                return "相同番號或網址已在佇列或已完成，已略過"
+        entry = get_history_manager().find_downloaded({'url': task.url, 'title': task.name}, similarity_threshold=1.0)
+        if entry and video_key(entry['url'], entry.get('title', '')) == key:
+            return "相同番號或網址已有下載紀錄，已略過"
+        return ""
+
     def cancel_task(self, task_id: str) -> bool:
         with self._lock:
             task = self._tasks.get(task_id)
-            if not task:
+            if not task or task.status in ("completed", "skipped", "cancelled"):
                 return False
             task.cancelled_event.set()
-            task.status = "cancelled"
+            task.status = "cancelling"
             task.updated_at = datetime.now(timezone.utc).isoformat()
             if task_id in self._queue:
                 self._queue.remove(task_id)
-            if task.job is not None:
-                try:
-                    task.job._cancel_job = True
-                except Exception:
-                    pass
-            self._active.pop(task_id, None)
-            return True
+            active = task_id in self._active
+            job = task.job
+        if job is not None:
+            job._cancel_job = True
+            job.cancel_download(cleanup=False)
+        if not active:
+            try:
+                with ExitStack() as storage:
+                    if task.files and task.nas_settings.get("mode") == "smb":
+                        storage.enter_context(nas.open_smb_storage(task.nas_settings, task.dest))
+                        task.files.filesystem = storage_fs(task.dest)
+                    self._cleanup_cancelled(task)
+            except (OSError, nas.NasError) as exc:
+                task.error = f"取消後檔案清除失敗，請恢復儲存連線後重試取消：{exc}"
+                task.status = "failed"
+        return True
+
+    def _cleanup_cancelled(self, task):
+        try:
+            if task.remote_files:
+                nas.cleanup_upload(task.nas_settings, task.remote_files)
+            if task.files:
+                task.files.cleanup(cancelled=True)
+            task.error = None
+            task.status = "cancelled"
+            task.updated_at = datetime.now(timezone.utc).isoformat()
+        except (OSError, nas.NasError) as exc:
+            task.error = f"取消後檔案清除失敗，請恢復儲存連線後重試取消：{exc}"
+            task.status = "failed"
 
     def cancel_all(self) -> None:
         with self._lock:
@@ -208,11 +248,15 @@ class TaskManager:
                 time.sleep(0.5)
 
     def _run_task(self, task: DownloadTask) -> None:
+        with self._lock:
+            self._active[task.task_id] = task
         task.status = "preparing"
         task.updated_at = datetime.now(timezone.utc).isoformat()
 
         if task.cancelled_event.is_set():
-            self._finish_task(task, "cancelled")
+            self._cleanup_cancelled(task)
+            with self._lock:
+                self._active.pop(task.task_id, None)
             return
 
         storage = ExitStack()
@@ -223,6 +267,11 @@ class TaskManager:
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "direct":
                 nas.direct_destination(task.nas_settings)
 
+            if existing_video(task.dest, task.url):
+                task.error = "儲存目錄已有相同番號的影片，已略過"
+                self._finish_task(task, "skipped")
+                return
+
             # Temporarily configure resolution if set
             if task.resolution:
                 try:
@@ -231,9 +280,10 @@ class TaskManager:
                 except Exception:
                     pass
 
+            task.files = DownloadFiles(task.dest, task.task_id)
             job = M3U8Sites.CreateSite(
                 task.url,
-                savepath=task.dest,
+                savepath=task.files.workdir,
                 max_workers=task.max_workers,
             )
             task.job = job
@@ -258,9 +308,22 @@ class TaskManager:
                 self._finish_task(task, "failed")
                 return
 
-            task.name = job.target_name() or "video"
+            with self._lock:
+                task.name = job.target_name() or "video"
+                reason = self._duplicate_reason(task)
+            if reason or existing_video(task.dest, task.url, task.name):
+                task.error = reason or "儲存目錄已有相同番號的影片，已略過"
+                self._finish_task(task, "skipped")
+                return
+            if task.nas_settings.get("enabled") and task.nas_settings.get("mode", "upload") == "upload":
+                remote = nas.smb_destination()
+                with nas.open_smb_storage(task.nas_settings, remote):
+                    if existing_video(remote, task.url, task.name):
+                        task.error = "NAS 已有相同番號的影片，已略過"
+                        self._finish_task(task, "skipped")
+                        return
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode") in ("direct", "smb"):
-                if os.path.normcase(os.path.abspath(job.dest_folder())) != os.path.normcase(task.dest):
+                if os.path.normcase(os.path.abspath(job.dest_folder())) != os.path.normcase(task.files.workdir):
                     raise nas.NasError("下載器未使用指定的 NAS 目錄，已停止下載")
                 storage.enter_context(nas.reserve_direct_target(task.nas_settings, f"{task.name}.mp4"))
             task.status = "downloading"
@@ -295,24 +358,36 @@ class TaskManager:
                 task.updated_at = datetime.now(timezone.utc).isoformat()
                 self._run_subtitles(task, job)
 
+            if task.cancelled_event.is_set():
+                self._finish_task(task, "cancelled")
+                return
+            video_file = os.path.join(task.files.workdir, f"{task.name}.mp4")
+            if not storage_fs(video_file).isfile(video_file):
+                raise OSError("下載器未產生完成的影片，已保留暫存檔")
+            task.files.publish(task.cancelled_event)
+            if task.cancelled_event.is_set():
+                self._finish_task(task, "cancelled")
+                return
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode", "upload") == "upload":
                 task.status = "uploading"
                 task.updated_at = datetime.now(timezone.utc).isoformat()
                 nas.upload_video(task.nas_settings,
-                                 os.path.join(job.dest_folder() or task.dest, f"{task.name}.mp4"),
-                                 task.cancelled_event)
+                                 os.path.join(task.dest, f"{task.name}.mp4"),
+                                 task.cancelled_event, task.remote_files)
                 if task.cancelled_event.is_set():
                     self._finish_task(task, "cancelled")
                     return
 
             task.progress = 100.0
             self._finish_task(task, "completed")
+            if task.status != "completed":
+                return
 
             # Record to history manager
             try:
                 history = get_history_manager()
-                video_file = os.path.join(job.dest_folder() or task.dest, f"{task.name}.mp4")
-                destination = job.dest_folder() or task.dest
+                video_file = os.path.join(task.dest, f"{task.name}.mp4")
+                destination = task.dest
                 file_path = video_file if storage_fs(video_file).exists(video_file) else ""
                 if direct_smb:
                     destination = nas.public_destination(task.nas_settings)
@@ -342,11 +417,20 @@ class TaskManager:
                 self._finish_task(task, "failed")
 
         finally:
+            if task.cancelled_event.is_set():
+                self._cleanup_cancelled(task)
+            elif task.status in ("completed", "skipped") and task.files:
+                try:
+                    task.files.cleanup()
+                except OSError as exc:
+                    task.error = f"影片已完成，但暫存檔清除失敗：{exc}"
             try:
                 storage.close()
             except OSError:
                 warning = "NAS 暫存鎖無法清除，請確認連線後清除 .uav-*.lock"
                 task.error = f"{task.error}；{warning}" if task.error else warning
+            with self._lock:
+                self._active.pop(task.task_id, None)
 
     def _run_subtitles(self, task: DownloadTask, job: Any) -> None:
         try:
@@ -356,13 +440,13 @@ class TaskManager:
                 generate_subtitles(
                     target_file,
                     mode=task.subtitle_mode,
+                    cancel_check=task.cancelled_event.is_set,
                 )
         except Exception as exc:
             # Subtitle error does not fail the whole download if MP4 succeeded
             task.error = f"影片已完成，但字幕生成失敗: {exc}"
 
     def _finish_task(self, task: DownloadTask, status: str) -> None:
-        task.status = status
-        task.updated_at = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            self._active.pop(task.task_id, None)
+            task.status = "cancelling" if task.cancelled_event.is_set() else status
+            task.updated_at = datetime.now(timezone.utc).isoformat()

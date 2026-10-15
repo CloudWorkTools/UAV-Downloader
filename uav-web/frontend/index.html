@@ -152,13 +152,15 @@
 
     <!-- TAB 2: DOWNLOAD QUEUE -->
     <section id="tab-queue" class="tab-content hidden space-y-6">
-      <div class="flex justify-between items-center bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a]">
+      <div class="flex flex-wrap gap-3 justify-between items-center bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a]">
         <div>
           <h2 class="text-base font-bold text-white">任務佇列管理</h2>
-          <p class="text-xs text-gray-400">實時監控下載進度、速度與狀態</p>
+          <p class="text-xs text-gray-400">相同番號自動略過；取消會清除該任務的下載檔案</p>
         </div>
-        <div class="flex gap-2">
-          <button onclick="openQuickDownloadModal()" class="px-3.5 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
+        <div class="flex flex-wrap gap-2">
+          <button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button>
+          <button id="cancel-tasks-button" onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消所選 (0)</button>
+          <button onclick="openQuickDownloadModal()" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
             ➕ 新增網址
           </button>
         </div>
@@ -364,6 +366,7 @@
 
   <script src="/nas-settings.js"></script>
   <script src="/video-selection.js"></script>
+  <script src="/task-selection.js"></script>
   <script src="/category-browser.js"></script>
 
   <!-- Client-side Logic -->
@@ -373,6 +376,7 @@
     let currentCategoryUrl = '';
     let currentSearchQuery = '';
     const selection = createVideoSelection({startDownload: url => startSingleDownload(url, false), onComplete: () => switchTab('queue')});
+    const taskSelection = createTaskSelection({cancelTask});
     let watcherTargetsData = {};
 
     // WebSocket connection
@@ -616,8 +620,10 @@
     // Render Tasks in Downloads Tab
     function renderTasks(tasks) {
       const container = document.getElementById('tasks-container');
+      taskSelection.setTasks(tasks);
+      const safe = value => String(value || '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
       const badge = document.getElementById('queue-badge');
-      const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'preparing' || t.status === 'uploading').length;
+      const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'preparing' || t.status === 'uploading' || t.status === 'subtitles' || t.status === 'cancelling').length;
 
       if (activeCount > 0) {
         badge.textContent = activeCount;
@@ -637,12 +643,18 @@
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded font-medium">下載中 (${t.speed_formatted})</span>`;
         } else if (t.status === 'uploading') {
           statusBadge = '<span class="text-sm text-sky-400">傳送到 NAS 中</span>';
+        } else if (t.status === 'subtitles') {
+          statusBadge = '<span class="text-sm text-sky-400">字幕處理中</span>';
+        } else if (t.status === 'cancelling') {
+          statusBadge = '<span class="text-sm text-amber-400">取消中／清理檔案</span>';
+        } else if (t.status === 'skipped') {
+          statusBadge = `<span class="text-sm text-gray-400" title="${safe(t.error)}">已略過重複影片</span>`;
         } else if (t.status === 'completed') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-medium">已完成</span>`;
         } else if (t.status === 'cancelled') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-gray-500/20 text-gray-400 border border-gray-500/30 rounded font-medium">已取消</span>`;
         } else if (t.status === 'failed') {
-          statusBadge = `<span class="px-2 py-0.5 text-xs bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded font-medium" title="${t.error || ''}">失敗: ${t.error || ''}</span>`;
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded font-medium" title="${safe(t.error)}">失敗: ${safe(t.error)}</span>`;
         } else {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded font-medium">${t.status}</span>`;
         }
@@ -650,14 +662,15 @@
         return `
           <div class="bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] space-y-3">
             <div class="flex justify-between items-start gap-4">
+              ${taskSelection.canCancel(t) ? `<input type="checkbox" data-task-id="${t.task_id}" aria-label="選取 ${safe(t.name || t.url)}" onchange="taskSelection.toggle('${t.task_id}', this.checked)" ${taskSelection.has(t.task_id) ? 'checked' : ''} class="mt-1 w-4 h-4 shrink-0 accent-brand-600">` : ''}
               <div class="flex-1 min-w-0">
-                <h4 class="text-sm font-semibold text-white truncate">${t.name || t.url}</h4>
-                <p class="text-xs text-gray-400 truncate mt-0.5">${t.url}</p>
+                <h4 class="text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
+                <p class="text-xs text-gray-400 truncate mt-0.5">${safe(t.url)}</p>
               </div>
               <div class="flex items-center gap-2">
                 ${statusBadge}
-                ${(t.status === 'downloading' || t.status === 'pending' || t.status === 'preparing' || t.status === 'uploading') ?
-                  `<button onclick="cancelTask('${t.task_id}')" class="px-2.5 py-1 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
+                ${taskSelection.canCancel(t) ?
+                  `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-10 px-3.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
               </div>
             </div>
             <!-- Progress Bar -->
@@ -673,14 +686,17 @@
           </div>
         `;
       }).join('');
+      taskSelection.update();
     }
 
     async function cancelTask(taskId) {
-      await fetch('/api/download/cancel', {
+      const response = await fetch('/api/download/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ task_id: taskId })
       });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || '任務已完成或無法取消');
     }
 
     // Modal

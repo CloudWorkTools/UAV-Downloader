@@ -86,6 +86,9 @@ class SmbStorage:
     def getsize(self, path):
         return self.stat(path).st_size
 
+    def listdir(self, path):
+        return self._call(self.client.listdir, path)
+
     def makedirs(self, path, exist_ok=False):
         return self._call(self.client.makedirs, path, exist_ok=exist_ok)
 

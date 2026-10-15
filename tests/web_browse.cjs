@@ -16,6 +16,8 @@ const context = vm.createContext({
 });
 vm.runInContext(fs.readFileSync('uav-web/frontend/video-selection.js', 'utf8'), context);
 context.createVideoSelection = context.window.createVideoSelection;
+vm.runInContext(fs.readFileSync('uav-web/frontend/task-selection.js', 'utf8'), context);
+context.createTaskSelection = context.window.createTaskSelection;
 let chooseCategory;
 context.window.createCategoryBrowser = (container, onSelect) => {chooseCategory=onSelect;return {render() {}, select() {}};};
 vm.runInContext(html.slice(html.indexOf('    let currentSite'), html.lastIndexOf('  </script>')), context);

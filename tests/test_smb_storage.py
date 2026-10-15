@@ -33,6 +33,7 @@ def smb(monkeypatch, tmp_path):
     monkeypatch.setattr(smbclient, 'register_session', MagicMock())
     monkeypatch.setattr(smbclient, 'reset_connection_cache', MagicMock())
     monkeypatch.setattr(smbclient, 'open_file', lambda name, mode, **kw: open(path(name), mode, **{k:v for k,v in kw.items() if k != 'connection_cache'}))
+    monkeypatch.setattr(smbclient, 'listdir', lambda name, **kw: os.listdir(path(name)))
     monkeypatch.setattr(smbclient, 'stat', lambda name, **kw: path(name).stat(follow_symlinks=kw.get('follow_symlinks', True)))
     monkeypatch.setattr(smbclient, 'makedirs', lambda name, **kw: path(name).mkdir(parents=True, exist_ok=kw.get('exist_ok', False)))
     monkeypatch.setattr(smbclient, 'mkdir', lambda name, **kw: path(name).mkdir())
@@ -261,3 +262,50 @@ def test_native_smb_creates_missing_nested_directory(smb):
             assert backend.isdir(destination)
     assert (smb.folder / 'new' / 'nested').is_dir()
     assert not Path(destination).exists()
+
+
+def test_native_smb_cancel_cleans_task_workspace_and_preserves_originals(smb, monkeypatch):
+    import uav_downloader.daemon.task_manager as manager_module
+    monkeypatch.setattr(nas, 'load_settings', lambda **kwargs: dict(smb.settings))
+    monkeypatch.setattr(nas, 'test_connection', lambda settings: None)
+    monkeypatch.setattr(manager_module, 'get_history_manager', MagicMock())
+    (smb.folder / 'original.mp4').write_bytes(b'keep')
+    manager = TaskManager()
+    task = manager.add_task('https://missav.ai/mimk-290')
+    class Job:
+        _cancel_job = False
+        def __init__(self, destination):
+            self.destination = destination
+        def target_name(self):
+            return 'MIMK-290'
+        def dest_folder(self):
+            return self.destination
+        def is_url_vaildate(self):
+            return True
+        def cancel_download(self, cleanup=True):
+            self._cancel_job = True
+        def start_download(self):
+            with storage_open(os.path.join(self.destination, 'video.part'), 'wb') as stream:
+                stream.write(b'partial')
+            manager.cancel_task(task.task_id)
+            assert task.status == 'cancelling'
+            return False
+    monkeypatch.setattr(manager_module.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: Job(savepath))
+    manager._run_task(task)
+    assert task.status == 'cancelled', task.error
+    assert [p.name for p in smb.folder.iterdir()] == ['original.mp4']
+    assert not Path(task.dest).exists()
+
+
+def test_native_smb_existing_code_is_skipped(smb, monkeypatch):
+    import uav_downloader.daemon.task_manager as manager_module
+    monkeypatch.setattr(nas, 'load_settings', lambda **kwargs: dict(smb.settings))
+    monkeypatch.setattr(nas, 'test_connection', lambda settings: None)
+    monkeypatch.setattr(manager_module, 'get_history_manager', MagicMock())
+    (smb.folder / 'MIMK-290 字幕.mp4').write_bytes(b'original')
+    monkeypatch.setattr(manager_module.M3U8Sites, 'CreateSite', lambda *a, **kw: pytest.fail('duplicate must not download'))
+    manager = TaskManager()
+    task = manager.add_task('https://missav.ai/mimk-290-uncensored-leak')
+    manager._run_task(task)
+    assert task.status == 'skipped', task.error
+    assert (smb.folder / 'MIMK-290 字幕.mp4').read_bytes() == b'original'

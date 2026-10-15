@@ -203,7 +203,7 @@ def test_connection(body):
         smb.remove(probe, **options)
 
 
-def upload_video(settings, video_file, cancelled):
+def upload_video(settings, video_file, cancelled, published=None):
     video = Path(video_file)
     if not video.is_file():
         raise NasError('找不到已下載影片，無法傳送到 NAS')
@@ -212,6 +212,8 @@ def upload_video(settings, video_file, cancelled):
     with _connection(settings) as (smb, root, options):
         lock = ntpath.join(root, _target_lock_name(video.name))
         reserved = False
+        if published is None:
+            published = []
         try:
             with smb.open_file(lock, mode='xb', **options):
                 reserved = True
@@ -230,12 +232,29 @@ def upload_video(settings, video_file, cancelled):
                             return
                         # rename refuses existing targets, preserving files already on the NAS.
                         smb.rename(temporary, target, **options)
+                        published.append(target)
                     finally:
                         if smb.path.exists(temporary, **options):
                             smb.remove(temporary, **options)
         finally:
-            if reserved:
-                smb.remove(lock, **options)
+            try:
+                if cancelled.is_set():
+                    _remove_uploaded(smb, published, options)
+            finally:
+                if reserved:
+                    smb.remove(lock, **options)
+
+
+def _remove_uploaded(smb, published, options):
+    for target in published[:]:
+        if smb.path.exists(target, **options):
+            smb.remove(target, **options)
+        published.remove(target)
+
+
+def cleanup_upload(settings, published):
+    with _connection(settings) as (smb, _root, options):
+        _remove_uploaded(smb, published, options)
 
 
 

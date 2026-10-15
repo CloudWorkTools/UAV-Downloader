@@ -113,6 +113,9 @@ class LocalStorage:
     def getsize(self, path):
         return os.path.getsize(path)
 
+    def listdir(self, path):
+        return os.listdir(path)
+
     def makedirs(self, path, exist_ok=False):
         return os.makedirs(path, exist_ok=exist_ok)
 
@@ -131,7 +134,22 @@ class LocalStorage:
     def replace(self, source, destination):
         return os.replace(source, destination)
 
-    publish = replace
+    def publish(self, source, destination):
+        # Task workspaces live on the destination volume; refuse existing files.
+        try:
+            os.link(source, destination)
+        except OSError as exc:
+            if exc.errno not in (errno.EOPNOTSUPP, errno.ENOSYS, errno.EPERM, errno.EXDEV):
+                raise
+            # Some mounted NAS filesystems do not support hard links.
+            with open(destination, 'xb') as target:
+                try:
+                    with open(source, 'rb') as stream:
+                        shutil.copyfileobj(stream, target, 1024 * 1024)
+                except BaseException:
+                    os.remove(destination)
+                    raise
+        os.remove(source)
 
     @contextmanager
     def media_source(self, path):

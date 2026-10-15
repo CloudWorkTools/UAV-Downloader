@@ -3,7 +3,7 @@ import json
 import ntpath
 import threading
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from unittest.mock import MagicMock
 
 import pytest
@@ -159,9 +159,13 @@ def test_queue_only_completes_after_upload(profile, monkeypatch, tmp_path):
     job = MagicMock()
     job._cancel_job = False
     job.target_name.return_value = 'movie'
-    job.dest_folder.return_value = str(tmp_path)
-    (tmp_path / 'movie.mp4').write_bytes(b'video')
-    monkeypatch.setattr(task_manager.M3U8Sites, 'CreateSite', lambda *a, **kw: job)
+    def create_site(url, savepath, **kwargs):
+        job.dest_folder.return_value = savepath
+        job.start_download.side_effect = lambda: Path(savepath, 'movie.mp4').write_bytes(b'video')
+        return job
+    monkeypatch.setattr(task_manager.M3U8Sites, 'CreateSite', create_site)
+    monkeypatch.setattr(task_manager, 'existing_video', lambda *a: False)
+    monkeypatch.setattr(nas, 'open_smb_storage', lambda *a: nullcontext())
     monkeypatch.setattr(task_manager, 'get_history_manager', MagicMock())
     task = DownloadTask('test', 'https://jable.tv/videos/test/', str(tmp_path), nas_settings=profile)
     def upload(*args):
@@ -232,11 +236,12 @@ def test_direct_queue_overrides_local_default_and_skips_upload(direct_profile, m
     job.target_name.return_value = 'movie'
     job.dest_folder.return_value = task.dest
     def download():
-        Path(task.dest, 'movie.mp4').write_bytes(b'video directly on NAS')
+        Path(job.dest_folder(), 'movie.mp4').write_bytes(b'video directly on NAS')
         return True
     job.start_download.side_effect = download
     def create_site(url, savepath, max_workers):
-        assert savepath == direct_profile['direct_path']
+        assert Path(savepath).parent == Path(direct_profile['direct_path'])
+        job.dest_folder.return_value = savepath
         return job
     monkeypatch.setattr(task_manager.M3U8Sites, 'CreateSite', create_site)
     monkeypatch.setattr(task_manager, 'get_history_manager', MagicMock())
@@ -323,3 +328,20 @@ def test_probe_creates_only_requested_subdirectories(profile, remote, directory)
     nas.test_connection({**profile, 'directory': directory})
     expected = {ntpath.join(r'\\192.168.1.10\video', 'new', 'nested')} if directory else set()
     assert remote.directories == expected
+
+
+def test_cancelling_upload_removes_already_published_video(profile, remote, tmp_path, monkeypatch):
+    video = tmp_path / 'movie.mp4'
+    video.write_bytes(b'video')
+    (tmp_path / 'movie.ja.srt').write_text('subtitle')
+    cancelled = threading.Event()
+    rename = remote.rename
+    def cancel_after_publish(src, dst, **options):
+        rename(src, dst, **options)
+        cancelled.set()
+    monkeypatch.setattr('smbclient.rename', cancel_after_publish)
+    published = []
+    nas.upload_video(profile, video, cancelled, published)
+    assert not remote.files
+    assert not published
+    assert video.exists()
