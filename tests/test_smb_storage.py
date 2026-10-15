@@ -32,7 +32,7 @@ def smb(monkeypatch, tmp_path):
         return folder.joinpath(*remote[len('\\\\nas\\share'):].strip('\\').split('\\'))
     monkeypatch.setattr(smbclient, 'register_session', MagicMock())
     monkeypatch.setattr(smbclient, 'reset_connection_cache', MagicMock())
-    monkeypatch.setattr(smbclient, 'open_file', lambda name, mode, **kw: open(path(name), mode, **{k:v for k,v in kw.items() if k != 'connection_cache'}))
+    monkeypatch.setattr(smbclient, 'open_file', lambda name, mode, **kw: open(path(name), mode, **{k:v for k,v in kw.items() if k not in ('connection_cache', 'share_access')}))
     monkeypatch.setattr(smbclient, 'listdir', lambda name, **kw: os.listdir(path(name)))
     monkeypatch.setattr(smbclient, 'stat', lambda name, **kw: path(name).stat(follow_symlinks=kw.get('follow_symlinks', True)))
     monkeypatch.setattr(smbclient, 'makedirs', lambda name, **kw: path(name).mkdir(parents=True, exist_ok=kw.get('exist_ok', False)))
@@ -309,3 +309,29 @@ def test_native_smb_existing_code_is_skipped(smb, monkeypatch):
     manager._run_task(task)
     assert task.status == 'skipped', task.error
     assert (smb.folder / 'MIMK-290 字幕.mp4').read_bytes() == b'original'
+
+
+def test_media_bridge_supports_overlapping_smb_read_handles(smb, monkeypatch):
+    from contextlib import contextmanager
+    import smbclient
+    opened = []
+
+    @contextmanager
+    def sharing_open(path, mode, share_access=None, **kwargs):
+        if opened and (share_access != 'r' or any(value != 'r' for value in opened)):
+            raise PermissionError('SMB sharing violation')
+        opened.append(share_access)
+        try:
+            with open(smb.folder / 'video.ts', mode) as stream:
+                yield stream
+        finally:
+            opened.remove(share_access)
+
+    (smb.folder / 'video.ts').write_bytes(b'0123456789')
+    monkeypatch.setattr(smbclient, 'open_file', sharing_open)
+    path = os.path.join(smb.root, 'video.ts')
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with smb.backend.open(path, 'rb'):
+        with smb.backend.media_source(path) as url:
+            with opener.open(urllib.request.Request(url, headers={'Range': 'bytes=3-6'})) as response:
+                assert response.read() == b'3456'

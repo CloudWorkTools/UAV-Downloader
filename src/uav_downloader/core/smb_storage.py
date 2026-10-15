@@ -53,6 +53,9 @@ class SmbStorage:
             raise OSError(errno.EIO, 'NAS SMB 連線中斷或檔案操作失敗') from None
 
     def open(self, path, mode, buffering=-1, **kwargs):
+        # FFmpeg opens overlapping HTTP ranges while an earlier SMB read is still open.
+        if 'r' in mode and '+' not in mode:
+            kwargs.setdefault('share_access', 'r')
         return self._call(self.client.open_file, path, mode=mode, buffering=buffering, **kwargs)
 
     def stat(self, path, **kwargs):

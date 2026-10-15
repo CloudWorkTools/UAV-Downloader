@@ -144,6 +144,12 @@ impl DaemonClient {
         resp.json().await
     }
 
+    pub async fn task_action(&self, payload: serde_json::Value) -> Result<(u16, serde_json::Value), reqwest::Error> {
+        let response = self.apply_auth(self.client.post(format!("{}/api/download/action", self.base_url)))
+            .json(&payload).send().await?;
+        Ok((response.status().as_u16(), response.json().await?))
+    }
+
     pub async fn get_history(
         &self,
         limit: u32,

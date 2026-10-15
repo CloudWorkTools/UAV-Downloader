@@ -37,6 +37,24 @@ class DownloadFiles:
         self.workdir = self.filesystem.mkdtemp(prefix=f'.uav-{task_id}-', dir=destination)
         self.published = []
 
+    def snapshot(self):
+        return {'workdir': self.workdir, 'published': self.published[:]}
+
+    @classmethod
+    def restore(cls, destination, task_id, record):
+        destination = os.path.abspath(destination)
+        workdir = os.path.abspath(record['workdir'])
+        published = record.get('published', [])
+        if (os.path.dirname(workdir) != destination or
+                not os.path.basename(workdir).startswith(f'.uav-{task_id}-') or
+                any(os.path.dirname(os.path.abspath(path)) != destination for path in published)):
+            raise ValueError('下載暫存檔紀錄不屬於此任務')
+        files = cls.__new__(cls)
+        files.destination, files.workdir = destination, workdir
+        files.filesystem = None
+        files.published = published
+        return files
+
     def publish(self, cancelled):
         for name in self.filesystem.listdir(self.workdir):
             if cancelled.is_set():

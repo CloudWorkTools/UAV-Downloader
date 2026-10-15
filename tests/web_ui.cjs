@@ -109,10 +109,13 @@ async function run() {
     {task_id:'e', status:'cancelled', name:'successfully-cleaned'}, {task_id:'f', status:'skipped'}
   ];
   context.renderTasks(tasks);
-  assert.ok(!element('tasks-container').innerHTML.includes('successfully-cleaned'));
+  assert.ok(element('tasks-container').innerHTML.includes('successfully-cleaned'));
+  assert.match(element('tasks-container').innerHTML, /重新開始/);
   context.renderTasks([{task_id:'failed-cleanup', status:'failed', error:'清除失敗：Permission denied <folder>'}]);
   assert.match(element('tasks-container').innerHTML, /<p role="alert"[^>]*>清除失敗：Permission denied &lt;folder&gt;<\/p>/);
   context.renderTasks([{task_id:'e', status:'cancelled'}]);
+  assert.match(element('tasks-container').innerHTML, /已取消/);
+  context.renderTasks([]);
   assert.match(element('tasks-container').innerHTML, /目前沒有下載任務/);
   context.renderTasks(tasks);
   const taskSelection = vm.runInContext('taskSelection', context);
@@ -135,6 +138,33 @@ async function run() {
   context.renderTasks(tasks.map(t => ({...t, status:'completed'})));
   assert.equal(element('cancel-tasks-button').disabled, true);
   assert.equal(element('select-tasks-button').disabled, true);
+  const operations = [];
+  context.fetch = async (path, options) => {
+    assert.equal(path, '/api/download/action');
+    const body = JSON.parse(options.body);
+    operations.push(body);
+    return {ok: body.task_id !== 'failed-action', json: async () => ({success: body.task_id !== 'failed-action', error:'operation failed', message:'目的地寫入及讀回成功'})};
+  };
+  context.renderTasks([{task_id:'active',status:'downloading'}, {task_id:'paused',status:'paused'}, {task_id:'failed-action',status:'failed'}, {task_id:'stopped',status:'cancelled'}]);
+  taskSelection.toggleAll();
+  await taskSelection.perform('pause');
+  await taskSelection.perform('resume');
+  await taskSelection.perform('retry');
+  assert.deepEqual(operations.map(operation => [operation.action, operation.task_id]), [['pause','active'],['resume','paused'],['retry','failed-action'],['retry','stopped']]);
+  assert.equal(taskSelection.has('failed-action'), true, 'Failed controls remain selected for retry');
+  assert.equal(taskSelection.has('stopped'), false);
+  const probeButton = {disabled:false};
+  await context.testDownloadDestination(probeButton);
+  assert.equal(probeButton.disabled, false);
+  assert.equal(element('destination-test-status').textContent, '目的地寫入及讀回成功');
+  let release;
+  let submissions = 0;
+  context.fetch = () => { submissions++; return new Promise(resolve => {release=resolve;}); };
+  const firstAction = context.taskAction('retry', 'same-task');
+  assert.equal(await context.taskAction('retry', 'same-task'), false);
+  release({ok:true,json:async()=>({success:true})});
+  assert.equal(await firstAction, true);
+  assert.equal(submissions, 1);
   console.log('Video/task selection, batch cancellation, failure retention and NAS password UI: PASS');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

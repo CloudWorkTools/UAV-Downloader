@@ -77,7 +77,7 @@ def test_cancel_waits_for_worker_then_removes_only_its_files(manager, monkeypatc
     monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
     manager._run_task(task)
     assert task.status == 'cancelled'
-    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
+    assert manager.get_task(task.task_id).status == 'cancelled'
     assert sorted(p.name for p in folder.iterdir()) == ['other.mp4']
     assert task.task_id not in manager._active
     assert tm.get_history_manager().find_downloaded(task.url) is None
@@ -96,7 +96,7 @@ def test_subtitle_cancellation_does_not_complete_or_upload(manager, monkeypatch)
     monkeypatch.setattr(manager, '_run_subtitles', subtitles)
     manager._run_task(task)
     assert task.status == 'cancelled'
-    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
+    assert manager.get_task(task.task_id).status == 'cancelled'
     assert not list(Path(task.dest).iterdir())
     assert tm.get_history_manager().find_downloaded(task.url) is None
 
@@ -136,7 +136,7 @@ def test_failed_download_can_be_cancelled_and_cleaned(manager, monkeypatch):
     assert Path(task.files.workdir).exists()
     assert manager.cancel_task(task.task_id)
     assert task.status == 'cancelled'
-    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
+    assert manager.get_task(task.task_id).status == 'cancelled'
     assert not list(Path(task.dest).iterdir())
 
 
@@ -151,14 +151,14 @@ def test_cleanup_failure_remains_visible_and_retryable(manager, monkeypatch):
     task.files.cleanup.side_effect = None
     assert manager.cancel_task(task.task_id)
     assert task.status == 'cancelled'
-    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
+    assert manager.get_task(task.task_id).status == 'cancelled'
 
 
 def test_pending_cancel_never_starts_download(manager):
     task = manager.add_task('https://missav.ai/mimk-290')
     assert manager.cancel_task(task.task_id)
     assert task.status == 'cancelled'
-    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
+    assert manager.get_task(task.task_id).status == 'cancelled'
     assert task.task_id not in manager._queue
     assert not Path(task.dest).exists()
 
@@ -206,10 +206,7 @@ def test_restart_preserves_terminal_status(manager, tmp_path, status):
     task = manager.add_task('https://missav.ai/mimk-290')
     manager._finish_task(task, status)
     restored = tm.TaskManager(state_path=path).get_task(task.task_id)
-    if status == 'cancelled':
-        assert restored is None
-    else:
-        assert restored.status == status
+    assert restored.status == status
 
 
 def test_corrupt_task_file_is_not_silently_overwritten(tmp_path):
@@ -251,13 +248,13 @@ def test_worker_applies_cover_and_subtitle_defaults(manager, monkeypatch, cover,
     assert task.subtitle_mode == mode
 
 
-def test_successful_cancellation_is_removed_from_persisted_list(manager, tmp_path):
+def test_successful_cancellation_is_retained_for_restart(manager, tmp_path):
     path = tmp_path / 'tasks.json'
     manager._state_path = path
     task = manager.add_task('https://missav.ai/mimk-290')
     assert manager.cancel_task(task.task_id)
-    assert manager.list_tasks() == []
-    assert tm.TaskManager(state_path=path).list_tasks() == []
+    assert manager.list_tasks()[0]['status'] == 'cancelled'
+    assert tm.TaskManager(state_path=path).list_tasks()[0]['status'] == 'cancelled'
 
 
 def test_cleanup_failure_survives_restart_without_claiming_files_removed(manager, tmp_path):
@@ -290,3 +287,154 @@ def test_cancelled_task_with_storage_close_failure_stays_visible(manager, monkey
     manager._run_task(task)
     assert task.status == 'failed'
     assert 'lock permission denied' in manager.list_tasks()[0]['error']
+
+
+def test_pause_resume_keeps_segments_and_settings(manager, monkeypatch, tmp_path):
+    task = manager.add_task('https://missav.ai/mimk-290', resolution='720', max_workers=3, download_cover=False)
+    workdirs = []
+    def download(job):
+        work = Path(job.dest_folder())
+        workdirs.append(work)
+        if len(workdirs) == 1:
+            (work / 'segment.ts').write_bytes(b'keep')
+            assert manager.pause_task(task.task_id)
+            assert task.status == 'pausing'
+            assert not manager.restart_task(task.task_id), 'Wait for the worker before resuming'
+            (work / 'last-write.part').write_bytes(b'late write')
+            return False
+        assert (work / 'segment.ts').read_bytes() == b'keep'
+        (work / 'MIMK-290.mp4').write_bytes(b'video')
+        return True
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._state_path = tmp_path / 'tasks.json'
+    manager._run_task(task)
+    assert task.status == 'paused' and task.task_id not in manager._active
+    restored = tm.TaskManager(state_path=manager._state_path)
+    resumed = restored.get_task(task.task_id)
+    assert resumed.status == 'paused'
+    assert (resumed.resolution, resumed.max_workers, resumed.download_cover) == ('720', 3, False)
+    assert restored.restart_task(task.task_id)
+    assert not restored.restart_task(task.task_id), 'Double-click must not enqueue twice'
+    restored._run_task(resumed)
+    assert resumed.status == 'completed', resumed.error
+    assert workdirs[0] == workdirs[1]
+    assert (Path(task.dest) / 'MIMK-290.mp4').read_bytes() == b'video'
+
+
+def test_failed_retry_reuses_task_and_private_workspace(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    def fail(job):
+        (Path(job.dest_folder()) / 'segment.ts').write_bytes(b'resume')
+        raise ConnectionError('network lost')
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, fail))
+    manager._queue.remove(task.task_id)
+    manager._run_task(task)
+    workdir = task.files.workdir
+    assert manager.restart_task(task.task_id)
+    assert task.status == 'pending' and task.error is None
+    assert task.files.workdir == workdir
+    assert Path(workdir, 'segment.ts').exists()
+    assert manager._queue == [task.task_id]
+    assert not manager.restart_task(task.task_id)
+
+
+def test_pending_pause_cancel_restart_and_remove(manager, tmp_path):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    assert manager.pause_task(task.task_id)
+    assert task.status == 'paused' and not manager._queue
+    assert manager.cancel_task(task.task_id)
+    assert manager.restart_task(task.task_id)
+    assert manager._queue == [task.task_id]
+    assert not manager.remove_task(task.task_id)
+    task.status = 'completed'
+    output = tmp_path / 'completed.mp4'
+    output.write_bytes(b'keep')
+    assert manager.remove_task(task.task_id)
+    assert manager.get_task(task.task_id) is None
+    assert output.read_bytes() == b'keep'
+
+
+def test_retry_rejects_another_live_task_with_same_code(manager):
+    old = manager.add_task('https://missav.ai/mimk-290')
+    old.status = 'failed'
+    manager.add_task('https://jable.tv/videos/mimk-290/')
+    with pytest.raises(ValueError, match='相同番號'):
+        manager.restart_task(old.task_id)
+    assert old.status == 'failed'
+
+
+def test_restored_workspace_cannot_escape_destination(manager, tmp_path):
+    path = tmp_path / 'tasks.json'
+    manager._state_path = path
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    manager._save_tasks()
+    import json
+    records = json.loads(path.read_text())
+    records[0]['files']['workdir'] = str(tmp_path / 'unowned')
+    path.write_text(json.dumps(records))
+    with pytest.raises(ValueError, match='不屬於此任務'):
+        tm.TaskManager(state_path=path)
+
+
+def test_retry_recovers_legacy_owned_segments(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    files = tm.DownloadFiles(task.dest, task.task_id)
+    Path(files.workdir, 'segment.ts').write_bytes(b'old-segment')
+    task.cleanup_unverified = True
+    task.status = 'failed'
+    assert manager.restart_task(task.task_id)
+    def download(job):
+        assert job.dest_folder() == files.workdir
+        assert Path(job.dest_folder(), 'segment.ts').read_bytes() == b'old-segment'
+        manager.pause_task(task.task_id)
+        return False
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+    assert task.status == 'paused'
+    assert not task.cleanup_unverified
+
+
+def test_destination_probe_preserves_existing_files(manager, tmp_path):
+    folder = tmp_path / 'videos'
+    folder.mkdir()
+    (folder / 'keep.mp4').write_bytes(b'original')
+    assert manager.check_destination()['success']
+    assert [p.name for p in folder.iterdir()] == ['keep.mp4']
+
+
+def test_legacy_smb_task_restores_current_matching_account(manager, monkeypatch, tmp_path):
+    import json
+    settings = dict(enabled=True, mode='smb', host='nas', share='share', directory='videos', username='user')
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.nas_settings = dict(settings, password='never-save')
+    task.status = 'failed'
+    path = tmp_path / 'legacy.json'
+    record = task.to_dict()
+    record.pop('speed_formatted')
+    path.write_text(json.dumps([record]))
+    monkeypatch.setattr(tm.nas, 'load_settings', lambda secret=False: dict(settings, **({'password':'from-encrypted-config'} if secret else {})))
+    restored = tm.TaskManager(state_path=path)
+    resumed = restored.get_task(task.task_id)
+    assert resumed.dest.startswith(tm.nas.SMB_PATH_ROOT)
+    assert resumed.nas_settings['_smb_path'] == resumed.dest
+    assert restored.restart_task(task.task_id)
+    assert resumed.nas_settings['password'] == 'from-encrypted-config'
+    assert 'from-encrypted-config' not in path.read_text()
+    assert 'never-save' not in path.read_text()
+
+
+def test_restored_cancel_removes_only_owned_workspace(manager, tmp_path):
+    path = tmp_path / 'tasks.json'
+    manager._state_path = path
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    Path(task.files.workdir, 'segment.ts').write_bytes(b'owned')
+    unrelated = Path(task.dest, 'keep.mp4')
+    unrelated.write_bytes(b'original')
+    task.status = 'paused'
+    manager._save_tasks()
+    restored = tm.TaskManager(state_path=path)
+    assert restored.cancel_task(task.task_id)
+    assert not Path(task.files.workdir).exists()
+    assert unrelated.read_bytes() == b'original'

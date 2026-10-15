@@ -163,10 +163,14 @@
       <div class="flex flex-wrap gap-3 justify-between items-center bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a]">
         <div>
           <h2 class="text-base font-bold text-white">任務佇列管理</h2>
-          <p class="text-xs text-gray-400">相同番號自動略過；取消會清除該任務的下載檔案</p>
+          <p class="text-xs text-gray-400">暫停保留片段；取消會清除該任務檔案；移除紀錄保留完成的影片</p>
         </div>
         <div class="flex flex-wrap gap-2">
           <button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button>
+          <button id="pause-tasks-button" onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button>
+          <button id="resume-tasks-button" onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button>
+          <button id="retry-tasks-button" onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重試所選</button>
+          <button onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
           <button id="cancel-tasks-button" onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消所選 (0)</button>
           <button onclick="openQuickDownloadModal()" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
             ➕ 新增網址
@@ -174,6 +178,7 @@
         </div>
       </div>
 
+      <p id="destination-test-status" role="status" class="text-sm text-gray-400"></p>
       <!-- Tasks List Table / Cards -->
       <div id="tasks-container" class="space-y-3">
         <!-- Injected dynamically -->
@@ -420,7 +425,8 @@
     let currentCategoryUrl = '';
     let currentSearchQuery = '';
     const selection = createVideoSelection({startDownload: startSingleDownload});
-    const taskSelection = createTaskSelection({cancelTask});
+    const taskSelection = createTaskSelection({cancelTask, taskAction});
+    const busyTaskActions = new Set();
     let watcherTargetsData = {};
 
     // WebSocket connection
@@ -670,13 +676,13 @@
     // Render Tasks in Downloads Tab
     function renderTasks(tasks) {
       const container = document.getElementById('tasks-container');
-      const priority = {downloading: 0, preparing: 1, uploading: 1, subtitles: 1, cancelling: 1, pending: 2};
-      tasks = tasks.filter(task => task.status !== 'cancelled' || task.error)
-        .sort((a, b) => (priority[a.status] ?? 3) - (priority[b.status] ?? 3));
+      const priority = {downloading: 0, preparing: 1, uploading: 1, subtitles: 1, publishing: 1, pausing: 1, cancelling: 1, pending: 2, paused: 3};
+      tasks = [...tasks]
+        .sort((a, b) => (priority[a.status] ?? 4) - (priority[b.status] ?? 4));
       taskSelection.setTasks(tasks);
       const safe = value => String(value || '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
       const badge = document.getElementById('queue-badge');
-      const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'preparing' || t.status === 'uploading' || t.status === 'subtitles' || t.status === 'cancelling').length;
+      const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'preparing' || t.status === 'uploading' || t.status === 'subtitles' || t.status === 'cancelling' || t.status === 'pausing' || t.status === 'publishing').length;
 
       if (activeCount > 0) {
         badge.textContent = activeCount;
@@ -693,7 +699,17 @@
       container.innerHTML = tasks.map(t => {
         let statusBadge = '';
         if (t.status === 'downloading') {
-          statusBadge = `<span class="px-2 py-0.5 text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded font-medium">下載中 (${t.speed_formatted})</span>`;
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded font-medium">${t.progress >= 100 ? '合併影片中' : `下載中 (${t.speed_formatted})`}</span>`;
+        } else if (t.status === 'paused') {
+          statusBadge = '<span class="text-sm text-amber-400">已暫停</span>';
+        } else if (t.status === 'pausing') {
+          statusBadge = '<span class="text-sm text-amber-400">暫停中，等待目前寫入結束</span>';
+        } else if (t.status === 'preparing') {
+          statusBadge = '<span class="text-sm text-sky-400">準備中</span>';
+        } else if (t.status === 'pending') {
+          statusBadge = '<span class="text-sm text-gray-400">等待下載</span>';
+        } else if (t.status === 'publishing') {
+          statusBadge = '<span class="text-sm text-sky-400">整理並儲存影片中</span>';
         } else if (t.status === 'uploading') {
           statusBadge = '<span class="text-sm text-sky-400">傳送到 NAS 中</span>';
         } else if (t.status === 'subtitles') {
@@ -714,14 +730,15 @@
 
         return `
           <div class="bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] space-y-3">
-            <div class="flex justify-between items-start gap-4">
-              ${taskSelection.canCancel(t) ? `<input type="checkbox" data-task-id="${t.task_id}" aria-label="選取 ${safe(t.name || t.url)}" onchange="taskSelection.toggle('${t.task_id}', this.checked)" ${taskSelection.has(t.task_id) ? 'checked' : ''} class="mt-1 w-4 h-4 shrink-0 accent-brand-600">` : ''}
+            <div class="flex flex-wrap sm:flex-nowrap justify-between items-start gap-4">
+              ${taskSelection.canCancel(t) || taskSelection.canAction(t, 'retry') ? `<input type="checkbox" data-task-id="${t.task_id}" aria-label="選取 ${safe(t.name || t.url)}" onchange="taskSelection.toggle('${t.task_id}', this.checked)" ${taskSelection.has(t.task_id) ? 'checked' : ''} class="mt-1 w-4 h-4 shrink-0 accent-brand-600">` : ''}
               <div class="flex-1 min-w-0">
                 <h4 class="text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
                 <p class="text-xs text-gray-400 truncate mt-0.5">${safe(t.url)}</p>
               </div>
-              <div class="flex items-center gap-2">
+              <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
+                ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
                 ${taskSelection.canCancel(t) ?
                   `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-10 px-3.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
               </div>
@@ -741,6 +758,42 @@
         `;
       }).join('');
       taskSelection.update();
+    }
+
+    async function taskAction(action, taskId) {
+      if (busyTaskActions.has(taskId)) return false;
+      busyTaskActions.add(taskId);
+      try {
+        const response = await fetch('/api/download/action', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action, task_id: taskId})
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || '下載操作失敗');
+        return true;
+      } catch (error) {
+        alert(error.message);
+        return false;
+      } finally {
+        busyTaskActions.delete(taskId);
+      }
+    }
+
+    async function testDownloadDestination(button) {
+      button.disabled = true;
+      const status = document.getElementById('destination-test-status');
+      status.textContent = '正在測試實際下載目的地…';
+      try {
+        const response = await fetch('/api/download/action', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action: 'test_destination'})
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || '目的地測試失敗');
+        status.textContent = result.message;
+      } catch (error) {
+        status.textContent = error.message;
+      } finally { button.disabled = false; }
     }
 
     async function cancelTask(taskId) {

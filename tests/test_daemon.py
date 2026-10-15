@@ -213,6 +213,32 @@ class TestDaemon(unittest.TestCase):
         self.assertEqual(status_cancel, 200)
         self.assertTrue(cancel_res.get("success"))
 
+    def test_task_controls_and_destination_check_api(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(self.server.task_manager, 'start_dispatcher'), patch('uav_downloader.daemon.nas.load_settings', return_value={'enabled': False}):
+            task = self.server.task_manager.add_task('https://jable.tv/videos/control-fixture/', dest=folder)
+            for action, expected in [('pause', 'paused'), ('resume', 'pending'), ('pause', 'paused')]:
+                code, result = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action': action, 'task_id': task.task_id})
+                self.assertEqual(code, 200)
+                self.assertTrue(result['success'])
+                self.assertEqual(task.status, expected)
+            code, result = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action': 'resume', 'task_id': 'missing'})
+            self.assertEqual(code, 409)
+            self.assertFalse(result['success'])
+            code, result = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action': 'test_destination', 'task_id': task.task_id})
+            self.assertEqual(code, 200)
+            self.assertTrue(result['success'])
+            for body in [{'action': []}, {'action': 'pause', 'task_id': []}, {'action': 'test_destination', 'task_id': ''}]:
+                code, result = request_json(f'{self.base_url}/api/download/action', method='POST', data=body)
+                self.assertEqual(code, 400)
+            self.server.task_manager.cancel_task(task.task_id)
+            code, result = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action': 'retry', 'task_id': task.task_id})
+            self.assertEqual(code, 200)
+            self.assertEqual(task.status, 'pending')
+            self.server.task_manager.cancel_task(task.task_id)
+            code, result = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action': 'remove', 'task_id': task.task_id})
+            self.assertEqual(code, 200)
+            self.assertIsNone(self.server.task_manager.get_task(task.task_id))
+
     def test_history(self):
         status, res = request_json(f"{self.base_url}/api/history?limit=10&offset=0")
         self.assertEqual(status, 200)

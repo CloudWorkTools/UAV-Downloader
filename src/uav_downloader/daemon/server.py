@@ -247,6 +247,22 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     "task": task.to_dict(),
                 })
 
+            elif path == '/api/download/action':
+                action, task_id = body.get('action'), body.get('task_id')
+                if action == 'test_destination':
+                    if task_id is not None and (not isinstance(task_id, str) or not task_id):
+                        return self._send_error('task_id 必須是文字', 400)
+                    return self._send_json(self.task_manager.check_destination(task_id))
+                operations = {'pause': self.task_manager.pause_task,
+                              'resume': self.task_manager.restart_task,
+                              'retry': self.task_manager.restart_task,
+                              'remove': self.task_manager.remove_task}
+                if not isinstance(action, str) or action not in operations or not isinstance(task_id, str) or not task_id:
+                    return self._send_error('請提供有效的下載操作與 task_id', 400)
+                if not operations[action](task_id):
+                    return self._send_error('任務狀態已變更，目前無法執行此操作', 409)
+                return self._send_json({'success': True})
+
             elif path == "/api/download/cancel":
                 task_id = body.get("task_id", "")
                 if not task_id:

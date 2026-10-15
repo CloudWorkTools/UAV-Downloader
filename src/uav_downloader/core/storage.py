@@ -83,6 +83,32 @@ def storage_open(path, mode, *args, **kwargs):
     return _StorageFile(path, mode, *args, **kwargs)
 
 
+def probe_destination(directory):
+    """Exercise the exact output directory without touching existing files."""
+    filesystem = storage_fs(directory)
+    filesystem.makedirs(directory, exist_ok=True)
+    probe = filesystem.mkdtemp(prefix='.uav-write-test-', dir=directory)
+    source, target = os.path.join(probe, 'source.tmp'), os.path.join(probe, 'renamed.tmp')
+    stage = '寫入'
+    try:
+        content = b'video-storage-probe\0' * 4096
+        with storage_open(source, 'xb') as stream:
+            stream.write(content)
+            stream.flush()
+        stage = '重新命名'
+        filesystem.publish(source, target)
+        stage = '讀回'
+        with storage_open(target, 'rb') as stream:
+            if stream.read() != content:
+                raise OSError(errno.EIO, '目的地讀回資料不一致')
+        stage = '刪除'
+        filesystem.remove(target)
+    except OSError as exc:
+        raise StorageWriteError(directory, OSError(exc.errno or errno.EIO, f'目的地{stage}測試失敗：{exc}')) from exc
+    finally:
+        filesystem.rmtree(probe)
+
+
 # Virtual paths are never local folders, including after a task disconnects.
 SMB_PATH_ROOT = os.path.abspath(os.path.join(os.path.sep, '__uav_smb__'))
 _backends = {}

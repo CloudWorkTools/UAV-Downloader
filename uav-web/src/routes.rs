@@ -68,6 +68,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/search", post(search_handler))
         .route("/api/download/start", post(start_download_handler))
         .route("/api/download/cancel", post(cancel_download_handler))
+        .route("/api/download/action", post(task_action_handler))
         .route("/api/download/tasks", get(tasks_handler))
         .route("/api/history", get(history_handler))
         .route("/api/history/check", post(history_check_handler))
@@ -168,6 +169,13 @@ async fn tasks_handler(State(state): State<AppState>) -> impl IntoResponse {
     match state.client.get_tasks().await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn task_action_handler(State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    match state.client.task_action(body).await {
+        Ok((status, v)) => (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(v)).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string(), "success": false }))).into_response(),
     }
 }
 
