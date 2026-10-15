@@ -17,7 +17,7 @@ const errors = [];
 const context = vm.createContext({
   document:{getElementById:element}, window:{addEventListener() {}},
   createVideoSelection: () => ({}), createTaskSelection: () => ({}),
-  NasSettings:{load() {}, payload:() => ({enabled:false})}, alert:msg => errors.push(msg),
+  NasSettings:{load() {}, refreshSpace() {}, payload:() => ({enabled:false})}, alert:msg => errors.push(msg),
   fetch:async (_url, options) => {
     if (options) {saved = JSON.parse(options.body);settings = saved;}
     return {ok:true, json:async () => options ? {success:true} : settings};

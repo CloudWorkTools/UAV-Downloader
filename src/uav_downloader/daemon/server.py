@@ -266,6 +266,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
             elif path == '/api/download/action':
                 action, task_id = body.get('action'), body.get('task_id')
+                if action == 'nas_space':
+                    return self._send_json({'success': True, **nas.storage_space()})
                 if action == 'resume_unfinished':
                     return self._send_json({'success': True, **self.task_manager.resume_unfinished()})
                 if action == 'remove_duplicates':
@@ -318,8 +320,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     BrowseService.clear_search_cache()
                     BrowseService._search_tags.cache_clear()
                 if body.get("test_nas"):
-                    nas.test_connection(body.get("nas", {}))
-                    return self._send_json({"success": True})
+                    result = nas.test_connection(body.get("nas", {}))
+                    return self._send_json({"success": True, **result})
                 if "nas" in body:
                     nas.save_settings(body["nas"])
                 if "download_dir" in body:

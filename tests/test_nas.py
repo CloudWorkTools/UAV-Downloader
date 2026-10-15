@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from contextlib import contextmanager, nullcontext
 from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import pytest
 
@@ -109,6 +110,7 @@ def remote(monkeypatch):
     remote = Remote()
     monkeypatch.setattr(smbclient, 'register_session', lambda *a, **kw: None)
     monkeypatch.setattr(smbclient, 'reset_connection_cache', lambda **kw: None)
+    monkeypatch.setattr(smbclient, 'stat_volume', lambda *a, **kw: SimpleNamespace(total_size=10**12, actual_available_size=400*10**9, caller_available_size=300*10**9))
     for name in ('open_file', 'rename', 'remove', 'makedirs'):
         monkeypatch.setattr(smbclient, name, getattr(remote, name))
     monkeypatch.setattr(smbclient.path, 'exists', remote.exists)
@@ -429,3 +431,46 @@ def test_mounted_lock_releases_after_process_exit(direct_profile):
         child.stdout.close()
     with nas.reserve_direct_target(direct_profile, 'after-crash.mp4'):
         pass
+
+
+def test_nas_space_reports_volume_and_account_quota_without_writes(profile, remote):
+    result = nas.storage_space(profile)
+    assert result['space'] == {'total_bytes':10**12, 'free_bytes':400*10**9,
+                               'available_bytes':300*10**9, 'used_bytes':600*10**9}
+    assert not remote.files and not remote.directories
+    assert profile['password'] not in json.dumps(result)
+
+
+def test_nas_connection_success_includes_space(profile, remote):
+    result = nas.test_connection(profile)
+    assert result['space']['total_bytes'] == 10**12
+    assert not remote.files
+
+
+def test_nas_unavailable_capacity_does_not_invent_zero_or_fail_write_test(profile, remote, monkeypatch):
+    import smbclient
+    def unavailable(*args, **kwargs):
+        raise PermissionError('private-connection-details')
+    monkeypatch.setattr(smbclient, 'stat_volume', unavailable)
+    for result in (nas.storage_space(profile), nas.test_connection(profile)):
+        assert result['space'] is None and result['space_error']
+        assert 'private-connection-details' not in json.dumps(result)
+    assert not remote.files
+
+
+def test_mounted_capacity_uses_the_configured_nas_path(direct_profile, monkeypatch):
+    inspected = []
+    def usage(path):
+        inspected.append(path)
+        return SimpleNamespace(total=1000, free=400)
+    monkeypatch.setattr(nas.shutil, 'disk_usage', usage)
+    result = nas.storage_space(direct_profile)
+    assert result['space']['total_bytes'] == 1000
+    assert result['space']['free_bytes'] == 400
+    assert inspected == [direct_profile['direct_path']]
+
+
+@pytest.mark.parametrize('values', [(0,0,0), (100,101,100), (100,-1,10), (True,0,0)])
+def test_invalid_capacity_is_not_displayed(values):
+    with pytest.raises(ValueError):
+        nas._space_values(*values)

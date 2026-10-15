@@ -145,7 +145,7 @@ class TestDaemon(unittest.TestCase):
             status, result = request_json(f"{self.base_url}/api/settings", method="POST", data={"nas": {**profile, "share": "../bad"}})
             self.assertEqual(status, 400)
             self.assertFalse(result["success"])
-            with patch.object(nas, "test_connection") as test:
+            with patch.object(nas, "test_connection", return_value={}) as test:
                 status, result = request_json(f"{self.base_url}/api/settings", method="POST", data={"test_nas": True, "nas": profile})
                 self.assertTrue(result["success"])
                 test.assert_called_once_with(profile)
@@ -247,6 +247,13 @@ class TestDaemon(unittest.TestCase):
             self.assertTrue(result['success'])
             self.assertGreaterEqual(result['removed'], 1)
             self.assertIsNone(self.server.task_manager.get_task(completed.task_id))
+
+    def test_nas_space_action_returns_capacity_without_credentials(self):
+        result = {'enabled':True, 'space':{'total_bytes':1000, 'free_bytes':400, 'available_bytes':300, 'used_bytes':600}}
+        with patch('uav_downloader.daemon.nas.storage_space', return_value=result):
+            status, body = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action':'nas_space'})
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {'success':True, **result})
 
     def test_remove_duplicate_codes_api_needs_no_task_selection(self):
         with patch.object(self.server.task_manager, 'remove_duplicates', return_value={'removed':3, 'protected':1}) as operation:

@@ -10,6 +10,8 @@ import json
 import ntpath
 import os
 import re
+import shutil
+import time
 from pathlib import Path
 import tempfile
 import threading
@@ -172,7 +174,7 @@ def save_settings(body):
 
 
 @contextmanager
-def _connection(settings):
+def _connection(settings, *, create_directory=True):
     import smbclient
     cache = {}
     try:
@@ -180,7 +182,7 @@ def _connection(settings):
                                    password=settings['password'], connection_timeout=10,
                                    connection_cache=cache)
         root = ntpath.join('\\\\' + settings['host'], settings['share'], settings['directory'])
-        if settings['directory']:
+        if settings['directory'] and create_directory:
             smbclient.makedirs(root, exist_ok=True, connection_cache=cache)
         yield smbclient, root, {'connection_cache': cache}
     except Exception:
@@ -192,17 +194,49 @@ def _connection(settings):
         smbclient.reset_connection_cache(fail_on_error=False, connection_cache=cache)
 
 
+def _space_values(total, free, available):
+    if any(type(value) is not int for value in (total, free, available)) or total <= 0 or not 0 <= free <= total or not 0 <= available <= total:
+        raise ValueError('NAS 回報無效容量')
+    return {'total_bytes': total, 'free_bytes': free, 'available_bytes': min(free, available),
+            'used_bytes': total - free}
+
+
+def _smb_space(smb, root, options):
+    volume = smb.stat_volume(root, **options)
+    return _space_values(volume.total_size, volume.actual_available_size, volume.caller_available_size)
+
+
+def storage_space(settings=None):
+    try:
+        settings = load_settings(secret=True) if settings is None else settings
+        if not settings.get('enabled'):
+            return {'enabled': False, 'space': None}
+        if settings.get('mode') == 'direct':
+            usage = shutil.disk_usage(direct_destination(settings, probe=False))
+            space = _space_values(usage.total, usage.free, usage.free)
+        else:
+            with _connection(settings, create_directory=False) as (smb, root, options):
+                space = _smb_space(smb, root, options)
+        return {'enabled': True, 'space': space, 'checked_at': time.time()}
+    except Exception:
+        return {'enabled': True, 'space': None, 'space_error': '目前無法讀取 NAS 容量，請確認連線、權限及 NAS 是否支援容量查詢'}
+
+
 def test_connection(body):
     if not isinstance(body, dict):
         raise NasError('NAS 設定格式錯誤')
     settings = prepare_settings({**body, 'enabled': True})
     if settings['mode'] == 'direct':
-        return
+        return storage_space(settings)
     with _connection(settings) as (smb, root, options):
         probe = ntpath.join(root, '.uav-test-' + uuid.uuid4().hex)
         with smb.open_file(probe, mode='xb', **options) as stream:
             stream.write(b'UAV connection test')
         smb.remove(probe, **options)
+        try:
+            return {'enabled': True, 'space': _smb_space(smb, root, options), 'checked_at': time.time()}
+        except Exception:
+            return {'enabled': True, 'space': None, 'space_error': '連線與寫入測試成功，但 NAS 無法回報容量'}
 
 
 def upload_video(settings, video_file, cancelled, published=None):

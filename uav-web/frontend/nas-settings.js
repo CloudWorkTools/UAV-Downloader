@@ -1,5 +1,50 @@
 window.NasSettings = (() => {
+    let readingSpace = false;
+    let testedSpace = false;
+
+    function formatSize(bytes) {
+      const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+      let unit = 0;
+      while (bytes >= 1000 && unit < units.length - 1) { bytes /= 1000; unit++; }
+      return bytes.toLocaleString('zh-TW', {minimumFractionDigits: unit ? 2 : 0, maximumFractionDigits: unit ? 2 : 0}) + ' ' + units[unit];
+    }
+
+    function renderSpace(result, id) {
+      const panel = document.getElementById(id);
+      const values = document.getElementById(id + '-values');
+      if (!panel || !values) return;
+      const space = result.space;
+      if (result.enabled === false || !space || ![space.total_bytes, space.free_bytes, space.available_bytes].every(value => Number.isFinite(value) && value >= 0) || !space.total_bytes || space.free_bytes > space.total_bytes || space.available_bytes > space.free_bytes) {
+        panel.classList.toggle('hidden', true);
+        values.textContent = '';
+        return;
+      }
+      panel.classList.toggle('hidden', false);
+      const used = space.total_bytes - space.free_bytes;
+      const percent = (used / space.total_bytes * 100).toFixed(1);
+      const checked = result.checked_at ? new Date(result.checked_at * 1000).toLocaleTimeString('zh-TW') : '';
+      values.innerHTML = `<div class="flex flex-wrap gap-x-8 gap-y-2 mb-3"><div>總容量 <strong class="text-white ml-1">${formatSize(space.total_bytes)}</strong></div><div>剩餘空間 <strong class="text-emerald-400 ml-1">${formatSize(space.free_bytes)}</strong></div></div><progress class="w-full h-2 accent-pink-600" max="100" value="${percent}" aria-label="NAS 已使用 ${percent}%"></progress><div class="flex flex-wrap justify-between gap-2 mt-1 text-xs text-gray-400"><span>已使用 ${formatSize(used)}（${percent}%）</span><span>${checked ? '回報時間：' + checked : ''}</span></div>${space.available_bytes < space.free_bytes ? `<p class="mt-2 text-xs text-amber-400">此帳號可用空間：${formatSize(space.available_bytes)}</p>` : ''}`;
+    }
+
+    async function refreshSpace() {
+      if (readingSpace) return;
+      readingSpace = true;
+      try {
+        const response = await fetch('/api/download/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'nas_space'})});
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || 'NAS 容量讀取失敗');
+        renderSpace(result, 'nas-space-queue');
+        if (!testedSpace) renderSpace(result, 'nas-space-settings');
+      } catch (error) {
+        const result = {space_error:error.message};
+        renderSpace(result, 'nas-space-queue');
+        if (!testedSpace) renderSpace(result, 'nas-space-settings');
+      } finally { readingSpace = false; }
+    }
+
     function load(settings = {}) {
+      testedSpace = false;
+      document.getElementById('nas-space-settings-label').textContent = '已儲存 NAS 的容量';
       document.getElementById('nas-storage-mode').value = settings.enabled ? (['direct', 'smb'].includes(settings.mode) ? settings.mode : 'upload') : 'local';
       document.getElementById('nas-direct-path').value = settings.direct_path || '';
       updateMode();
@@ -16,6 +61,7 @@ window.NasSettings = (() => {
 
     function updateMode() {
       const mode = document.getElementById('nas-storage-mode').value;
+      if (mode === 'local') document.getElementById('nas-space-settings')?.classList.toggle('hidden', true);
       document.getElementById('nas-direct-fields').classList.toggle('hidden', mode !== 'direct');
       document.getElementById('nas-upload-fields').classList.toggle('hidden', !['upload', 'smb'].includes(mode));
       document.getElementById('nas-address-help').classList.toggle('hidden', !['upload', 'smb'].includes(mode));
@@ -42,9 +88,16 @@ window.NasSettings = (() => {
         const result = await response.json();
         if (!response.ok || !result.success) throw new Error(result.error || '測試失敗');
         status.textContent = '連線與寫入成功；請按下方儲存設定以永久保存';
-      } catch (error) { status.textContent = error.message; }
+        testedSpace = true;
+        document.getElementById('nas-space-settings-label').textContent = '本次連線測試容量';
+        renderSpace(result, 'nas-space-settings');
+      } catch (error) {
+        status.textContent = error.message;
+        testedSpace = true;
+        renderSpace({}, 'nas-space-settings');
+      }
       finally { updateMode(); }
     }
 
-    return {load, payload, updateMode, testConnection};
+    return {load, payload, updateMode, testConnection, refreshSpace, renderSpace};
 })();

@@ -187,6 +187,10 @@
         </div>
       </div>
 
+      <div id="nas-space-queue" class="hidden space-y-2 bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="text-sm font-semibold text-white">NAS 空間</h3><button type="button" onclick="NasSettings.refreshSpace()" class="text-xs text-brand-500 hover:text-white">更新容量</button></div>
+        <div id="nas-space-queue-values" role="status" class="text-sm text-gray-300">讀取容量中…</div>
+      </div>
       <p id="queue-action-status" role="status" class="text-sm text-gray-300 whitespace-pre-line"></p>
       <p id="destination-test-status" role="status" class="text-sm text-gray-400"></p>
       <!-- Tasks List Table / Cards -->
@@ -308,6 +312,10 @@
             <p id="nas-credentials-help" class="text-xs text-gray-400"></p>
             <p id="nas-address-help" class="hidden text-xs text-gray-400">SMB 網址可省略 smb://。例如 smb://nas.local/download 與 nas.local/download 都可使用；網址中的共享資料夾及子目錄會優先套用。帳號、密碼請分開填寫，不要放在網址中。也可只填 IP／主機名稱，再填共享資料夾。</p>
             <div class="flex flex-wrap items-center gap-3"><button type="button" id="nas-test-button" onclick="NasSettings.testConnection()" class="h-10 min-w-20 px-3 rounded-lg border border-[#3e3e4e] bg-[#282832] whitespace-nowrap disabled:opacity-50">測試連線</button><span id="nas-status" role="status" class="text-xs text-gray-400">設定隨下方儲存按鈕永久保存</span></div>
+      <div id="nas-space-settings" class="hidden space-y-2 bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-4">
+        <h3 id="nas-space-settings-label" class="text-sm font-semibold text-white">已儲存 NAS 的容量</h3>
+        <div id="nas-space-settings-values" role="status" class="text-sm text-gray-300">讀取容量中…</div>
+      </div>
           </fieldset>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -505,6 +513,7 @@
       }
       document.getElementById(`tab-${tabId}`).classList.remove('hidden');
 
+      if (tabId === 'queue') NasSettings.refreshSpace();
       if (tabId === 'history') loadHistory();
       if (tabId === 'settings') loadSettings();
       if (tabId === 'watcher') loadWatcherTargets();
@@ -1150,6 +1159,7 @@
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || '設定載入失敗');
         NasSettings.load(data.nas || {});
+        NasSettings.refreshSpace();
         document.getElementById('firecrawl-enabled').checked = data.firecrawl?.enabled === true;
         updateFirecrawlStatus();
         const fcStatus = data.firecrawl?.status;
@@ -1211,6 +1221,8 @@
     window.addEventListener('DOMContentLoaded', () => {
       initWebSocket();
       selectSite('JableTV');
+      NasSettings.refreshSpace();
+      setInterval(() => { if (!document.hidden) NasSettings.refreshSpace(); }, 60000);
     });
   </script>
 </body>

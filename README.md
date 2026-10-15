@@ -13,7 +13,7 @@
 | 保留檔案的清單整理 | 「清除已完成項目」只移除已完成紀錄；「移除重複番號」整理同番號的多餘紀錄，保留執行中與可續傳任務。兩者都保留影片與下載歷史。 |
 | 後端工作動態 | 底部面板預設收起，摘要仍定時更新；展開可橫向查看各條件及下載階段的進度。 |
 | 獨立 Firecrawl | Docker 專屬擷取服務預設啟用，站台連線失敗時使用；可開關並測試目前站台，不連接本機 MCP。 |
-| NAS / SMB | 支援直接寫入 NAS、系統掛載目錄，以及先下載到本機再傳送。 |
+| NAS / SMB | 支援直接寫入 NAS、系統掛載目錄，以及先下載到本機再傳送；NAS 有回報容量時，顯示總容量、剩餘空間與使用比例。 |
 
 來源重複分頁或接續載入中斷時，會保留已確認的結果並顯示原因；部分來源停止時不宣稱已找到全部影片。
 
@@ -41,7 +41,7 @@
 
 下載清單提供免勾選的「續傳未完成」、批次暫停、繼續、重試、取消、目的地測試，以及保留影片的「移除重複番號」與「清除已完成項目」。
 
-![影匣下載清單：批次管理、移除重複番號、目的地測試與清除已完成項目](docs/assets/web-download-queue.png)
+![影匣下載清單：NAS 容量、批次管理、移除重複番號與清除已完成項目](docs/assets/web-download-queue.png)
 
 </details>
 
@@ -140,6 +140,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q tests/test_nas.py tests/test_daemon.py tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py
 node tests/web_ui.cjs
 node tests/web_browse.cjs
+node tests/web_nas_space.cjs
 bash scripts/check_web_container.sh uav-downloader:local
 ```
 
