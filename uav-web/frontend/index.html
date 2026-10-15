@@ -128,7 +128,7 @@
         </div>
       </div>
 
-      <p id="search-hint" class="text-xs text-gray-400 mb-3">多個關鍵字以空格分隔，只顯示共同結果，最多 8 個；完整詞組請加雙引號。Jable 使用原站標題與標籤交集；其他站逐頁核對共同結果，不限前 20 頁。</p>
+      <p id="search-hint" class="text-xs text-gray-400 mb-3">多個關鍵字以空格分隔，只顯示共同結果，最多 8 個；完整詞組請加雙引號。Jable 使用原站標題與標籤交集；其他站先顯示已確認結果，下一頁接續比對標題與標籤。</p>
 
       <div class="browse-layout">
         <aside class="category-sidebar" aria-label="分類側欄">
@@ -441,6 +441,7 @@
     let currentPage = 1;
     let currentCategoryUrl = '';
     let currentSearchQuery = '';
+    let searchSession = null;
     const selection = createVideoSelection({startDownload: startSingleDownload});
     const taskSelection = createTaskSelection({cancelTask, taskAction});
     const busyTaskActions = new Set();
@@ -536,6 +537,7 @@
       document.getElementById('browse-loading-message').textContent = '讀取站台分類中…';
       currentCategoryUrl = '';
       currentSearchQuery = '';
+      searchSession = null;
       categoryBrowser?.render([], '');
       document.getElementById('selected-category-label').textContent = '';
       currentSite = site;
@@ -589,6 +591,7 @@
       const select = document.getElementById('category-select');
       currentCategoryUrl = select.value;
       currentSearchQuery = '';
+      searchSession = null;
       categoryBrowser?.select(currentCategoryUrl);
       document.getElementById('selected-category-label').textContent = select.selectedOptions[0]?.textContent || '';
       currentPage = 1;
@@ -608,22 +611,40 @@
       document.getElementById('search-warning').textContent = '';
 
       try {
-        const resp = await fetch(currentSearchQuery ? '/api/search' : '/api/browse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            site: currentSite,
-            ...(currentSearchQuery ? {query: currentSearchQuery} : {url: currentCategoryUrl}),
-            page: currentPage
-          })
-        });
-        const res = await resp.json();
+        let res;
+        let reachedEnd = false;
+        while (requestId === browseRequestId) {
+          const resp = await fetch(currentSearchQuery ? '/api/search' : '/api/browse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              site: currentSite,
+              ...(currentSearchQuery ? {query: currentSearchQuery} : {url: currentCategoryUrl}),
+              page: currentPage,
+              ...(currentSearchQuery && searchSession ? {search_id: searchSession} : {})
+            })
+          });
+          res = await resp.json();
+          if (requestId !== browseRequestId) return;
+          if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
+          if (res.search_id) searchSession = res.search_id;
+          if (currentSearchQuery && res.complete && !res.videos?.length && currentPage > 1) {
+            currentPage -= 1;
+            reachedEnd = true;
+            continue;
+          }
+          if (res.pending) {
+            document.getElementById('browse-loading-message').textContent = '已保存查詢進度，正在接續比對符合條件的影片…';
+            await new Promise(resolve => setTimeout(resolve, 200));
+            continue;
+          }
+          break;
+        }
         if (requestId !== browseRequestId) return;
-        if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
         browseLoading = false;
         loader.classList.add('hidden');
         renderVideos(res.videos || []);
-        document.getElementById('search-warning').textContent = res.warning || '';
+        document.getElementById('search-warning').textContent = reachedEnd ? '已到最後一頁，沒有更多符合條件的影片。' : res.warning || '';
         document.getElementById('btn-next-page').disabled = res.has_more === false;
         document.getElementById('page-indicator').textContent = `第 ${currentPage} 頁`;
         document.getElementById('btn-prev-page').disabled = (currentPage <= 1);
@@ -700,6 +721,7 @@
       const q = document.getElementById('search-input').value.trim();
       if (!q) return;
       currentSearchQuery = q;
+      searchSession = null;
       currentPage = 1;
       await fetchBrowse();
     }

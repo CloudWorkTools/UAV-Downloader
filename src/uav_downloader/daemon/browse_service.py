@@ -5,10 +5,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from functools import lru_cache
-from itertools import count
 import re
 import shlex
 import time
+import threading
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
@@ -33,8 +33,77 @@ SITES = {
 }
 
 
+class _SearchSession:
+    """Freeze returned pages while advancing only enough sources for the next one."""
+
+    def __init__(self, service, site, terms, bucket):
+        self.service, self.site, self.terms, self.bucket = service, site, terms, bucket
+        self.lock = threading.Lock()
+        self._reset()
+
+    def _reset(self):
+        self.states = [{'pages': self.service._search_pages(self.site, term, self.bucket),
+                        'videos': {}, 'done': False} for term in self.terms]
+        self.pages, self.buffer, self.matches = [], [], {}
+        self.complete, self.failed = False, False
+
+    @staticmethod
+    def _advance(state):
+        try:
+            state['videos'].update(next(state['pages']))
+        except StopIteration:
+            state['done'] = True
+
+    def get_page(self, page):
+        activity.report('接續上次的標題與標籤交集比對')
+        with self.lock:
+            if self.failed:
+                pages, buffer, matches = self.pages, self.buffer, self.matches
+                self._reset()
+                self.pages, self.buffer, self.matches = pages, buffer, matches
+            try:
+                rounds = 0
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    while len(self.pages) < page:
+                        if self.buffer:
+                            self.pages.append(self.buffer[:24])
+                            del self.buffer[:24]
+                            continue
+                        if self.complete or rounds >= 4:
+                            break
+                        finished = [state for state in self.states if state['done']]
+                        candidates = set.intersection(*(set(state['videos']) for state in finished)) if finished else None
+                        active = [state for state in self.states if not state['done'] and
+                                  (candidates is None or not candidates <= state['videos'].keys())]
+                        futures = [pool.submit(copy_context().run, self._advance, state) for state in active]
+                        for future in futures:
+                            future.result()
+                        rounds += 1
+                        common = set.intersection(*(set(state['videos']) for state in self.states))
+                        for key, video in self.states[0]['videos'].items():
+                            if key in common and key not in self.matches:
+                                self.matches[key] = video
+                                self.buffer.append(video)
+                        finished = [state for state in self.states if state['done']]
+                        if finished:
+                            candidates = set.intersection(*(set(state['videos']) for state in finished))
+                            self.complete = candidates <= common
+            except Exception:
+                self.failed = True
+                raise
+            selected = self.pages[page - 1] if page <= len(self.pages) else []
+            pending = page > len(self.pages) and not self.complete
+            activity.report(f'已確認 {len(self.matches)} 筆交集結果' + ('，繼續比對中' if pending else '，本頁已就緒'))
+            return dict(videos=selected[:], count=len(selected), total=len(self.matches) if self.complete else None,
+                        complete=self.complete, pending=pending,
+                        has_more=page < len(self.pages) or bool(self.buffer) or not self.complete,
+                        warning='' if self.complete else '下一頁會接續搜尋，已顯示的結果均符合全部條件。')
+
+
 class BrowseService:
     """Provides uniform API for browsing categories, tags, search results."""
+
+    _catalog_lock = threading.RLock()
 
     @staticmethod
     def get_supported_sites() -> List[str]:
@@ -130,8 +199,9 @@ class BrowseService:
         if site_name == "MissAV":
             # Genre names are URL keys; the directory itself spans dozens of pages.
             urls.append(f"https://missav.ai/genres/{quote(term, safe='')}")
-        urls.extend(url for name, url in cls._search_tags(site_name, bucket)
-                    if name.casefold() == term.casefold())
+        with cls._catalog_lock:
+            tags = cls._search_tags(site_name, bucket)
+        urls.extend(url for name, url in tags if name.casefold() == term.casefold())
         return tuple(dict.fromkeys(urls))
 
     @classmethod
@@ -191,7 +261,7 @@ class BrowseService:
 
     @classmethod
     def search_videos(
-        cls, site_name: str, query: str, page: int = 1
+        cls, site_name: str, query: str, page: int = 1, search_id: Optional[str] = None
     ) -> Dict[str, Any]:
         if page < 1:
             raise ValueError("頁碼必須大於零")
@@ -214,38 +284,38 @@ class BrowseService:
             native_query = ' '.join('"' + term + '"' if any(c.isspace() for c in term) else term
                                     for term in terms)
             return cls.fetch_videos(site_name, cls.get_search_url(site_name, native_query), page)
-        # Cache source results briefly so paging does not repeat every upstream request.
-        bucket = int(time.monotonic() // 300)
+        if search_id is not None and (not isinstance(search_id, str) or not re.fullmatch(r'\d{1,16}', search_id)):
+            raise ValueError('搜尋接續識別碼無效')
+        bucket = int(search_id) if search_id is not None else int(time.monotonic() // 300)
         cls.get_search_url(site_name, terms[0])
-        cls._search_tags(site_name, bucket)
         if len(terms) == 1:
             urls = cls._search_urls(site_name, terms[0], bucket)
             if len(urls) == 1:
                 return cls.fetch_videos(site_name, urls[0], page)
-        activity.report('比對標題與標籤的交集')
-        videos = cls._search_term(site_name, terms, bucket)
-        activity.report(f'交集核對完成，共 {len(videos)} 筆結果')
-        start = (page - 1) * 24
-        selected = videos[start:start + 24]
-        return {
-            "site": site_name, "page": page, "videos": selected,
-            "count": len(selected), "total": len(videos), "blocked": False,
-            "keywords": list(terms), "has_more": start + 24 < len(videos),
-            "warning": "", "complete": True,
-        }
+        result = cls._search_term(site_name, terms, bucket).get_page(page)
+        return dict(result, site=site_name, page=page, blocked=False,
+                    keywords=list(terms), search_id=str(bucket))
 
     @classmethod
     def _search_pages(cls, site_name, term, bucket):
-        for url in cls._search_urls(site_name, term, bucket):
-            seen = set()
-            for page in count(1):
+        native = cls.get_search_url(site_name, term)
+        sources = [{'url': native, 'page': 1, 'seen': set(), 'done': False}]
+        tags_loaded = False
+        while not tags_loaded or any(not source['done'] for source in sources):
+            for source in sources:
+                if source['done']:
+                    continue
+                page = source['page']
                 activity.report(f'條件「{term}」：讀取第 {page} 頁', part=term)
-                result = cls.fetch_videos(site_name, url, page)
+                result = cls.fetch_videos(site_name, source['url'], page)
                 if result.get('blocked') or result.get('error'):
                     raise RuntimeError(f"關鍵字「{term}」查詢失敗：{result.get('error') or '站台防護阻擋'}")
                 if not result['videos']:
+                    source['done'] = True
                     activity.report(f'條件「{term}」：此來源已讀完 {page - 1} 頁', part=term)
-                    break
+                    if not tags_loaded or any(not item['done'] for item in sources):
+                        yield {}
+                    continue
                 videos = {}
                 for video in result['videos']:
                     parsed = urlsplit(video.get('url', ''))
@@ -253,37 +323,19 @@ class BrowseService:
                         continue
                     key = (parsed.path.rstrip('/'), parsed.query)
                     videos[key] = video
-                if not videos or not set(videos) - seen:
+                if not videos or not set(videos) - source['seen']:
                     raise RuntimeError('原站重複分頁或回傳無效影片，無法確認完整搜尋結果')
-                seen.update(videos)
-                activity.report(f'條件「{term}」：已讀第 {page} 頁，累計 {len(seen)} 筆', part=term)
+                source['seen'].update(videos)
+                source['page'] += 1
+                activity.report(f'條件「{term}」：已讀第 {page} 頁，累計 {len(source["seen"])} 筆', part=term)
                 yield videos
+            if not tags_loaded:
+                tags = [{'url': url, 'page': 1, 'seen': set(), 'done': False}
+                        for url in cls._search_urls(site_name, term, bucket) if url != native]
+                sources = tags + sources
+                tags_loaded = True
 
     @classmethod
     @lru_cache(maxsize=32)
     def _search_term(cls, site_name, terms, bucket):
-        # Advance every condition until the smallest completed set supplies all candidates.
-        states = [{'pages': cls._search_pages(site_name, term, bucket),
-                   'videos': {}, 'done': False} for term in terms]
-
-        def advance(state):
-            try:
-                state['videos'].update(next(state['pages']))
-            except StopIteration:
-                state['done'] = True
-
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            while not any(state['done'] for state in states):
-                futures = [pool.submit(copy_context().run, advance, state) for state in states]
-                for future in futures:
-                    future.result()
-            activity.report('已讀完一個條件，正在核對全部候選影片')
-            seed = min((state for state in states if state['done']),
-                       key=lambda state: len(state['videos']))
-            candidates = dict(seed['videos'])
-            for state in sorted(states, key=lambda state: len(state['videos'])):
-                while candidates and not state['done'] and not candidates.keys() <= state['videos'].keys():
-                    advance(state)
-                candidates = {key: video for key, video in candidates.items()
-                              if key in state['videos']}
-        return list(candidates.values())
+        return _SearchSession(cls, site_name, terms, bucket)

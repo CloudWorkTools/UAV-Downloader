@@ -220,7 +220,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
                 try:
                     with activity.track('搜尋影片', site, query, page):
-                        result = BrowseService.search_videos(site, query, page)
+                        options = {'search_id': body['search_id']} if body.get('search_id') is not None else {}
+                        result = BrowseService.search_videos(site, query, page, **options)
                 except ValueError as exc:
                     return self._send_error(str(exc), 400)
                 return self._send_json(result)

@@ -98,12 +98,14 @@ impl DaemonClient {
         site: &str,
         query: &str,
         page: u32,
+        search_id: Option<&str>,
     ) -> Result<serde_json::Value, reqwest::Error> {
         let endpoint = format!("{}/api/search", self.base_url);
         let payload = serde_json::json!({
             "site": site,
             "query": query,
-            "page": page
+            "page": page,
+            "search_id": search_id
         });
         let resp = self
             .apply_auth(self.client.post(&endpoint))

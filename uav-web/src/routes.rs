@@ -38,6 +38,7 @@ pub struct SearchBody {
     pub site: String,
     pub query: String,
     pub page: Option<u32>,
+    pub search_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -139,7 +140,7 @@ async fn search_handler(
     Json(body): Json<SearchBody>,
 ) -> impl IntoResponse {
     let page = body.page.unwrap_or(1);
-    match state.client.search(&body.site, &body.query, page).await {
+    match state.client.search(&body.site, &body.query, page, body.search_id.as_deref()).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
     }

@@ -11,7 +11,7 @@ const element = id => {
 const pending = [];
 const context = vm.createContext({
   document: {getElementById: element, createElement: () => ({}), querySelectorAll: () => []},
-  window: {addEventListener() {}}, alert() {},
+  window: {addEventListener() {}}, alert() {}, setTimeout: callback => setImmediate(callback),
   fetch: (path, options) => new Promise(resolve => pending.push({path, options, resolve})),
 });
 vm.runInContext(fs.readFileSync('uav-web/frontend/video-selection.js', 'utf8'), context);
@@ -135,6 +135,39 @@ async function run() {
   assert.match(element('backend-summary-preview').textContent, /條件二/);
   context.renderBackendActivity({activities:[]});
   assert.equal(element('backend-summary-preview').textContent, '目前沒有執行中的工作');
+  vm.runInContext("currentSite='MissAV'; currentSearchQuery='a b'; searchSession=null; currentPage=1", context);
+  let pendingIndex = pending.length;
+  const incremental = context.fetchBrowse();
+  respond(pending[pendingIndex], {videos:[],pending:true,search_id:'123',has_more:true,complete:false});
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+  assert.equal(JSON.parse(pending[pendingIndex+1].options.body).search_id, '123');
+  assert.equal(JSON.parse(pending[pendingIndex+1].options.body).page, 1);
+  respond(pending[pendingIndex+1], {videos:[{url:'first-confirmed'}],search_id:'123',has_more:true,complete:false});
+  await incremental;
+  const stopped = pending.length;
+  await new Promise(setImmediate);
+  assert.equal(pending.length, stopped, 'Finding a page stops background scanning');
+  context.changePage(1);
+  assert.equal(JSON.parse(pending[stopped].options.body).search_id, '123');
+  assert.equal(JSON.parse(pending[stopped].options.body).page, 2);
+  respond(pending[stopped], {videos:[{url:'next-confirmed'}],search_id:'123',has_more:true});
+  await new Promise(setImmediate);
+  const lastIndex=pending.length;
+  context.changePage(1);
+  respond(pending[lastIndex], {videos:[],search_id:'123',has_more:false,complete:true});
+  await new Promise(setImmediate);
+  assert.equal(JSON.parse(pending[lastIndex+1].options.body).page, 2);
+  respond(pending[lastIndex+1], {videos:[{url:'next-confirmed'}],search_id:'123',has_more:false,complete:true});
+  await new Promise(setImmediate);
+  assert.equal(element('page-indicator').textContent, '第 2 頁');
+  assert.equal(element('btn-next-page').disabled, true);
+  assert.match(element('search-warning').textContent, /已到最後一頁/);
+  element('search-input').value='new query';
+  const fresh=context.executeSearch();
+  assert.equal(JSON.parse(pending.at(-1).options.body).search_id, undefined);
+  respond(pending.at(-1), {videos:[]});
+  await fresh;
   console.log('Search pagination, page reset, category/site reset, preview and request races: PASS');
 }
 run().catch(e => {console.error(e);process.exitCode=1;});
