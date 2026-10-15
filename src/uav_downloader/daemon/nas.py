@@ -239,11 +239,11 @@ def test_connection(body):
             return {'enabled': True, 'space': None, 'space_error': '連線與寫入測試成功，但 NAS 無法回報容量'}
 
 
-def upload_video(settings, video_file, cancelled, published=None):
+def upload_video(settings, video_file, cancelled, published=None, *, subtitles_only=False):
     video = Path(video_file)
     if not video.is_file():
         raise NasError('找不到已下載影片，無法傳送到 NAS')
-    files = [video] + sorted(p for p in video.parent.iterdir()
+    files = ([] if subtitles_only else [video]) + sorted(p for p in video.parent.iterdir()
                              if p.is_file() and p.name.startswith(video.stem + '.') and p.suffix == '.srt')
     with _connection(settings) as (smb, root, options):
         lock = ntpath.join(root, _target_lock_name(video.name))

@@ -903,6 +903,7 @@
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
                 ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
+                ${t.status === 'completed' && t.error?.startsWith('影片已完成，但字幕生成失敗') ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">重試字幕</button>` : ''}
                 ${taskSelection.canCancel(t) ?
                   `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-10 px-3.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
               </div>

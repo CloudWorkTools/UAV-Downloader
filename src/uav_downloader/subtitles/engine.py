@@ -1528,10 +1528,17 @@ def _extract_audio(video_path: str, wav_path: str, log_path: str,
     if not ffmpeg:
         raise _asr_failure('audio')
     try:
+        sequential = []
+        if storage_fs(video_path).remote and video_path.lower().endswith('.mp4'):
+            with storage_open(video_path, 'rb') as handle:
+                header = handle.read(64 * 1024)
+            if b'moov' in header and b'mvex' in header:
+                # Fragmented MP4 can stream without scanning the remote tail first.
+                sequential = ['-seekable', '0']
         with storage_fs(video_path).media_source(video_path) as source:
             _run_process([
                 ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-                '-i', source, '-vn', '-ac', '1', '-ar', '16000',
+                *sequential, '-i', source, '-vn', '-ac', '1', '-ar', '16000',
                 '-c:a', 'pcm_s16le', wav_path,
             ], log_path, cancel_check,
                 disk_guard_path=os.path.dirname(wav_path),
@@ -5127,9 +5134,9 @@ def generate_subtitles(video_path: str, mode,
 
     profile = recognition_profile()
     if asr_settings is not None:
-        from uav_downloader.subtitles.asr import CHUNK_SECONDS, OVERLAP_SECONDS
+        from uav_downloader.subtitles.asr import CHUNK_SECONDS, OVERLAP_SECONDS, PIPELINE_VERSION
         asr_signature = _stable_signature({
-            'pipeline': 'openai-asr-chunks-v1',
+            'pipeline': PIPELINE_VERSION,
             'endpoint': asr_settings['base_url'], 'model': asr_settings['model'],
             'language': 'ja', 'chunk_seconds': CHUNK_SECONDS,
             'overlap_seconds': OVERLAP_SECONDS,

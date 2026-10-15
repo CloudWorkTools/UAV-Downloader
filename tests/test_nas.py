@@ -474,3 +474,14 @@ def test_mounted_capacity_uses_the_configured_nas_path(direct_profile, monkeypat
 def test_invalid_capacity_is_not_displayed(values):
     with pytest.raises(ValueError):
         nas._space_values(*values)
+
+
+def test_subtitle_only_upload_never_overwrites_existing_mp4(profile, remote, tmp_path):
+    video=tmp_path/'movie.mp4'
+    video.write_bytes(b'local video')
+    target=ntpath.join(r'\\192.168.1.10\video', 'UAV', 'movie.mp4')
+    remote.files[target]=b'existing NAS video'
+    (tmp_path/'movie.zh-TW.srt').write_text('new subtitles')
+    nas.upload_video(profile, video, threading.Event(), subtitles_only=True)
+    assert remote.files[target]==b'existing NAS video'
+    assert len(remote.files)==2 and b'new subtitles' in remote.files.values()

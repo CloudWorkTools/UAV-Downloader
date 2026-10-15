@@ -138,3 +138,57 @@ def test_saved_download_directory_overrides_environment_default(web_settings):
     status, response = request('/api/download/start', {'url': 'https://missav.ai/test'})
     assert status == 200
     assert response['task']['dest'] == destination
+
+
+def test_subtitle_retry_keeps_video_and_does_not_create_download(tmp_path, monkeypatch):
+    from uav_downloader.daemon.task_manager import DownloadTask
+    from uav_downloader.subtitles import engine
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path / 'config'))
+    manager=TaskManager()
+    monkeypatch.setattr(manager, 'start_dispatcher', lambda: None)
+    video=tmp_path/'video.mp4'
+    video.write_bytes(b'original MP4')
+    task=DownloadTask(task_id='subtitle-retry', url='https://missav.ai/test', dest=str(tmp_path), name='video',
+                      status='completed', enable_subtitles=True, subtitle_mode='zh',
+                      error='影片已完成，但字幕生成失敗: 辨識 API 片段文字或時間戳無效')
+    old_files=MagicMock()
+    task.files=old_files
+    manager._tasks[task.task_id]=task
+    monkeypatch.setattr('uav_downloader.daemon.task_manager.M3U8Sites.CreateSite', lambda *a,**k: pytest.fail('Redownloaded video'))
+    monkeypatch.setattr(engine, 'generate_subtitles', lambda *a,**k: None)
+    assert manager.restart_task(task.task_id, subtitles_only=True)
+    manager._run_task(task)
+    assert task.status=='completed' and task.error is None
+    assert video.read_bytes()==b'original MP4'
+    old_files.cleanup.assert_not_called()
+
+
+def test_subtitle_retry_api_and_cancel_preserve_completed_video(web_settings, monkeypatch):
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root=web_settings
+    video=root/'video.mp4'
+    video.write_bytes(b'keep completed video')
+    task=DownloadTask(task_id='retry-api', url='https://missav.ai/test', dest=str(root), name='video',
+                      status='completed', enable_subtitles=True, subtitle_mode='zh')
+    server.task_manager._tasks[task.task_id]=task
+    status,result=request('/api/download/action', {'action':'retry_subtitles', 'task_id':task.task_id})
+    assert status==200 and result['success'] and task.subtitles_only
+    assert server.task_manager.cancel_task(task.task_id)
+    assert task.status=='cancelled' and video.read_bytes()==b'keep completed video'
+
+
+def test_interrupted_subtitle_retry_can_cancel_after_restart_without_deleting_mp4(tmp_path):
+    from uav_downloader.daemon.task_manager import DownloadTask
+    state=tmp_path/'tasks.json'
+    manager=TaskManager(state_path=state)
+    video=tmp_path/'video.mp4'
+    video.write_bytes(b'completed video')
+    task=DownloadTask(task_id='interrupted-srt', url='https://missav.ai/test', dest=str(tmp_path), name='video',
+                      status='subtitles', subtitles_only=True, enable_subtitles=True, subtitle_mode='zh')
+    manager._tasks[task.task_id]=task
+    manager._save_tasks()
+    restored=TaskManager(state_path=state)
+    assert restored.get_task(task.task_id).subtitles_only
+    assert restored.cancel_task(task.task_id)
+    assert restored.get_task(task.task_id).status=='cancelled'
+    assert video.read_bytes()==b'completed video'

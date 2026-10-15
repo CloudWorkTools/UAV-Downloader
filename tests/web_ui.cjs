@@ -113,6 +113,9 @@ async function run() {
   assert.match(element('tasks-container').innerHTML, /重新開始/);
   context.renderTasks([{task_id:'failed-cleanup', status:'failed', error:'清除失敗：Permission denied <folder>'}]);
   assert.match(element('tasks-container').innerHTML, /<p role="alert"[^>]*>清除失敗：Permission denied &lt;folder&gt;<\/p>/);
+  context.renderTasks([{task_id:'subtitle-error', status:'completed', error:'影片已完成，但字幕生成失敗: 時間戳'}]);
+  assert.match(element('tasks-container').innerHTML, /retry_subtitles/);
+  assert.match(element('tasks-container').innerHTML, /重試字幕/);
   context.renderTasks([{task_id:'e', status:'cancelled'}]);
   assert.match(element('tasks-container').innerHTML, /已取消/);
   context.renderTasks([]);

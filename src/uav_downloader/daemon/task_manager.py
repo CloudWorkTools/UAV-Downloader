@@ -34,6 +34,7 @@ class DownloadTask:
     download_cover: bool = True
     enable_subtitles: bool = False
     subtitle_mode: str = "none"
+    subtitles_only: bool = False
     nas_settings: dict = field(default_factory=dict, repr=False)
     files: Any = field(default=None, repr=False)
     remote_files: list = field(default_factory=list, repr=False)
@@ -79,6 +80,7 @@ class DownloadTask:
             "updated_at": self.updated_at,
             "enable_subtitles": self.enable_subtitles,
             "subtitle_mode": self.subtitle_mode,
+            "subtitles_only": self.subtitles_only,
             "download_cover": self.download_cover,
             "resolution": self.resolution,
             "max_workers": self.max_workers,
@@ -127,7 +129,7 @@ class TaskManager:
                 if files:
                     task.files = DownloadFiles.restore(task.dest, task.task_id, files)
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
-                task.cleanup_unverified = not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused")
+                task.cleanup_unverified = not task.subtitles_only and not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused")
                 if task.status == 'pausing':
                     task.status = 'paused'
                 if task.status not in ("completed", "skipped", "cancelled", "failed", "paused"):
@@ -273,10 +275,12 @@ class TaskManager:
             self._save_tasks()
             return True
 
-    def restart_task(self, task_id: str) -> bool:
+    def restart_task(self, task_id: str, *, subtitles_only=False) -> bool:
         with self._lock:
             task = self._tasks.get(task_id)
-            if not task or task_id in self._active or task.status not in ('paused', 'failed', 'cancelled'):
+            if not task or task_id in self._active or task.status not in (('completed', 'paused', 'failed', 'cancelled') if subtitles_only else ('paused', 'failed', 'cancelled')):
+                return False
+            if subtitles_only and (not task.name or not task.enable_subtitles or task.subtitle_mode == 'none'):
                 return False
             if task.nas_settings.get('enabled') and task.nas_settings.get('mode') in ('smb', 'upload') and not task.nas_settings.get('password'):
                 current = nas.load_settings(secret=True)
@@ -285,15 +289,22 @@ class TaskManager:
                 task.nas_settings['password'] = current['password']
             if task.dest.startswith('smb:') and not task.nas_settings.get('enabled'):
                 raise ValueError('舊任務缺少 NAS 設定，請使用目前儲存設定重新加入網址')
-            reason = self._duplicate_reason(task)
-            if reason:
-                raise ValueError(reason)
+            if not (subtitles_only or task.subtitles_only):
+                reason = self._duplicate_reason(task)
+                if reason:
+                    raise ValueError(reason)
+            if subtitles_only:
+                task.subtitles_only = True
+                # Retrying subtitles must never own or delete the completed MP4.
+                task.files = None
+                task.remote_files = []
+                task.cleanup_unverified = False
             task.cancelled_event.clear()
             task.paused_event.clear()
             task.job = None
             task.error = None
             task.status = 'pending'
-            task.set_phase('等待下載')
+            task.set_phase('等待字幕處理' if task.subtitles_only else '等待下載')
             task.speed_bps = 0
             task.updated_at = datetime.now(timezone.utc).isoformat()
             self._queue.append(task_id)
@@ -501,6 +512,17 @@ class TaskManager:
                 storage.enter_context(nas.open_smb_storage(task.nas_settings, task.dest))
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "direct":
                 nas.direct_destination(task.nas_settings)
+
+            if task.subtitles_only:
+                task.status = 'subtitles'
+                self._run_subtitles(task, None)
+                if not task.error and task.nas_settings.get('enabled') and task.nas_settings.get('mode') == 'upload':
+                    task.status = 'uploading'
+                    nas.upload_video(task.nas_settings, os.path.join(task.dest, task.name + '.mp4'),
+                                     task.cancelled_event, task.remote_files, subtitles_only=True)
+                task.progress = 100.0
+                self._finish_task(task, 'completed')
+                return
 
             task.set_phase('測試實際下載目的地')
             probe_destination(task.dest)
@@ -724,14 +746,21 @@ class TaskManager:
         try:
             from uav_downloader.subtitles.engine import generate_subtitles
             from uav_downloader.subtitles.asr import load_settings
-            target_file = os.path.join(job.dest_folder() or task.dest, f"{task.name}.mp4")
-            if storage_fs(target_file).isfile(target_file):
-                generate_subtitles(
-                    target_file,
-                    mode=task.subtitle_mode,
-                    cancel_check=task.cancelled_event.is_set,
-                    asr_settings=load_settings(secret=True),
-                )
+            target_file = os.path.join((job.dest_folder() if job else None) or task.dest, f"{task.name}.mp4")
+            if not storage_fs(target_file).isfile(target_file):
+                raise FileNotFoundError('找不到已完成的影片，無法重試字幕')
+            generate_subtitles(
+                target_file,
+                mode=task.subtitle_mode,
+                cancel_check=task.cancelled_event.is_set,
+                asr_settings=load_settings(secret=True),
+                progress_callback=lambda stage, percent: task.set_phase({
+                    'audio': '擷取字幕音訊', 'transcribe_ja': '辨識日文字幕',
+                    'asr_tail_retry': '重新辨識異常尾段', 'asr_cached': '讀取已完成辨識片段',
+                    'translate_en': '翻譯英文字幕', 'translate_zh': '翻譯繁體中文字幕',
+                    'translation_model': '準備本機翻譯模型',
+                }.get(stage, '處理影片字幕'), percent or 0, 100 if percent is not None else 0),
+            )
         except Exception as exc:
             # Subtitle error does not fail the whole download if MP4 succeeded
             task.error = f"影片已完成，但字幕生成失敗: {exc}"

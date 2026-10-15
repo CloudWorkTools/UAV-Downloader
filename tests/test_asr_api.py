@@ -9,6 +9,11 @@ import pytest
 from uav_downloader.subtitles import asr, engine
 
 
+@pytest.fixture(autouse=True)
+def isolate_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path / 'config'))
+
+
 @pytest.fixture
 def settings_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(asr.config, '_ui_prefs_path', lambda: str(tmp_path / 'prefs.json'))
@@ -49,11 +54,10 @@ def test_invalid_settings_do_not_replace_saved_profile(settings_folder, values):
 @pytest.mark.parametrize('segment', [
     {'start': -1, 'end': 1, 'text': 'bad'},
     {'start': 0, 'end': float('nan'), 'text': 'bad'},
-    {'start': 0, 'end': 12, 'text': 'bad'},
+    {'start': 0, 'end': 41, 'text': 'bad'},
     {'start': True, 'end': 1, 'text': 'bad'},
     {'start': 1, 'end': 0, 'text': 'bad'},
     {'start': 0, 'end': 1, 'text': None},
-    {'start': 10.01, 'end': 10.05, 'text': 'bad'},
     {'start': 0, 'end': 10**1000, 'text': 'bad'},
 ])
 def test_invalid_provider_segments_are_rejected(segment):
@@ -190,3 +194,69 @@ def test_same_host_model_is_installed_before_transcription(tmp_path, monkeypatch
 
 def test_whisper_tail_rounding_is_clipped_to_audio_duration():
     assert asr._segments({'segments': [segment(11.3, 13.3, '日本語')]}, 13) == [(11.3, 13.0, '日本語')]
+
+
+def test_production_overflow_retains_valid_audio_only():
+    payload = {'segments': [segment(116.75, 121.15, '正常'),
+                            segment(121.15, 123.15, '跨界'),
+                            segment(123.15, 125.15, '範圍外')]}
+    assert asr._segments(payload, 122) == [(116.75, 121.15, '正常'), (121.15, 122.0, '跨界')]
+
+
+def test_overflow_retranscribes_real_tail_audio(tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'CHUNK_SECONDS', 200)
+    responses.extend([(200, {'segments': [segment(0, 1, '保留'), segment(121.15, 123.15, '錯誤尾端'), segment(123.15, 125.15, '越界')]}),
+                      (200, {'segments': [segment(28, 29.5, '修復尾端')]})])
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 122)
+    path = asr.transcribe(settings, str(wav), str(tmp_path/'out'), str(tmp_path/'log'), None, None)
+    cues = engine.parse_srt(Path(path).read_text())
+    assert [cue.text for cue in cues] == ['保留', '修復尾端']
+    assert cues[-1].timing == '00:02:00,000 --> 00:02:01,500'
+    assert len(requests) == 2
+
+
+def test_retry_reuses_only_completed_audio_chunks(tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path/'config'))
+    monkeypatch.setattr(asr, 'CHUNK_SECONDS', 2)
+    monkeypatch.setattr(asr, 'OVERLAP_SECONDS', 0)
+    wav=tmp_path/'audio.wav'
+    audio(wav, 4)
+    responses.extend([(200, {'segments':[segment(.2, .8, '完成片段')]}), (503, {})])
+    with pytest.raises(engine.SubtitleError, match='HTTP 503'):
+        asr.transcribe(settings, str(wav), str(tmp_path/'out'), str(tmp_path/'log'), None, None)
+    responses.append((200, {'segments':[segment(.2, .8, '重試片段')]}))
+    path=asr.transcribe(settings, str(wav), str(tmp_path/'out'), str(tmp_path/'log'), None, None)
+    assert len(requests)==3, 'Do not repeat the successful first request'
+    assert [cue.text for cue in engine.parse_srt(Path(path).read_text())]==['完成片段', '重試片段']
+    # A different model must not reuse these cached transcripts.
+    responses.extend([(200, {'segments':[]}), (200, {'segments':[]})])
+    asr.transcribe(dict(settings, model='other'), str(wav), str(tmp_path/'other'), str(tmp_path/'log'), None, None)
+    assert len(requests)==5
+
+
+@pytest.mark.parametrize('header,sequential', [(b'ftyp moov mvex', True), (b'ftyp normal legacy MP4', False)])
+def test_fragmented_smb_audio_streams_without_remote_tail_scan(monkeypatch, header, sequential):
+    import io
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    calls=[]
+    monkeypatch.setattr(engine, 'locate_ffmpeg', lambda:'ffmpeg')
+    monkeypatch.setattr(engine, 'storage_fs', lambda _:SimpleNamespace(remote=True, media_source=lambda _:nullcontext('http://127.0.0.1/media')))
+    monkeypatch.setattr(engine, 'storage_open', lambda *a,**k:io.BytesIO(header))
+    monkeypatch.setattr(engine, '_run_process', lambda args,*a,**k:calls.append(args))
+    engine._extract_audio('/remote/video.mp4','/tmp/audio.wav','/tmp/log',None)
+    assert ('-seekable' in calls[0]) is sequential
+
+
+def test_all_outside_audio_does_not_masquerade_as_no_speech(tmp_path, monkeypatch, api_server):
+    settings, responses, _, _=api_server
+    monkeypatch.setattr(asr, 'CHUNK_SECONDS', 200)
+    wav=tmp_path/'audio.wav'
+    audio(wav, 5)
+    responses.extend([(200, {'segments':[segment(6, 7, 'outside')]}), (200, {'segments':[]})])
+    with pytest.raises(engine.SubtitleError, match='尾段重試後仍無有效時間戳'):
+        asr.transcribe(settings,str(wav),str(tmp_path/'out'),str(tmp_path/'log'),None,None)
+    assert not (tmp_path/'out.srt').exists()

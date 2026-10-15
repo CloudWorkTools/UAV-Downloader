@@ -283,7 +283,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                         activity.report('建立、寫入、重新命名、讀回與刪除測試中')
                         result = self.task_manager.check_destination(task_id)
                     return self._send_json(result)
-                operations = {'pause': self.task_manager.pause_task,
+                operations = {'retry_subtitles': lambda task_id: self.task_manager.restart_task(task_id, subtitles_only=True),
+                              'pause': self.task_manager.pause_task,
                               'resume': self.task_manager.restart_task,
                               'retry': self.task_manager.restart_task,
                               'remove': self.task_manager.remove_task}

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import math
 import json
 import os
 from pathlib import Path
@@ -9,6 +11,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 from urllib.parse import quote, urlsplit
 import wave
 
@@ -21,6 +24,8 @@ DEFAULT_URL = 'http://uav-speaches:8000/v1'
 DEFAULT_MODEL = 'Systran/faster-whisper-small'
 CHUNK_SECONDS = 120
 OVERLAP_SECONDS = 2
+PIPELINE_VERSION = 'openai-asr-tail-retry-cache-v2'
+TAIL_SECONDS = 30
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _LOCK = threading.RLock()
 
@@ -158,29 +163,132 @@ def _segments(payload, duration):
         if not isinstance(item, dict):
             raise ValueError('辨識 API 片段格式錯誤')
         start, end, text = item.get('start'), item.get('end'), item.get('text')
-        if (type(start) not in (int, float) or type(end) not in (int, float)
-                or not 0 <= start < end <= duration + 1.0 or start >= duration or start < previous
+        if type(start) not in (int, float) or type(end) not in (int, float):
+            raise ValueError('辨識 API 片段文字或時間戳無效')
+        try:
+            finite = math.isfinite(start) and math.isfinite(end)
+        except OverflowError:
+            finite = False
+        if (not finite or not 0 <= start < end <= duration + TAIL_SECONDS or start < previous
                 or not isinstance(text, str) or len(text) > 16384 or '\x00' in text):
             raise ValueError('辨識 API 片段文字或時間戳無效')
-        # Whisper can place the final timestamp slightly beyond the audio tail.
         previous = start
         text = ' '.join(text.split())
-        if text:
+        if text and start < duration:
             result.append((float(start), min(float(end), duration), text))
     return result
+
+
+def _prune_cache(folder):
+    files = []
+    for path in folder.glob('*.json'):
+        try:
+            stat = path.stat()
+            if stat.st_mtime < time.time() - 7 * 86400:
+                path.unlink()
+            else:
+                files.append((stat.st_mtime, stat.st_size, path))
+        except OSError:
+            pass
+    total = sum(size for _, size, _ in files)
+    for _, size, path in sorted(files):
+        if total <= 128 * 1024 * 1024:
+            break
+        try:
+            path.unlink()
+            total -= size
+        except OSError:
+            pass
+
+
+def _recognize(source, start, stop, settings, folder, request_path, log_path,
+               cancel_check, progress_callback, cache, retry_tail=True):
+    from uav_downloader.subtitles import engine
+
+    engine._check_cancel(cancel_check)
+    rate = source.getframerate()
+    duration = (stop - start) / rate
+    chunk_path = os.path.join(folder, 'chunk.wav')
+    result_path = os.path.join(folder, 'response.json')
+    engine._ensure_asr_temp_space(folder, (stop - start) * 2)
+    source.setpos(start)
+    content = source.readframes(stop - start)
+    identity = hashlib.sha256(json.dumps({
+        'pipeline': PIPELINE_VERSION, 'url': settings['base_url'], 'model': settings['model'],
+        'retry_tail': retry_tail, 'tail_seconds': TAIL_SECONDS,
+        'start_frame': start, 'stop_frame': stop, 'overlap_seconds': OVERLAP_SECONDS,
+    }, sort_keys=True).encode() + content).hexdigest()
+    saved = cache / (identity + '.json')
+    try:
+        with saved.open('rb') as stream:
+            encoded = stream.read(MAX_RESPONSE_BYTES + 1)
+        if len(encoded) <= MAX_RESPONSE_BYTES:
+            segments = _segments(json.loads(encoded), duration)
+            engine._notify(progress_callback, 'asr_cached', None)
+            return segments
+    except (OSError, ValueError, TypeError):
+        pass
+    with wave.open(chunk_path, 'wb') as chunk:
+        chunk.setparams(source.getparams())
+        chunk.writeframes(content)
+    engine._run_process(
+        [sys.executable, '-m', __name__, request_path, chunk_path, result_path],
+        log_path, cancel_check, timeout_seconds=1850, disk_guard_path=folder)
+    try:
+        with open(result_path, 'rb') as stream:
+            encoded = stream.read(MAX_RESPONSE_BYTES + 1)
+        if len(encoded) > MAX_RESPONSE_BYTES:
+            raise ValueError('辨識 API 回應過大')
+        envelope = json.loads(encoded)
+        if not isinstance(envelope, dict) or envelope.get('ok') is not True:
+            raise ValueError(envelope.get('error', '辨識 API 回應無效') if isinstance(envelope, dict) else '辨識 API 回應無效')
+        payload = envelope.get('payload')
+        segments = _segments(payload, duration)
+    except (OSError, ValueError, TypeError) as exc:
+        raise engine.SubtitleError(str(exc)) from None
+    if retry_tail and any(item['end'] > duration for item in payload['segments']):
+        engine._notify(progress_callback, 'asr_tail_retry', None)
+        cut = max(0, duration - TAIL_SECONDS)
+        # Start before a crossing cue so retrying cannot discard half its sentence.
+        cut = min([cut] + [begin for begin, end, _ in segments if begin < cut < end])
+        prefix = [cue for cue in segments if cue[1] <= cut]
+        retried = []
+        step = TAIL_SECONDS * rate
+        first = start + int(cut * rate)
+        for position in range(first, stop, step):
+            left = max(first, position - OVERLAP_SECONDS * rate)
+            right = min(stop, position + step + OVERLAP_SECONDS * rate)
+            for begin, end, text in _recognize(
+                    source, left, right, settings, folder, request_path, log_path,
+                    cancel_check, progress_callback, cache, retry_tail=False):
+                begin += (left - start) / rate
+                end += (left - start) / rate
+                midpoint = (begin + end) / 2
+                if (position - start) / rate <= midpoint < (min(stop, position + step) - start) / rate:
+                    retried.append((begin, end, text))
+        # Preserve valid original speech if the smaller retry returns no usable cues.
+        if retried:
+            segments = prefix + retried
+        elif not segments and any(str(item['text']).strip() for item in payload['segments']):
+            raise engine.SubtitleError('辨識 API 尾段重試後仍無有效時間戳')
+    engine._check_cancel(cancel_check)
+    cached = {'segments': [dict(start=begin, end=end, text=text) for begin, end, text in segments]}
+    engine._atomic_write_text(str(saved), json.dumps(cached, ensure_ascii=False))
+    return segments
 
 
 def transcribe(settings, wav_path, output_base, log_path, cancel_check, progress_callback):
     from uav_downloader.subtitles import engine
 
+    cache = _folder() / 'asr-cache'
+    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _prune_cache(cache)
     cues = []
     with tempfile.TemporaryDirectory(prefix='asr-api-', dir=os.path.dirname(wav_path)) as folder:
         request_path = os.path.join(folder, 'request.json')
         fd = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w') as stream:
             json.dump(settings, stream)
-        chunk_path = os.path.join(folder, 'chunk.wav')
-        result_path = os.path.join(folder, 'response.json')
         with wave.open(wav_path, 'rb') as source:
             rate = source.getframerate()
             frames = source.getnframes()
@@ -189,45 +297,32 @@ def transcribe(settings, wav_path, output_base, log_path, cancel_check, progress
             step = CHUNK_SECONDS * rate
             overlap = OVERLAP_SECONDS * rate
             for position in range(0, frames, step):
-                engine._check_cancel(cancel_check)
                 start = max(0, position - overlap)
                 stop = min(frames, position + step + overlap)
-                engine._ensure_asr_temp_space(folder, (stop - start) * 2)
-                source.setpos(start)
-                with wave.open(chunk_path, 'wb') as chunk:
-                    chunk.setparams(source.getparams())
-                    chunk.writeframes(source.readframes(stop - start))
-                engine._run_process(
-                    [sys.executable, '-m', __name__, request_path, chunk_path, result_path],
-                    log_path, cancel_check, timeout_seconds=1850,
-                    disk_guard_path=folder)
                 try:
-                    with open(result_path, 'rb') as stream:
-                        encoded = stream.read(MAX_RESPONSE_BYTES + 1)
-                    if len(encoded) > MAX_RESPONSE_BYTES:
-                        raise ValueError('辨識 API 回應過大')
-                    payload = json.loads(encoded)
-                    if not isinstance(payload, dict):
-                        raise ValueError('辨識 API 回應無效')
-                    if payload.get('ok') is not True:
-                        raise ValueError(payload.get('error', '辨識 API 回應無效'))
-                    segments = _segments(payload.get('payload'), (stop - start) / rate)
-                except (OSError, ValueError, TypeError) as exc:
-                    raise engine.SubtitleError(str(exc)) from None
+                    segments = _recognize(source, start, stop, settings, folder, request_path,
+                                          log_path, cancel_check, progress_callback, cache)
+                except engine.SubtitleCancelled:
+                    raise
+                except engine.SubtitleError as exc:
+                    raise engine.SubtitleError(
+                        f'第 {start / rate:.1f} 至 {stop / rate:.1f} 秒辨識失敗：{exc}') from exc
                 for begin, end, text in segments:
                     absolute_begin, absolute_end = begin + start / rate, end + start / rate
-                    # Ownership by midpoint avoids duplicate cues in overlap windows.
                     midpoint = (absolute_begin + absolute_end) / 2
                     if position / rate <= midpoint < min(frames, position + step) / rate:
-                        timing = f'{engine._format_srt_timestamp(absolute_begin)} --> {engine._format_srt_timestamp(absolute_end)}'
-                        cues.append(engine.SrtCue(str(len(cues) + 1), timing, text))
+                        cues.append((absolute_begin, absolute_end, text))
                 if len(cues) > engine.MAX_WHISPER_CUES:
                     raise engine.SubtitleError('辨識 API 字幕片段過多')
                 engine._notify(progress_callback, 'transcribe_ja', min(100, int((position + step) * 100 / frames)))
+    _prune_cache(cache)
     if not cues:
         return None
     path = output_base + '.srt'
-    engine._atomic_write_text(path, engine.render_srt(cues))
+    ordered = [engine.SrtCue(str(index),
+        f'{engine._format_srt_timestamp(begin)} --> {engine._format_srt_timestamp(end)}', text)
+        for index, (begin, end, text) in enumerate(sorted(cues, key=lambda cue: cue[:2]), 1)]
+    engine._atomic_write_text(path, engine.render_srt(ordered))
     return path
 
 
