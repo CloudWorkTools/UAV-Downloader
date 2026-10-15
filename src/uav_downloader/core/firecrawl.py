@@ -21,7 +21,8 @@ _PROBES = {
 
 
 def settings():
-    enabled = config._load_prefs().get('firecrawl_enabled', False) is True
+    default = os.environ.get('UAV_FIRECRAWL_ENABLED', '0') == '1'
+    enabled = config._load_prefs().get('firecrawl_enabled', default) is True
     with _lock:
         status = dict(_status)
     return {'enabled': enabled, 'status': status if enabled else {'state': 'disabled'}}
@@ -94,6 +95,9 @@ def probe(site='JableTV'):
         raise ValueError('不支援的測試站台')
     if not settings()['enabled']:
         return {'state': 'disabled', 'site': site}
+    with _lock:
+        _status.clear()
+        _status.update({'state': 'checking', 'site': site})
     url, selector = _PROBES[site]
     try:
         response = scrape(url)

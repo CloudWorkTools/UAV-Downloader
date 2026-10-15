@@ -47,3 +47,23 @@ def test_remote_private_stack_keeps_its_own_secrets_and_network(monkeypatch, tmp
     run = next(args for args in calls if args[:2] == ['docker', 'run'])
     assert run[run.index('--network') + 1] == 'uav-firecrawl'
     assert 'UAV_FIRECRAWL_URL=http://uav-firecrawl-api:3002' in run
+
+
+@pytest.mark.parametrize('arguments,expected', [([], True), (['--without-firecrawl'], False)])
+def test_deployment_bundles_private_firecrawl_by_default(monkeypatch, tmp_path, arguments, expected):
+    import sys
+    calls = []
+    monkeypatch.setattr(sys, 'argv', ['deploy_remote.py', *arguments])
+    monkeypatch.setattr(deploy, 'load_config', lambda: dict(host='192.0.2.10', user='operator',
+                                                          port=8080, remote_dir='/home/operator/service'))
+    monkeypatch.setattr(deploy.subprocess, 'check_output',
+                        lambda args, **kw: '' if 'status' in args else 'abc123')
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[:2] == ['docker', 'save']:
+            Path(args[3]).write_bytes(b'fake image archive')
+
+    monkeypatch.setattr(deploy.subprocess, 'run', run)
+    deploy.main()
+    assert any('uav-firecrawl-api:2.11.162' in args for args in calls) is expected

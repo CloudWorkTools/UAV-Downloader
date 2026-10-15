@@ -95,7 +95,8 @@ if bundle:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--with-firecrawl', action='store_true', help='Build and deploy a separate private Firecrawl stack')
+    parser.add_argument('--with-firecrawl', action='store_true', default=True, help='Build and deploy the private Firecrawl stack (default)')
+    parser.add_argument('--without-firecrawl', action='store_false', dest='with_firecrawl', help='Skip installing Firecrawl; disable it in settings when no stack is running')
     options = parser.parse_args()
     config = load_config()
     if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
@@ -107,11 +108,14 @@ def main():
     images = [image]
     bundle = ''
     subprocess.run([*ssh, 'docker info >/dev/null'], check=True)
+    if options.with_firecrawl:
+        subprocess.run(['docker', 'buildx', 'version'], check=True)
     subprocess.run(['docker', 'build', '-f', 'Dockerfile.web', '-t', image, '.'], cwd=ROOT, check=True)
     with tempfile.TemporaryDirectory(prefix='uav-deploy-') as temporary:
         if options.with_firecrawl:
             for component, folder in [('api', 'api'), ('browser', 'playwright-service-ts'), ('postgres', 'nuq-postgres')]:
-                subprocess.run(['docker', 'build', '-t', f'uav-firecrawl-{component}:2.11.162',
+                builder = ['docker', 'buildx', 'build', '--load'] if component == 'api' else ['docker', 'build']
+                subprocess.run([*builder, '-t', f'uav-firecrawl-{component}:2.11.162',
                                 f'https://github.com/firecrawl/firecrawl.git#v2.11.162:apps/{folder}'], check=True)
             for dependency in ('redis:7.4-alpine', 'rabbitmq:3.13-management'):
                 subprocess.run(['docker', 'pull', dependency], check=True)

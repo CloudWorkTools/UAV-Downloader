@@ -350,6 +350,8 @@ class DaemonServer:
             target=self.server.serve_forever, daemon=True, name="uav-daemon-http"
         )
         self.thread.start()
+        if firecrawl.settings()['enabled']:
+            threading.Thread(target=firecrawl.probe, daemon=True, name='uav-firecrawl-probe').start()
 
     def stop(self) -> None:
         self.task_manager.stop_dispatcher()

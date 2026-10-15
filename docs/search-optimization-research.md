@@ -134,7 +134,7 @@ Python binding 的[查詢文件](https://tantivy-py.readthedocs.io/en/latest/ref
 
 ## Firecrawl 的獨立 Docker 擷取模組
 
-工作區的 [Firecrawl 模組](../src/uav_downloader/core/firecrawl.py)可由設定頁開關，預設停用。
+工作區的 [Firecrawl 模組](../src/uav_downloader/core/firecrawl.py)可由設定頁開關，Docker 版預設啟用並於啟動時背景測試 JableTV。
 它只讀取本應用程式的 `UAV_FIRECRAWL_URL` 與 `UAV_FIRECRAWL_API_KEY`，不讀取本機 MCP 設定。
 [Docker 附加設定](../docker-compose.firecrawl.yml)建立專用 API、瀏覽器、Redis、RabbitMQ 與 PostgreSQL，使用專屬網路及資料卷，不公開服務連接埠。
 
@@ -146,7 +146,7 @@ Python binding 的[查詢文件](https://tantivy-py.readthedocs.io/en/latest/ref
 測試成功只代表指定站台當時可擷取，不能推論其他三站或日後也可使用。
 服務有 HTTP 回應、啟用開關或 Docker healthcheck 通過，都不會直接讓介面顯示擷取成功。
 
-[遠端部署工具](../scripts/deploy_remote.py)提供 `--with-firecrawl`，在本機建置附加映像後透過 SSH 載入遠端，再啟動獨立服務。
+[遠端部署工具](../scripts/deploy_remote.py)預設在本機建置附加映像後透過 SSH 載入遠端，再啟動獨立服務；`--without-firecrawl` 可明確略過附加服務安裝。
 資料庫密碼由遠端產生，保存於權限為 `0600` 的設定檔，不寫入版本控制文件。
 部署工具另執行 `example.com` 的實際 scrape；失敗時列出失敗狀態，站台可用性仍需由設定頁逐站測試。
 
@@ -155,4 +155,4 @@ Python binding 的[查詢文件](https://tantivy-py.readthedocs.io/en/latest/ref
 自架環境與目前 MCP 所連接環境的引擎、網路及防護處理可能不同，MCP 測試成功不能當作此獨立服務成功的證據。
 
 目前已驗證模組、開關 API、前端狀態、Compose 設定解析與 Web 建置。
-整組獨立 Firecrawl 尚未實際啟動或部署，也尚無四站端到端效能基準。
+各站可用性仍需由部署後的實際擷取確認，尚無四站端到端效能基準。

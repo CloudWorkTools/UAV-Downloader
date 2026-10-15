@@ -39,6 +39,8 @@ COPY scripts/entrypoint-web.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENV DOWNLOAD_DIR=/downloads \
+    UAV_FIRECRAWL_ENABLED=1 \
+    UAV_FIRECRAWL_URL=http://uav-firecrawl-api:3002 \
     CONFIG_DIR=/config \
     UAV_HOST=0.0.0.0 \
     UAV_PORT=8080 \

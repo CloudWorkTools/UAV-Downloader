@@ -15,16 +15,19 @@ Jable 將關鍵字交給原站的標題與標籤交集查詢，沿用原站分�
 查詢不再只取前 20 頁；原站重複分頁或擷取失敗會顯示錯誤，不當作完整的零筆結果。
 原站本身的索引完整性仍不由本應用程式保證，演算法與套件評估見[研究筆記](search-optimization-research.md)。
 
-設定頁的「獨立 Firecrawl 擷取服務」預設關閉。
+Docker 版的「獨立 Firecrawl 擷取服務」預設啟用，使用者保存的關閉設定仍會保留。
+服務啟動時會背景測試 JableTV；設定頁區分測試中、成功與無法使用。
 開啟並按「儲存並測試目前站台」，會實際擷取瀏覽頁所選站台的影片清單。
 測試失敗會顯示無法使用；成功狀態只適用該站與該次測試，其他站需個別測試。
 關閉並儲存後，應用程式不再呼叫 Firecrawl；Docker 服務的啟停由部署管理。
 
 此模組使用應用程式專屬的 Docker 服務，不讀取本機 MCP 的 Firecrawl 位址或資料。
-現有 `python3 scripts/deploy_remote.py` 部署命令可加入 `--with-firecrawl`，在本機建置並把附加服務送至設定的遠端機。
+`python3 scripts/deploy_remote.py` 預設在本機建置，並把獨立 Firecrawl 一起部署到設定的遠端機。
+`--with-firecrawl` 保留相同預設行為；自行管理服務時可用 `--without-firecrawl` 略過附加服務安裝。
+建置端需要 Docker Buildx，Firecrawl 官方 Dockerfile 使用 BuildKit 快取掛載。
 部署工具要求已提交程式變更；真實主機設定仍留在 Git 忽略的本機檔案。
 附加映像包含 API、瀏覽器及資料服務，需另備磁碟、記憶體與建置時間；服務埠只在專屬 Docker 網路使用。
-整組附加服務尚未在遠端啟動驗證，Compose 的 readiness 不代表四站都能擷取。
+Compose 的 readiness 不代表四站都能擷取；應以各站實際清單測試結果確認可用性。
 
 ## 下載管理
 

@@ -146,3 +146,28 @@ def test_empty_listing_does_not_trigger_firecrawl_or_become_an_error(monkeypatch
     direct = SimpleNamespace(status_code=200, content=b'<html>No results</html>', headers={}, url='https://jable.tv/')
     assert base.fetch_with_mirrors(SimpleNamespace(get=lambda *a, **kw: direct),
                                    'https://jable.tv/', 'jable', lambda r: False)[2] == 'empty'
+
+
+def test_docker_defaults_enabled_but_explicit_disable_survives(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setenv('UAV_FIRECRAWL_ENABLED', '1')
+    Path(firecrawl.config._ui_prefs_path()).unlink()
+    assert firecrawl.settings()['enabled'] is True
+    firecrawl.save_settings({'enabled': False})
+    assert firecrawl.settings()['enabled'] is False
+
+
+def test_daemon_checks_enabled_private_service_on_start(monkeypatch):
+    import threading
+    from uav_downloader.daemon.server import DaemonServer
+    from uav_downloader.daemon.task_manager import TaskManager
+    checked = threading.Event()
+    firecrawl.save_settings({'enabled': True})
+    monkeypatch.setattr(firecrawl, 'probe', lambda: checked.set())
+    monkeypatch.setattr(TaskManager, 'start_dispatcher', lambda self: None)
+    server = DaemonServer(port=0)
+    server.start()
+    try:
+        assert checked.wait(2), 'Enabled Firecrawl was not checked at startup'
+    finally:
+        server.stop()

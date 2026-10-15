@@ -867,6 +867,8 @@
         const fcStatus = data.firecrawl?.status;
         if (data.firecrawl?.enabled && fcStatus?.state === 'ready') {
           document.getElementById('firecrawl-status').textContent = `${fcStatus.site} 上次實際擷取成功；服務重啟或站台變更後請重新測試`;
+        } else if (data.firecrawl?.enabled && fcStatus?.state === 'checking') {
+          document.getElementById('firecrawl-status').textContent = `正在透過獨立 Firecrawl 實際測試 ${fcStatus.site}…`;
         } else if (data.firecrawl?.enabled && fcStatus?.state === 'unavailable') {
           document.getElementById('firecrawl-status').textContent = fcStatus.error || 'Firecrawl 無法使用';
         }
