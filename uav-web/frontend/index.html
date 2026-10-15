@@ -393,8 +393,22 @@
       if (tabId === 'watcher') loadWatcherTargets();
     }
 
+    let browseRequestId = 0;
+
+    function showBrowseError(message) {
+      const grid = document.getElementById('video-grid');
+      grid.innerHTML = '';
+      selection.setVisible([]);
+      const notice = document.createElement('div');
+      notice.className = 'col-span-full py-12 text-center text-rose-400';
+      notice.textContent = message;
+      grid.appendChild(notice);
+    }
+
     // Site selection
     async function selectSite(site) {
+      const requestId = ++browseRequestId;
+      currentCategoryUrl = '';
       currentSite = site;
       currentPage = 1;
       document.querySelectorAll('.site-btn').forEach(btn => {
@@ -406,17 +420,21 @@
           btn.classList.add('bg-[#282832]', 'text-gray-300');
         }
       });
-      await loadCategories();
-      await fetchBrowse();
+      if (await loadCategories(site, requestId) && requestId === browseRequestId) {
+        await fetchBrowse();
+      }
     }
 
     // Category loading
-    async function loadCategories() {
+    async function loadCategories(site = currentSite, requestId = browseRequestId) {
       const select = document.getElementById('category-select');
       select.innerHTML = '<option value="">載入中...</option>';
       try {
-        const resp = await fetch(`/api/categories?site=${currentSite}`);
+        const resp = await fetch(`/api/categories?site=${encodeURIComponent(site)}`);
         const data = await resp.json();
+        if (requestId !== browseRequestId) return false;
+        if (!resp.ok || data.error) throw new Error(data.error || '分類讀取失敗');
+        if (!data.categories?.length) throw new Error('站台沒有回傳可用分類');
         select.innerHTML = '';
         (data.categories || []).forEach((cat, idx) => {
           const opt = document.createElement('option');
@@ -425,8 +443,13 @@
           if (idx === 0) currentCategoryUrl = cat.url;
           select.appendChild(opt);
         });
+        return true;
       } catch (e) {
+        if (requestId !== browseRequestId) return false;
         select.innerHTML = '<option value="">分類讀取失敗</option>';
+        document.getElementById('browse-loading').classList.add('hidden');
+        showBrowseError('分類讀取失敗：' + e.message);
+        return false;
       }
     }
 
@@ -438,6 +461,7 @@
 
     // Browse videos
     async function fetchBrowse() {
+      const requestId = ++browseRequestId;
       const grid = document.getElementById('video-grid');
       const loader = document.getElementById('browse-loading');
       grid.innerHTML = '';
@@ -455,13 +479,16 @@
           })
         });
         const res = await resp.json();
+        if (requestId !== browseRequestId) return;
+        if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
         loader.classList.add('hidden');
         renderVideos(res.videos || []);
         document.getElementById('page-indicator').textContent = `第 ${currentPage} 頁`;
         document.getElementById('btn-prev-page').disabled = (currentPage <= 1);
       } catch (e) {
+        if (requestId !== browseRequestId) return;
         loader.classList.add('hidden');
-        grid.innerHTML = '<div class="col-span-full py-12 text-center text-rose-400">載入失敗，可能被網站 Cloudflare 阻擋或網路中斷</div>';
+        showBrowseError('清單讀取失敗：' + e.message);
       }
     }
 
@@ -482,7 +509,7 @@
 
         card.innerHTML = `
           <div class="relative aspect-video bg-[#282832] overflow-hidden">
-            <img src="${v.thumbnail || ''}" alt="" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+            <img src="${v.thumbnail || ''}" alt="" loading="lazy" referrerpolicy="no-referrer" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
             ${v.duration ? `<span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[11px] bg-black/80 font-medium rounded text-white">${v.duration}</span>` : ''}
             <input type="checkbox" onchange="selection.toggle('${v.url}', this.checked)" ${isChecked} class="absolute top-2 left-2 w-4 h-4 accent-brand-600 rounded cursor-pointer z-10">
           </div>
@@ -526,6 +553,7 @@
     async function executeSearch() {
       const q = document.getElementById('search-input').value.trim();
       if (!q) return;
+      const requestId = ++browseRequestId;
       currentPage = 1;
       const grid = document.getElementById('video-grid');
       const loader = document.getElementById('browse-loading');
@@ -540,11 +568,14 @@
           body: JSON.stringify({ site: currentSite, query: q, page: 1 })
         });
         const res = await resp.json();
+        if (requestId !== browseRequestId) return;
+        if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
         loader.classList.add('hidden');
         renderVideos(res.videos || []);
       } catch (e) {
+        if (requestId !== browseRequestId) return;
         loader.classList.add('hidden');
-        alert('搜尋失敗: ' + e);
+        showBrowseError('搜尋失敗：' + e.message);
       }
     }
 
