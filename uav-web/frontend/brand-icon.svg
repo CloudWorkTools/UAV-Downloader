@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <title>影匣</title>
+  <defs>
+    <linearGradient id="case" x1="16" y1="8" x2="112" y2="128" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fb7185"/>
+      <stop offset="1" stop-color="#be123c"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#case)"/>
+  <rect x="29" y="21" width="70" height="63" rx="12" fill="#191922" stroke="#fff1f2" stroke-width="5"/>
+  <path d="m56 38 22 14-22 14V38Z" fill="#fff1f2"/>
+  <path d="M39 34v5m0 11v5m0 11v5m50-37v5m0 11v5m0 11v5" stroke="#fb7185" stroke-width="4" stroke-linecap="round"/>
+  <path d="m22 84 9-12m75 12-9-12" stroke="#fff1f2" stroke-width="5" stroke-linecap="round"/>
+  <path d="M22 84h27l7 9h16l7-9h27v14a10 10 0 0 1-10 10H32a10 10 0 0 1-10-10V84Z" fill="#191922" stroke="#fff1f2" stroke-width="5" stroke-linejoin="round"/>
+</svg>

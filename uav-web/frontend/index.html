@@ -3,7 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>UAV Downloader Web</title>
+  <title>影匣｜影片搜尋與下載</title>
+  <meta name="application-name" content="影匣">
+  <meta name="description" content="影匣，將想收藏的影片搜尋、整理並下載到自己的空間。">
+  <link rel="icon" href="/brand-icon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#e11d48">
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -55,10 +59,11 @@
   <header class="bg-[#1a1a22] border-b border-[#2e2e3a] sticky top-0 z-40">
     <div class="max-w-7xl mx-auto px-4 min-h-16 py-3 flex flex-wrap lg:flex-nowrap gap-3 items-center justify-between">
       <div class="flex items-center space-x-3">
-        <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-brand-600 to-rose-400 flex items-center justify-center font-bold text-white shadow-lg shadow-brand-600/30">
-          U
+        <img src="/brand-icon.svg" alt="" width="40" height="40" class="w-10 h-10 shrink-0">
+        <div class="shrink-0">
+          <h1 class="font-bold text-lg tracking-wider text-white leading-tight">影匣</h1>
+          <p class="text-[11px] text-gray-400 mt-0.5">影片搜尋與下載</p>
         </div>
-        <span class="font-bold text-lg tracking-wider text-white">UAV <span class="text-brand-500">Downloader</span></span>
         <span id="daemon-status-badge" class="ml-3 px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> 連線正常
         </span>
@@ -179,7 +184,7 @@
     <section id="tab-watcher" class="tab-content hidden space-y-6">
       <div class="bg-[#1a1a22] p-6 rounded-xl border border-[#2e2e3a] space-y-4">
         <div class="border-b border-[#2e2e3a] pb-4">
-          <h2 class="text-lg font-bold text-white">UAV Watcher 無人值守追新設定</h2>
+          <h2 class="text-lg font-bold text-white">影匣自動追新設定</h2>
           <p class="text-xs text-gray-400 mt-1">定時掃描所選分類，自動去重並下載最新影片至 NAS</p>
         </div>
 
@@ -278,7 +283,7 @@
             <div id="nas-upload-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-3 hidden">
               <div><label for="nas-host" class="block mb-1">NAS 位址（IP、主機名稱或 SMB 網址）</label><input id="nas-host" type="text" placeholder="smb://nas.local/download 或 nas.local/download" autocomplete="off" aria-describedby="nas-address-help" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
               <div><label for="nas-share" class="block mb-1">共享資料夾（網址已包含時可留空）</label><input id="nas-share" type="text" placeholder="video" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
-              <div><label for="nas-directory" class="block mb-1">子目錄（可留空，不存在時自動建立）</label><input id="nas-directory" type="text" placeholder="UAV" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-directory" class="block mb-1">子目錄（可留空，不存在時自動建立）</label><input id="nas-directory" type="text" placeholder="影匣" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
 
             </div>
             <div id="nas-credentials" class="grid grid-cols-1 sm:grid-cols-2 gap-3">

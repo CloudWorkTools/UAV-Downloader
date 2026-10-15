@@ -1,6 +1,6 @@
-# UAV Downloader Web
+# 影匣
 
-[CloudWorkTools/UAV-Downloader](https://github.com/CloudWorkTools/UAV-Downloader) 是以繁體中文使用者為主的 Web 下載介面與 NAS 擴充版本。專案沿用 [Alos21750/UAV-Downloader](https://github.com/Alos21750/UAV-Downloader) 的下載核心，將瀏覽、複選下載、下載佇列及 SMB 儲存整合到瀏覽器。
+影匣是以繁體中文使用者為主的影片搜尋與下載工具，[專案原始碼](https://github.com/CloudWorkTools/UAV-Downloader)包含 Web 介面與 NAS 儲存擴充。專案沿用 [Alos21750/UAV-Downloader](https://github.com/Alos21750/UAV-Downloader) 的下載核心，將瀏覽、複選下載、下載佇列及 SMB 儲存整合到瀏覽器。
 
 ## 本機啟動
 

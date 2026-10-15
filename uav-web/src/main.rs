@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let daemon_url = cfg.daemon_base_url();
 
     info!("=========================================");
-    info!(" UAV Downloader Web UI 服務啟動中");
+    info!(" 影匣 Web UI 服務啟動中");
     info!(" 網頁存取位址: http://{}", addr);
     info!(" 內部 Daemon 位址: {}", daemon_url);
     info!("=========================================");
