@@ -273,10 +273,6 @@
         <h2 class="text-lg font-bold text-white border-b border-[#2e2e3a] pb-4">系統與下載設定</h2>
 
         <div class="space-y-4 text-sm">
-          <div>
-            <label class="block text-gray-300 font-medium mb-1">本機下載目錄（僅供本機／下載後傳送模式使用）</label>
-            <input type="text" id="setting-download-dir" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
-          </div>
 
           <fieldset class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-3">
             <legend class="font-medium text-white">獨立 Firecrawl 擷取服務</legend>
@@ -290,11 +286,16 @@
             <legend class="font-medium text-white">NAS / SMB 連線</legend>
             <label for="nas-storage-mode" class="block">下載儲存位置</label>
             <select id="nas-storage-mode" onchange="NasSettings.updateMode()" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
-              <option value="local">本機目錄</option>
+              <option value="local">本機（指定 path）</option>
               <option value="smb">透過 SMB 直接儲存至 NAS（帳密登入，不需掛載）</option>
               <option value="upload">先下載到本機，再以 SMB 傳送至 NAS</option>
               <option value="direct">使用系統已掛載的 NAS 路徑（進階）</option>
             </select>
+            <div id="setting-local-path-fields">
+              <label for="setting-download-dir" class="block mb-1">本機下載／暫存 path（新任務預設值）</label>
+              <input type="text" id="setting-download-dir" placeholder="例如 /downloads/videos" aria-describedby="setting-download-path-help" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+              <p id="setting-download-path-help" class="text-xs text-gray-400 mt-1">本機或先下載再傳送 NAS 時使用；Docker 請填容器內路徑，例如 /downloads/videos。下載清單可另外設定，不受此預設值變更影響。</p>
+            </div>
             <div id="nas-direct-fields" class="hidden space-y-2">
               <label for="nas-direct-path" class="block">NAS 已掛載路徑（不是 SMB 網址）</label>
               <input id="nas-direct-path" type="text" placeholder="例如 /nas；請勿填入 smb:// 網址" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
@@ -457,14 +458,24 @@
       <p class="text-sm text-gray-400">適用等待中、已暫停、失敗或已取消的任務。執行中的任務請先暫停，再勾選修改。</p>
       <label class="block text-sm">儲存位置
         <select id="task-edit-storage" onchange="taskSelection.updateEditStorage()" class="block w-full mt-1 bg-[#282832] rounded p-2">
-          <option value="">保持各任務原設定</option><option value="local">本機（指定 path）</option><option value="settings">套用目前已儲存的系統儲存設定</option>
+          <option value="">保持各任務原設定</option><option value="local">本機（指定 path）</option><option value="upload">本機下載後傳送 NAS</option><option value="smb">直接儲存至 NAS（SMB）</option><option value="direct">已掛載 NAS（指定 path）</option>
         </select>
       </label>
       <div id="task-edit-local-fields" hidden>
         <label class="block text-sm">本機下載 path<input id="task-edit-dest" type="text" disabled aria-describedby="task-edit-path-help" placeholder="例如 /downloads/videos" class="block w-full mt-1 bg-[#282832] rounded p-2"></label>
         <p id="task-edit-path-help" class="text-xs text-gray-400 mt-1">請填寫下載服務可存取的目錄。Docker 部署請使用容器內路徑，例如 /downloads/videos。</p>
       </div>
-      <p class="text-sm text-gray-400">先在「設定」儲存 NAS 位置與模式，再選擇套用系統設定；支援先下載至本機再傳送至 NAS（保留本機檔案）、直接寫入 NAS，或改到另一個 NAS。只修改所選任務，未勾選的任務保留原設定。</p>
+      <div id="task-edit-nas-fields" hidden>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+          <label>NAS 位址<input id="task-edit-host" disabled placeholder="smb://nas.local/video" class="block w-full bg-[#282832] rounded p-2" autocomplete="off"></label>
+          <label>共享資料夾<input id="task-edit-share" disabled placeholder="網址包含時可留空" class="block w-full bg-[#282832] rounded p-2"></label>
+          <label>NAS 子目錄<input id="task-edit-directory" disabled placeholder="可留空" class="block w-full bg-[#282832] rounded p-2"></label>
+          <label>NAS 帳號<input id="task-edit-username" disabled autocomplete="off" class="block w-full bg-[#282832] rounded p-2"></label>
+          <label>NAS 密碼<input id="task-edit-password" type="password" disabled autocomplete="new-password" class="block w-full bg-[#282832] rounded p-2"></label>
+        </div>
+      </div>
+      <div id="task-edit-direct-fields" hidden><label class="block text-sm">NAS 已掛載 path<input id="task-edit-direct-path" disabled placeholder="例如 /nas/videos" class="block w-full bg-[#282832] rounded p-2"></label></div>
+      <p class="text-sm text-gray-400">以上設定僅套用所選任務，可與系統預設及其他任務使用不同 NAS。NAS 密碼需重新填寫，會加密保存；本機下載後傳送 NAS 會保留本機檔案。</p>
       <p class="text-sm text-amber-400">更換儲存位置後會重新下載，原位置的片段與檔案會保留，不會自動搬移。</p>
       <label class="block text-sm">生成字幕
         <select id="task-edit-subtitles" class="block w-full mt-1 bg-[#282832] rounded p-2">
@@ -894,6 +905,7 @@
       }
 
       container.innerHTML = tasks.map(t => {
+        const downloadInfo = `影片：${t.name || t.url}\n網址：${t.url}\n下載 path：${t.dest || ''}\n最終位置：${t.final_dest || t.dest || ''}\n畫質：${t.resolution || '自動'}\n下載執行緒：${t.max_workers || '預設'}\n字幕：${t.subtitle_mode || 'none'}\n封面：${t.download_cover ? '下載' : '不下載'}\n進度：${t.progress || 0}%（${t.downloaded_segments || 0}/${t.total_segments || 0}）\n速度：${t.speed_formatted || '0 B/s'}\n階段：${t.phase || t.status}\n建立：${t.created_at || ''}\n更新：${t.updated_at || ''}`;
         let statusBadge = '';
         if (t.status === 'downloading') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded font-medium">${t.progress >= 100 ? '合併影片中' : `下載中 (${t.speed_formatted})`}</span>`;
@@ -930,12 +942,14 @@
             <div class="flex flex-wrap sm:flex-nowrap justify-between items-start gap-4">
               ${taskSelection.canCancel(t) || taskSelection.canAction(t, 'retry') ? `<input type="checkbox" data-task-id="${t.task_id}" aria-label="選取 ${safe(t.name || t.url)}" onchange="taskSelection.toggle('${t.task_id}', this.checked)" ${taskSelection.has(t.task_id) ? 'checked' : ''} class="mt-1 w-4 h-4 shrink-0 accent-brand-600">` : ''}
               <div class="flex-1 min-w-0">
-                <h4 class="text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
+                <h4 title="${safe(downloadInfo)}" class="text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
                 <p class="text-xs text-gray-400 truncate mt-0.5">${safe(t.url)}</p>
                 <p class="text-xs text-gray-400 break-all mt-1">儲存：${safe(t.dest)}${t.final_dest && t.final_dest !== t.dest ? ` → ${safe(t.final_dest)}` : ''} · 字幕：${safe(({none: '不生成', ja: '日文', en: '英文', zh: '繁體中文', all: '全部語言'})[t.subtitle_mode] || '不生成')}</p>
+                <span class="relative inline-block group mt-1"><button type="button" aria-label="${safe(downloadInfo)}" class="text-xs text-brand-500 underline underline-offset-2">ⓘ 下載資訊</button><span role="tooltip" class="hidden group-hover:block group-focus-within:block absolute left-0 top-full mt-1 z-50 w-72 max-w-[75vw] p-3 bg-[#282832] border border-[#3e3e4e] rounded-lg shadow-xl text-xs text-gray-200 whitespace-pre-wrap break-words">${safe(downloadInfo)}</span></span>
               </div>
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
+                ${taskSelection.canAction(t, 'edit') ? `<button onclick="taskSelection.edit('${t.task_id}')" class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded">設定</button>` : ''}
                 ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
                 ${t.status === 'completed' && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
                 ${taskSelection.canCancel(t) ?

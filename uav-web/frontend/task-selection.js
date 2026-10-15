@@ -76,20 +76,30 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
   }
   let editingIds = [];
   function updateEditStorage() {
-    const local = document.getElementById('task-edit-storage').value === 'local';
+    const mode = document.getElementById('task-edit-storage').value;
+    const local = ['local', 'upload'].includes(mode);
+    const smb = ['smb', 'upload'].includes(mode);
     document.getElementById('task-edit-local-fields').hidden = !local;
+    document.getElementById('task-edit-nas-fields').hidden = !smb;
+    document.getElementById('task-edit-direct-fields').hidden = mode !== 'direct';
+    for (const key of ['host', 'share', 'directory', 'username', 'password', 'direct-path']) {
+      const field = document.getElementById('task-edit-' + key);
+      field.disabled = key === 'direct-path' ? mode !== 'direct' : !smb;
+      field.required = !field.disabled && ['host', 'username', 'password', 'direct-path'].includes(key);
+    }
     const input = document.getElementById('task-edit-dest');
     input.disabled = !local;
     input.required = local;
     if (local) input.focus();
   }
-  function edit() {
+  function edit(taskId) {
     if (busy) return;
-    editingIds = [...selected].filter(id => canAction(tasksById.get(id), 'edit'));
+    editingIds = (taskId ? [taskId] : [...selected]).filter(id => canAction(tasksById.get(id), 'edit'));
     if (!editingIds.length) return;
     document.getElementById('task-edit-count').textContent = editingIds.length;
     document.getElementById('task-edit-storage').value = '';
     document.getElementById('task-edit-dest').value = '';
+    for (const key of ['host', 'share', 'directory', 'username', 'password', 'direct-path']) document.getElementById('task-edit-' + key).value = '';
     updateEditStorage();
     document.getElementById('task-edit-subtitles').value = '';
     document.getElementById('task-edit-status').textContent = '';
@@ -104,9 +114,15 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     if (!storage && !subtitles) { status.textContent = '請至少選擇一項修改'; return; }
     const payload = {action: 'update_settings', task_ids: editingIds};
     if (storage) payload.storage = storage;
-    if (storage === 'local') {
+    if (['local', 'upload'].includes(storage)) {
       payload.dest = document.getElementById('task-edit-dest').value.trim();
       if (!payload.dest) { status.textContent = '請填寫本機下載 path'; document.getElementById('task-edit-dest').focus(); return; }
+    }
+    if (['smb', 'upload', 'direct'].includes(storage)) {
+      payload.storage = 'custom';
+      payload.nas = {enabled: true, mode: storage};
+      for (const key of ['host', 'share', 'directory', 'username', 'password']) payload.nas[key] = document.getElementById('task-edit-' + key).value;
+      payload.nas.direct_path = document.getElementById('task-edit-direct-path').value;
     }
     if (subtitles) payload.subtitle_mode = subtitles;
     busy = true;
@@ -119,6 +135,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || '修改失敗');
       for (const id of result.updated) selected.delete(id);
+      document.getElementById('task-edit-password').value = '';
       document.getElementById('queue-action-status').textContent = `已修改 ${result.updated.length} 個任務；略過 ${result.skipped.length} 個（狀態已變更）。已暫停或失敗的任務請按繼續或重試。`;
       document.getElementById('task-edit-dialog').close();
     } catch (error) { status.textContent = error.message; }

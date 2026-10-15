@@ -72,6 +72,8 @@ window.NasSettings = (() => {
         : '填寫 NAS 帳號與密碼，按測試連線後儲存設定；密碼會加密保存。';
       document.getElementById('nas-test-button').disabled = mode === 'local';
       document.getElementById('setting-download-dir').disabled = ['direct', 'smb'].includes(mode);
+      const pathFields = document.getElementById('setting-local-path-fields');
+      if (pathFields) pathFields.hidden = ['direct', 'smb'].includes(mode);
     }
 
     async function testConnection() {

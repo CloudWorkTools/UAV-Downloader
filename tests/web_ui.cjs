@@ -93,6 +93,11 @@ async function run() {
   nas.load({enabled: false});
   assert.equal(nas.payload().enabled, false);
   assert.equal(element('setting-download-dir').disabled, false);
+  assert.equal(element('setting-local-path-fields').hidden, false);
+  nas.load({enabled: true, mode: 'upload'});
+  assert.equal(element('setting-local-path-fields').hidden, false);
+  nas.load({enabled: true, mode: 'smb'});
+  assert.equal(element('setting-local-path-fields').hidden, true);
   const mixedTasks = ['completed', 'pending', 'uploading', 'downloading', 'failed', 'downloading', 'preparing', 'subtitles', 'cancelling']
     .map((status, i) => ({task_id: String(i), name: `task-${i}`, status}));
   context.renderTasks(mixedTasks);
@@ -108,6 +113,13 @@ async function run() {
     {task_id:'c', status:'completed'}, {task_id:'d', status:'failed'},
     {task_id:'e', status:'cancelled', name:'successfully-cleaned'}, {task_id:'f', status:'skipped'}
   ];
+  context.renderTasks(tasks);
+  context.renderTasks([{task_id:'info', status:'paused', name:'<video>', url:'https://example.test/video', dest:'/downloads/chosen', final_dest:'smb://nas/video', resolution:'1080P', subtitle_mode:'zh'}]);
+  assert.match(element('tasks-container').innerHTML, /role="tooltip"/);
+  assert.match(element('tasks-container').innerHTML, /下載 path：\/downloads\/chosen/);
+  assert.match(element('tasks-container').innerHTML, /最終位置：smb:\/\/nas\/video/);
+  assert.match(element('tasks-container').innerHTML, /影片：&lt;video&gt;/);
+  assert.match(element('tasks-container').innerHTML, /taskSelection.edit\('info'\)/);
   context.renderTasks(tasks);
   assert.ok(element('tasks-container').innerHTML.includes('successfully-cleaned'));
   assert.match(element('tasks-container').innerHTML, /重新開始/);

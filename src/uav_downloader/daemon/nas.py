@@ -59,6 +59,23 @@ def _key():
     return key
 
 
+def encrypt_password(password):
+    with _lock:
+        _directory().mkdir(parents=True, exist_ok=True)
+        cipher = AES.new(_key(), AES.MODE_GCM)
+        encrypted, tag = cipher.encrypt_and_digest(password.encode('utf-8'))
+        return base64.b64encode(cipher.nonce + tag + encrypted).decode('ascii')
+
+
+def decrypt_password(value):
+    try:
+        data = base64.b64decode(value, validate=True)
+        cipher = AES.new((_directory() / 'nas.key').read_bytes(), AES.MODE_GCM, nonce=data[:16])
+        return cipher.decrypt_and_verify(data[32:], data[16:32]).decode('utf-8')
+    except Exception:
+        raise NasError('NAS 密碼無法解密，請重新輸入並保存') from None
+
+
 def load_settings(*, secret=False):
     with _lock:
         raw = _read()
@@ -67,12 +84,7 @@ def load_settings(*, secret=False):
         if secret:
             result['password'] = ''
             if result['password_saved']:
-                try:
-                    data = base64.b64decode(raw['password_encrypted'], validate=True)
-                    cipher = AES.new((_directory() / 'nas.key').read_bytes(), AES.MODE_GCM, nonce=data[:16])
-                    result['password'] = cipher.decrypt_and_verify(data[32:], data[16:32]).decode('utf-8')
-                except Exception:
-                    raise NasError('NAS 密碼無法解密，請重新輸入並保存') from None
+                result['password'] = decrypt_password(raw['password_encrypted'])
         return result
 
 
@@ -113,10 +125,10 @@ def _normalize_address(settings):
     settings['host'] = host
 
 
-def prepare_settings(body):
+def prepare_settings(body, *, use_saved_password=True):
     if not isinstance(body, dict) or not isinstance(body.get('enabled', False), bool):
         raise NasError('NAS 設定格式錯誤')
-    old = load_settings()
+    old = load_settings() if use_saved_password else None
     result = {'enabled': body.get('enabled', False), 'mode': body.get('mode', 'upload')}
     if result['mode'] not in ('upload', 'direct', 'smb'):
         raise NasError('不支援的 NAS 儲存模式')
@@ -131,7 +143,7 @@ def prepare_settings(body):
     password = body.get('password', '')
     if not isinstance(password, str) or len(password) > 1024:
         raise NasError('NAS 密碼格式錯誤')
-    same_account = all(result[k] == old[k] for k in ('host', 'username'))
+    same_account = old is not None and all(result[k] == old[k] for k in ('host', 'username'))
     result['password'] = password or (load_settings(secret=True)['password'] if result['mode'] in ('upload', 'smb') and same_account and old['password_saved'] else '')
     if any(c in result['share'] for c in '\\/:*?"<>|') or result['share'] in ('.', '..'):
         raise NasError('共享資料夾名稱不可包含路徑或特殊符號')
@@ -153,9 +165,7 @@ def save_settings(body):
         folder.mkdir(parents=True, exist_ok=True)
         raw = {k: values[k] for k in _FIELDS}
         if values['password']:
-            cipher = AES.new(_key(), AES.MODE_GCM)
-            encrypted, tag = cipher.encrypt_and_digest(values['password'].encode('utf-8'))
-            raw['password_encrypted'] = base64.b64encode(cipher.nonce + tag + encrypted).decode('ascii')
+            raw['password_encrypted'] = encrypt_password(values['password'])
         elif all(values[k] == _read().get(k, '') for k in ('host', 'username')):
             saved = _read().get('password_encrypted')
             if saved:
@@ -222,10 +232,10 @@ def storage_space(settings=None):
         return {'enabled': True, 'space': None, 'space_error': '目前無法讀取 NAS 容量，請確認連線、權限及 NAS 是否支援容量查詢'}
 
 
-def test_connection(body):
+def test_connection(body, *, use_saved_password=True):
     if not isinstance(body, dict):
         raise NasError('NAS 設定格式錯誤')
-    settings = prepare_settings({**body, 'enabled': True})
+    settings = prepare_settings({**body, 'enabled': True}, use_saved_password=use_saved_password)
     if settings['mode'] == 'direct':
         return storage_space(settings)
     with _connection(settings) as (smb, root, options):

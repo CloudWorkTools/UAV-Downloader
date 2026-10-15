@@ -310,3 +310,43 @@ def test_batch_destination_probe_failure_leaves_tasks_unchanged(web_settings, mo
                                               'storage': 'local', 'dest': str(root / 'new'), 'subtitle_mode': 'zh'})
     assert code == 400
     assert task.dest == str(root / 'old') and task.subtitle_mode == 'none'
+
+
+@pytest.mark.parametrize('mode', ['upload', 'smb', 'direct'])
+def test_queue_custom_nas_is_independent_and_credentials_survive_restart(web_settings, monkeypatch, mode):
+    from uav_downloader.daemon import nas
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root = web_settings
+    manager = server.task_manager
+    manager._tasks['task'] = DownloadTask('task', 'https://missav.ai/custom', str(root / 'old'), status='paused')
+    manager._tasks['other'] = DownloadTask('other', 'https://missav.ai/other', str(root / 'other'), status='paused')
+    def no_global_settings(**kwargs):
+        raise AssertionError('Independent queue settings must not read global NAS settings')
+    monkeypatch.setattr(nas, 'load_settings', no_global_settings)
+    monkeypatch.setattr(nas, 'test_connection', lambda settings, **kw: None)
+    monkeypatch.setattr(nas, 'direct_destination', lambda settings, **kw: str(root / 'mount'))
+    profile = dict(enabled=True, mode=mode, host='another.local', share='videos', directory='chosen',
+                   username='custom-user', password='queue-only-secret', direct_path=str(root / 'mount'))
+    code, result = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'],
+                                                    'storage': 'custom', 'dest': str(root / 'staging'), 'nas': profile})
+    assert code == 200 and result['updated'] == ['task']
+    task = manager.get_task('task')
+    assert task.nas_settings['host'] == 'another.local'
+    assert manager.get_task('other').dest == str(root / 'other')
+    assert not (root / 'config' / 'nas.json').exists()
+    snapshot = manager._state_path.read_text()
+    assert 'queue-only-secret' not in snapshot
+    assert 'queue-only-secret' not in json.dumps(task.to_dict())
+    restored = TaskManager(state_path=manager._state_path)
+    assert restored.restart_task('task')
+    assert restored.get_task('task').nas_settings['password'] == 'queue-only-secret'
+    if mode == 'upload':
+        assert task.dest == str(root / 'staging')
+        assert task.to_dict()['final_dest'] == 'smb://another.local/videos/chosen'
+
+
+def test_custom_nas_requires_own_credentials(web_settings):
+    request, _, _ = web_settings
+    code, _ = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'],
+                                              'storage': 'custom', 'nas': {'enabled': True, 'mode': 'smb', 'host': 'nas.local', 'share': 'videos', 'username': 'user'}})
+    assert code == 400

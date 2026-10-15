@@ -255,10 +255,10 @@ class TaskManager:
         with self._lock:
             return self._tasks.get(task_id)
 
-    def update_tasks(self, task_ids, *, storage=None, dest=None, subtitle_mode=None):
+    def update_tasks(self, task_ids, *, storage=None, dest=None, subtitle_mode=None, nas_settings=None):
         if not isinstance(task_ids, list) or not task_ids or any(not isinstance(tid, str) or not tid for tid in task_ids):
             raise ValueError('請提供要修改的任務')
-        if storage not in (None, 'local', 'settings'):
+        if storage not in (None, 'local', 'settings', 'custom'):
             raise ValueError('不支援的儲存方式')
         if subtitle_mode is not None and (not isinstance(subtitle_mode, str) or subtitle_mode not in config.VALID_SUBTITLE_PREFS):
             raise ValueError('不支援的字幕模式')
@@ -267,6 +267,12 @@ class TaskManager:
         target = None
         settings = {}
         if storage is not None:
+            if storage == 'custom':
+                settings = nas.prepare_settings(nas_settings, use_saved_password=False)
+                if not settings['enabled']:
+                    raise ValueError('請選擇 NAS 儲存模式')
+                if settings['mode'] in ('smb', 'direct'):
+                    dest = os.path.abspath('download')
             if storage == 'settings':
                 settings = nas.load_settings(secret=True)
                 dest = config._load_prefs().get('download_dir') or os.environ.get('DOWNLOAD_DIR') or os.path.abspath('download')
@@ -277,12 +283,17 @@ class TaskManager:
                 if settings.get('mode') == 'direct':
                     target = nas.direct_destination(settings, probe=True)
                 else:
-                    nas.test_connection(settings)
+                    if storage == 'custom':
+                        nas.test_connection(settings, use_saved_password=False)
+                    else:
+                        nas.test_connection(settings)
                     if settings.get('mode') == 'smb':
                         target = nas.smb_destination()
                         settings['_smb_path'] = target
             if not (settings.get('enabled') and settings.get('mode') == 'smb'):
                 probe_destination(target)
+            if storage == 'custom' and settings.get('password'):
+                settings['_task_password_encrypted'] = nas.encrypt_password(settings['password'])
         updated, skipped = [], []
         with self._lock:
             for tid in dict.fromkeys(task_ids):
@@ -336,6 +347,8 @@ class TaskManager:
                 return False
             if subtitles_only and (not task.name or not task.enable_subtitles or task.subtitle_mode == 'none'):
                 return False
+            if task.nas_settings.get('_task_password_encrypted') and not task.nas_settings.get('password'):
+                task.nas_settings['password'] = nas.decrypt_password(task.nas_settings['_task_password_encrypted'])
             if task.nas_settings.get('enabled') and task.nas_settings.get('mode') in ('smb', 'upload') and not task.nas_settings.get('password'):
                 current = nas.load_settings(secret=True)
                 if not current.get('enabled') or any(current.get(k) != task.nas_settings.get(k) for k in ('host', 'share', 'username', 'mode')):
@@ -434,6 +447,8 @@ class TaskManager:
                 destination = nas.smb_destination()
             elif settings.get('mode') == 'direct':
                 destination = nas.direct_destination(settings)
+        if settings.get('_task_password_encrypted') and not settings.get('password'):
+            settings['password'] = nas.decrypt_password(settings['_task_password_encrypted'])
         if settings.get('enabled') and settings.get('mode') in ('smb', 'upload') and not settings.get('password'):
             current = nas.load_settings(secret=True)
             if any(current.get(k) != settings.get(k) for k in ('host', 'share', 'username', 'mode')):

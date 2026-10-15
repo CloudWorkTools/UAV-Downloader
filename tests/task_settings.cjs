@@ -13,7 +13,7 @@ const context = vm.createContext({window: {}, document: {getElementById: element
   fetch: async (path, options) => {
     assert.equal(path, '/api/download/action');
     sent = JSON.parse(options.body);
-    return {ok: !fail, json: async () => fail ? {error: 'NAS 離線'} : {success: true, updated: ['a'], skipped: []}};
+    return {ok: !fail, json: async () => fail ? {error: 'NAS 離線'} : {success: true, updated: sent.task_ids, skipped: []}};
   }});
 vm.runInContext(fs.readFileSync('uav-web/frontend/task-selection.js', 'utf8'), context);
 const selection = context.window.createTaskSelection({});
@@ -59,5 +59,28 @@ assert.equal(element('task-edit-dialog').open, true);
   assert.equal(selection.has('b'), true);
   assert.equal(selection.has('c'), false);
   assert.equal(element('task-edit-dialog').open, false);
+  for (const mode of ['upload', 'smb', 'direct']) {
+    selection.edit('c');
+    element('task-edit-storage').value = mode;
+    selection.updateEditStorage();
+    assert.equal(element('task-edit-local-fields').hidden, mode !== 'upload');
+    assert.equal(element('task-edit-nas-fields').hidden, mode === 'direct');
+    assert.equal(element('task-edit-direct-fields').hidden, mode !== 'direct');
+    element('task-edit-dest').value = '/downloads/staging';
+    element('task-edit-host').value = 'nas-two.local';
+    element('task-edit-share').value = 'videos';
+    element('task-edit-directory').value = 'chosen';
+    element('task-edit-username').value = 'user';
+    element('task-edit-password').value = 'queue-password';
+    element('task-edit-direct-path').value = '/nas/videos';
+    await selection.saveEdit({preventDefault() {}});
+    assert.deepEqual(sent.task_ids, ['c'], 'Per-item settings do not require selection');
+    assert.equal(sent.storage, 'custom');
+    assert.equal(sent.nas.mode, mode);
+    assert.equal(sent.nas.host, 'nas-two.local');
+    assert.equal(sent.nas.password, 'queue-password');
+    assert.equal(sent.dest, mode === 'upload' ? '/downloads/staging' : undefined);
+    assert.equal(element('task-edit-password').value, '');
+  }
   console.log('Batch task settings, partial selection and failure retention: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });

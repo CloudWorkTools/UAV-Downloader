@@ -271,7 +271,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 action, task_id = body.get('action'), body.get('task_id')
                 if action == 'update_settings':
                     result = self.task_manager.update_tasks(body.get('task_ids'), storage=body.get('storage'),
-                                                            dest=body.get('dest'), subtitle_mode=body.get('subtitle_mode'))
+                                                            dest=body.get('dest'), subtitle_mode=body.get('subtitle_mode'),
+                                                            nas_settings=body.get('nas'))
                     return self._send_json({'success': True, **result})
                 if action == 'nas_space':
                     return self._send_json({'success': True, **nas.storage_space()})
