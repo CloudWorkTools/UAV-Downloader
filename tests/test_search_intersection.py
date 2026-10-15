@@ -8,11 +8,11 @@ from uav_downloader.daemon.browse_service import BrowseService
 
 @pytest.fixture(autouse=True)
 def clear_search_cache(monkeypatch):
-    BrowseService._search_term.cache_clear()
+    BrowseService.clear_search_cache()
     BrowseService._search_tags.cache_clear()
     monkeypatch.setattr(BrowseService, '_search_tags', classmethod(lambda cls, site, bucket: ()))
     yield
-    BrowseService._search_term.cache_clear()
+    BrowseService.clear_search_cache()
 
 
 def resolved_page(site, query, page=1, search_id=None):
@@ -463,3 +463,55 @@ def test_simultaneous_first_page_requests_share_source_progress(monkeypatch):
 def test_invalid_search_cursor_is_rejected(cursor):
     with pytest.raises(ValueError,match='識別碼'):
         BrowseService.search_videos('SupJav','a b',search_id=cursor)
+
+
+def test_empty_condition_stops_other_sources_without_exhausting_them(monkeypatch):
+    calls = []
+    def pages(cls, site, term, bucket):
+        calls.append(term)
+        if term == 'empty':
+            return
+        yield {'one': video('one')}
+        pytest.fail('An empty condition proves there is no intersection')
+    monkeypatch.setattr(BrowseService, '_search_pages', classmethod(pages))
+    result = BrowseService.search_videos('SupJav', 'broad empty')
+    assert result['complete'] and not result['pending'] and not result['has_more']
+    assert result['videos'] == [] and result['total'] == 0
+
+
+def test_cancel_removes_only_its_query_session(monkeypatch):
+    from uav_downloader.core import activity
+    items = [video(str(i)) for i in range(24)]
+    mock_pages(monkeypatch, {('a', 1): items, ('b', 1): items})
+    for job in ('cancel-session', 'keep-session'):
+        with activity.track('搜尋影片', job_id=job):
+            BrowseService.search_videos('SupJav', 'a b', request_id=job)
+    BrowseService.cancel_search('cancel-session')
+    assert all(key[-1] != 'cancel-session' for key in BrowseService._sessions)
+    assert any(key[-1] == 'keep-session' for key in BrowseService._sessions)
+    assert all(item.get('job_id') != 'cancel-session' for item in activity.snapshot())
+    with pytest.raises(activity.Cancelled):
+        with activity.track('搜尋影片', job_id='cancel-session'):
+            BrowseService.search_videos('SupJav', 'a b', request_id='cancel-session')
+
+
+def test_empty_condition_interrupts_other_worker_wait(monkeypatch):
+    import threading
+    from uav_downloader.core import activity
+    started = threading.Event()
+    interrupted = threading.Event()
+    def pages(cls, site, term, bucket):
+        if term == 'empty':
+            assert started.wait(2)
+            return
+        started.set()
+        try:
+            activity.wait(5)
+        except activity.Cancelled:
+            interrupted.set()
+            raise
+        yield {'one': video('one')}
+    monkeypatch.setattr(BrowseService, '_search_pages', classmethod(pages))
+    result = BrowseService.search_videos('SupJav', 'broad empty')
+    assert result['complete'] and result['total'] == 0
+    assert interrupted.is_set(), 'Do not wait out other keyword workers after zero results are proven'

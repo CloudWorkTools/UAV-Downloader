@@ -273,6 +273,34 @@ class TestDaemon(unittest.TestCase):
                 thread.join(3)
             self.assertEqual(results[0][0], 200)
 
+    def test_cancel_search_reaches_workers_and_removes_activity(self):
+        from uav_downloader.core import activity
+        started, release = threading.Event(), threading.Event()
+        results = []
+        def slow_search(*args, **kwargs):
+            started.set()
+            assert release.wait(3)
+            activity.check_cancelled()
+            return {'videos': []}
+        job = 'cancel-daemon-fixture'
+        with patch.object(BrowseService, 'search_videos', side_effect=slow_search):
+            thread = threading.Thread(target=lambda: results.append(request_json(
+                f'{self.base_url}/api/search', method='POST', data={'site':'MissAV', 'query':'a b', 'request_id':job})))
+            thread.start()
+            try:
+                self.assertTrue(started.wait(3))
+                status, result = request_json(f'{self.base_url}/api/search/cancel', method='POST', data={'request_id':job})
+                self.assertEqual(status, 200)
+                self.assertTrue(result['success'])
+                self.assertFalse(any(item.get('job_id') == job for item in activity.snapshot()))
+            finally:
+                release.set()
+                thread.join(3)
+            self.assertTrue(results[0][1]['cancelled'])
+            self.assertFalse(any(item.get('job_id') == job for item in activity.snapshot()))
+        status, _ = request_json(f'{self.base_url}/api/search/cancel', method='POST', data={'request_id':[]})
+        self.assertEqual(status, 400)
+
     def test_history(self):
         status, res = request_json(f"{self.base_url}/api/history?limit=10&offset=0")
         self.assertEqual(status, 200)

@@ -9,10 +9,11 @@ const element = id => {
   return elements.get(id);
 };
 const pending = [];
+const cancellations = [];
 const context = vm.createContext({
   document: {getElementById: element, createElement: () => ({}), querySelectorAll: () => []},
   window: {addEventListener() {}}, alert() {}, setTimeout: callback => setImmediate(callback),
-  fetch: (path, options) => new Promise(resolve => pending.push({path, options, resolve})),
+  fetch: (path, options) => path === '/api/search/cancel' ? (cancellations.push(JSON.parse(options.body)), Promise.resolve({ok:true,json:async()=>({success:true})})) : new Promise(resolve => pending.push({path, options, resolve})),
 });
 vm.runInContext(fs.readFileSync('uav-web/frontend/video-selection.js', 'utf8'), context);
 context.createVideoSelection = context.window.createVideoSelection;
@@ -103,7 +104,9 @@ async function run() {
     context.changePage(1);
     const body = JSON.parse(pending[++index].options.body);
     assert.equal(pending[index].path, '/api/search');
-    assert.deepEqual(body, {site, query:'MIMK', page:2});
+    assert.ok(body.request_id);
+    const {request_id, ...queryBody} = body;
+    assert.deepEqual(queryBody, {site, query:'MIMK', page:2});
     respond(pending[index], {videos:[]});
     await new Promise(setImmediate);
   }
@@ -166,6 +169,16 @@ async function run() {
   assert.equal(element('page-indicator').textContent, '第 2 頁');
   assert.equal(element('btn-next-page').disabled, true);
   assert.match(element('search-warning').textContent, /已到最後一頁/);
+  const cancelIndex = pending.length;
+  const cancelled = context.fetchBrowse();
+  const jobId = JSON.parse(pending[cancelIndex].options.body).request_id;
+  await context.cancelSearch();
+  assert.equal(cancellations.at(-1).request_id, jobId, 'Cancel must reach the backend before the first search response');
+  assert.match(element('search-warning').textContent, /後端工作已移除/);
+  respond(pending[cancelIndex], {videos:[{url:'stale-after-cancel'}],pending:true,search_id:'123'});
+  await cancelled;
+  assert.equal(pending.length, cancelIndex + 1, 'Cancelled requests must not resume polling');
+  assert.ok(!cards.at(-1).innerHTML.includes('stale-after-cancel'));
   element('search-input').value='new query';
   const fresh=context.executeSearch();
   assert.equal(JSON.parse(pending.at(-1).options.body).search_id, undefined);

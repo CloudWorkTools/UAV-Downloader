@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import OrderedDict
 from contextvars import copy_context
 from functools import lru_cache
 import re
@@ -39,6 +40,7 @@ class _SearchSession:
     def __init__(self, service, site, terms, bucket):
         self.service, self.site, self.terms, self.bucket = service, site, terms, bucket
         self.lock = threading.Lock()
+        self.stop = threading.Event()
         self._reset()
 
     def _reset(self):
@@ -56,7 +58,8 @@ class _SearchSession:
 
     def get_page(self, page):
         activity.report('接續上次的標題與標籤交集比對')
-        with self.lock:
+        with self.lock, activity.stop_when(self.stop):
+            activity.check_cancelled()
             if self.failed:
                 pages, buffer, matches = self.pages, self.buffer, self.matches
                 self._reset()
@@ -65,6 +68,7 @@ class _SearchSession:
                 rounds = 0
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     while len(self.pages) < page:
+                        activity.check_cancelled()
                         if len(self.buffer) >= 24 or (self.complete and self.buffer):
                             self.pages.append(self.buffer[:24])
                             del self.buffer[:24]
@@ -76,8 +80,18 @@ class _SearchSession:
                         active = [state for state in self.states if not state['done'] and
                                   (candidates is None or not candidates <= state['videos'].keys())]
                         futures = [pool.submit(copy_context().run, self._advance, state) for state in active]
-                        for future in futures:
-                            future.result()
+                        for future in as_completed(futures):
+                            try:
+                                future.result()
+                            except activity.Cancelled:
+                                if not self.stop.is_set():
+                                    raise
+                            if any(state['done'] and not state['videos'] for state in self.states):
+                                self.stop.set()
+                                self.complete = True
+                                break
+                        if self.complete:
+                            break
                         rounds += 1
                         common = set.intersection(*(set(state['videos']) for state in self.states))
                         previous_count = len(self.buffer)
@@ -91,6 +105,14 @@ class _SearchSession:
                             self.complete = candidates <= common
                         if previous_count < len(self.buffer) < 24 and not self.complete:
                             break
+                self.stop.clear()
+                activity.check_cancelled()
+            except activity.Cancelled:
+                self.states.clear()
+                self.pages.clear()
+                self.buffer.clear()
+                self.matches.clear()
+                raise
             except Exception:
                 self.failed = True
                 raise
@@ -109,6 +131,24 @@ class BrowseService:
     """Provides uniform API for browsing categories, tags, search results."""
 
     _catalog_lock = threading.RLock()
+    _sessions_lock = threading.RLock()
+    _sessions = OrderedDict()
+
+    @classmethod
+    def clear_search_cache(cls):
+        with cls._sessions_lock:
+            cls._sessions.clear()
+
+    @classmethod
+    def cancel_search(cls, request_id):
+        if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', request_id):
+            raise ValueError('查詢工作識別碼無效')
+        activity.cancel(request_id)
+        with cls._sessions_lock:
+            for key in list(cls._sessions):
+                if key[-1] == request_id:
+                    del cls._sessions[key]
+
 
     @staticmethod
     def get_supported_sites() -> List[str]:
@@ -252,6 +292,8 @@ class BrowseService:
                 "blocked": True,
                 "error": "Cloudflare 或站台防護阻擋",
             }
+        except activity.Cancelled:
+            raise
         except Exception as exc:
             activity.report('影片清單讀取失敗', state='failed')
             return {
@@ -266,8 +308,9 @@ class BrowseService:
 
     @classmethod
     def search_videos(
-        cls, site_name: str, query: str, page: int = 1, search_id: Optional[str] = None
+        cls, site_name: str, query: str, page: int = 1, search_id: Optional[str] = None, request_id: Optional[str] = None
     ) -> Dict[str, Any]:
+        activity.check_cancelled()
         if page < 1:
             raise ValueError("頁碼必須大於零")
         try:
@@ -297,7 +340,7 @@ class BrowseService:
             urls = cls._search_urls(site_name, terms[0], bucket)
             if len(urls) == 1:
                 return cls.fetch_videos(site_name, urls[0], page)
-        result = cls._search_term(site_name, terms, bucket).get_page(page)
+        result = cls._search_term(site_name, terms, bucket, request_id).get_page(page)
         return dict(result, site=site_name, page=page, blocked=False,
                     keywords=list(terms), search_id=str(bucket))
 
@@ -310,9 +353,11 @@ class BrowseService:
             for source in sources:
                 if source['done']:
                     continue
+                activity.check_cancelled()
                 page = source['page']
                 activity.report(f'條件「{term}」：讀取第 {page} 頁', part=term)
                 result = cls.fetch_videos(site_name, source['url'], page)
+                activity.check_cancelled()
                 if result.get('blocked') or result.get('error'):
                     raise RuntimeError(f"關鍵字「{term}」查詢失敗：{result.get('error') or '站台防護阻擋'}")
                 if not result['videos']:
@@ -341,6 +386,14 @@ class BrowseService:
                 tags_loaded = True
 
     @classmethod
-    @lru_cache(maxsize=32)
-    def _search_term(cls, site_name, terms, bucket):
-        return _SearchSession(cls, site_name, terms, bucket)
+    def _search_term(cls, site_name, terms, bucket, request_id=None):
+        key = (site_name, terms, bucket, request_id)
+        with cls._sessions_lock:
+            activity.check_cancelled()
+            if key not in cls._sessions:
+                cls._sessions[key] = _SearchSession(cls, site_name, terms, bucket)
+            session = cls._sessions[key]
+            cls._sessions.move_to_end(key)
+            while len(cls._sessions) > 32:
+                cls._sessions.popitem(last=False)
+            return session

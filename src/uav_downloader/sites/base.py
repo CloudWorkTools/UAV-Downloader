@@ -171,6 +171,7 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
         order = list(mirrors)
     saw_real = False
     for index, host in enumerate(order, 1):
+        activity.check_cancelled()
         activity.report(f'連線 {site_key} 站台（鏡像 {index}/{len(order)}）')
         target = _swap_host(url, host)
         base_hdrs = dict(headers_factory(host) or {}) if headers_factory else {}
@@ -189,6 +190,7 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             r = None
             transport_failures = 0
             while transport_failures < 2:             # 1 retry on transport error
+                activity.check_cancelled()
                 try:
                     r = scraper.get(
                         target, timeout=timeout, headers=hdrs or {}, cookies=cookies,
@@ -197,10 +199,11 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
                     r = None
                     transport_failures += 1
                     continue
+                activity.check_cancelled()
                 if r.status_code == 429 and rate_limit_waits:
                     wait = rate_limit_waits.pop(0)
                     activity.report(f'站台限制請求速度，等待 {wait} 秒後重試')
-                    time.sleep(wait)   # rate limited: wait, then same host again
+                    activity.wait(wait)   # rate limited: wait, then same host again
                     continue
                 break
             if r is None:
@@ -234,7 +237,9 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
     if saw_real:
         return None, None, 'empty'
     from uav_downloader.core.firecrawl import fallback
+    activity.check_cancelled()
     response = fallback(url)
+    activity.check_cancelled()
     if response is not None:
         host = urlsplit(response.url).netloc
         if host in mirrors and not _is_cf_interstitial(response) and validate(response):

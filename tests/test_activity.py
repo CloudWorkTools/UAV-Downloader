@@ -68,3 +68,36 @@ def test_native_list_reports_real_count_and_blocked_state(monkeypatch):
     with activity.track('載入影片清單', 'JableTV'):
         BrowseService.fetch_videos('JableTV', 'https://jable.tv/latest-updates/', 2)
     assert '第 2 頁影片清單完成，共 1 筆' in activity.snapshot()[0]['message']
+
+
+def test_cancellation_interrupts_rate_limit_wait():
+    started = threading.Event()
+    stopped = threading.Event()
+    def work():
+        try:
+            with activity.track('搜尋影片', job_id='cancel-wait-fixture'):
+                started.set()
+                activity.wait(60)
+        except activity.Cancelled:
+            stopped.set()
+    thread = threading.Thread(target=work)
+    thread.start()
+    assert started.wait(2)
+    activity.cancel('cancel-wait-fixture')
+    thread.join(2)
+    assert stopped.is_set() and not thread.is_alive()
+    assert not any(item.get('job_id') == 'cancel-wait-fixture' for item in activity.snapshot())
+
+
+def test_cancel_during_failed_request_prevents_retry_and_fallback():
+    from uav_downloader.sites.base import fetch_with_mirrors
+    calls = []
+    class Session:
+        def get(self, url, **kwargs):
+            calls.append(url)
+            activity.cancel('cancel-network-fixture')
+            raise OSError('request interrupted')
+    with pytest.raises(activity.Cancelled):
+        with activity.track('搜尋影片', job_id='cancel-network-fixture'):
+            fetch_with_mirrors(Session(), 'https://jable.tv/search/?q=x', 'jable', lambda response: True)
+    assert len(calls) == 1

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import sys
 import threading
@@ -210,6 +211,10 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     result = BrowseService.fetch_videos(site, url, page)
                 return self._send_json(result)
 
+            elif path == "/api/search/cancel":
+                BrowseService.cancel_search(body.get('request_id'))
+                return self._send_json({'success': True})
+
             elif path == "/api/search":
                 site = body.get("site", "JableTV")
                 query = body.get("query", "").strip()
@@ -219,9 +224,17 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     return self._send_error("請提供搜尋關鍵字", 400)
 
                 try:
-                    with activity.track('搜尋影片', site, query, page):
+                    request_id = body.get('request_id')
+                    if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', request_id)):
+                        raise ValueError('查詢工作識別碼無效')
+                    with activity.track('搜尋影片', site, query, page, job_id=request_id):
                         options = {'search_id': body['search_id']} if body.get('search_id') is not None else {}
+                        if request_id is not None:
+                            options['request_id'] = request_id
                         result = BrowseService.search_videos(site, query, page, **options)
+                        activity.check_cancelled()
+                except activity.Cancelled:
+                    return self._send_json({'cancelled': True, 'videos': [], 'has_more': False})
                 except ValueError as exc:
                     return self._send_error(str(exc), 400)
                 return self._send_json(result)
@@ -298,7 +311,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     return self._send_json(firecrawl.probe(body.get('site', 'JableTV')))
                 if "firecrawl" in body:
                     firecrawl.save_settings(body['firecrawl'])
-                    BrowseService._search_term.cache_clear()
+                    BrowseService.clear_search_cache()
                     BrowseService._search_tags.cache_clear()
                 if body.get("test_nas"):
                     nas.test_connection(body.get("nas", {}))

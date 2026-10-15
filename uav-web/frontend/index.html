@@ -123,6 +123,7 @@
           </select>
           <input type="text" id="search-input" aria-label="搜尋番號、演員或標籤" aria-describedby="search-hint" placeholder="關鍵字1 關鍵字2 ..." onkeydown="if(event.key==='Enter') executeSearch()" class="h-10 min-w-[12rem] flex-1 w-44 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500">
           <button onclick="executeSearch()" class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium">搜尋</button>
+          <button id="cancel-search-button" onclick="cancelSearch()" class="hidden h-10 shrink-0 px-3 bg-[#282832] border border-[#3e3e4e] text-sm rounded-lg">取消查詢</button>
           <button id="select-page-button" onclick="selection.togglePage()" disabled class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-[#282832] border border-[#3e3e4e] hover:bg-[#3e3e4e] text-white text-sm rounded-lg transition font-medium disabled:opacity-50">全選</button>
           <button id="download-selected-button" onclick="selection.download()" disabled class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium disabled:opacity-50">下載已選 (0)</button>
         </div>
@@ -442,6 +443,7 @@
     let currentCategoryUrl = '';
     let currentSearchQuery = '';
     let searchSession = null;
+    let searchJobId = null;
     const selection = createVideoSelection({startDownload: startSingleDownload});
     const taskSelection = createTaskSelection({cancelTask, taskAction});
     const busyTaskActions = new Set();
@@ -532,6 +534,7 @@
 
     // Site selection
     async function selectSite(site) {
+      cancelSearch(true);
       const requestId = ++browseRequestId;
       browseLoading = false;
       document.getElementById('browse-loading-message').textContent = '讀取站台分類中…';
@@ -588,6 +591,7 @@
     }
 
     function onCategoryChange() {
+      cancelSearch(true);
       const select = document.getElementById('category-select');
       currentCategoryUrl = select.value;
       currentSearchQuery = '';
@@ -598,6 +602,36 @@
       fetchBrowse();
     }
 
+    async function cancelSearch(silent = false) {
+      const jobId = searchJobId;
+      if (!jobId) return;
+      const requestId = ++browseRequestId;
+      searchJobId = null;
+      searchSession = null;
+      currentSearchQuery = '';
+      browseLoading = false;
+      document.getElementById('browse-loading').classList.add('hidden');
+      document.getElementById('cancel-search-button').classList.add('hidden');
+      document.getElementById('btn-next-page').disabled = true;
+      document.getElementById('btn-prev-page').disabled = true;
+      if (!silent) document.getElementById('search-warning').textContent = '正在取消後端查詢…';
+      try {
+        const response = await fetch('/api/search/cancel', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({request_id: jobId})
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || '取消失敗');
+        if (!silent && requestId === browseRequestId) document.getElementById('search-warning').textContent = '已取消查詢，後端工作已移除。';
+      } catch (error) {
+        if (requestId === browseRequestId) {
+          searchJobId = jobId;
+          document.getElementById('cancel-search-button').classList.remove('hidden');
+          document.getElementById('search-warning').textContent = '取消查詢失敗，請重試：' + error.message;
+        }
+      }
+    }
+
     // Browse videos
     async function fetchBrowse() {
       const requestId = ++browseRequestId;
@@ -606,6 +640,10 @@
       grid.innerHTML = '';
       selection.setVisible([]);
       browseLoading = true;
+      if (currentSearchQuery) {
+        if (!searchJobId) searchJobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        document.getElementById('cancel-search-button').classList.remove('hidden');
+      }
       document.getElementById('browse-loading-message').textContent = '請求已送出，等待後端讀取影片清單…';
       loader.classList.remove('hidden');
       document.getElementById('search-warning').textContent = '';
@@ -619,7 +657,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               site: currentSite,
-              ...(currentSearchQuery ? {query: currentSearchQuery} : {url: currentCategoryUrl}),
+              ...(currentSearchQuery ? {query: currentSearchQuery, request_id: searchJobId} : {url: currentCategoryUrl}),
               page: currentPage,
               ...(currentSearchQuery && searchSession ? {search_id: searchSession} : {})
             })
@@ -627,6 +665,7 @@
           res = await resp.json();
           if (requestId !== browseRequestId) return;
           if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
+          if (res.cancelled) throw new Error('查詢已取消');
           if (res.search_id) searchSession = res.search_id;
           if (currentSearchQuery && res.complete && !res.videos?.length && currentPage > 1) {
             currentPage -= 1;
@@ -645,6 +684,7 @@
         }
         if (requestId !== browseRequestId) return;
         browseLoading = false;
+        document.getElementById('cancel-search-button').classList.add('hidden');
         loader.classList.add('hidden');
         renderVideos(res.videos || []);
         document.getElementById('search-warning').textContent = reachedEnd ? '已到最後一頁，沒有更多符合條件的影片。' : res.warning || '';
@@ -654,6 +694,7 @@
       } catch (e) {
         if (requestId !== browseRequestId) return;
         browseLoading = false;
+        document.getElementById('cancel-search-button').classList.add('hidden');
         loader.classList.add('hidden');
         showBrowseError('清單讀取失敗：' + e.message);
       }
@@ -723,6 +764,7 @@
     async function executeSearch() {
       const q = document.getElementById('search-input').value.trim();
       if (!q) return;
+      cancelSearch(true);
       currentSearchQuery = q;
       searchSession = null;
       currentPage = 1;

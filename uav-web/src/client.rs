@@ -99,13 +99,15 @@ impl DaemonClient {
         query: &str,
         page: u32,
         search_id: Option<&str>,
+        request_id: Option<&str>,
     ) -> Result<serde_json::Value, reqwest::Error> {
         let endpoint = format!("{}/api/search", self.base_url);
         let payload = serde_json::json!({
             "site": site,
             "query": query,
             "page": page,
-            "search_id": search_id
+            "search_id": search_id,
+            "request_id": request_id
         });
         let resp = self
             .apply_auth(self.client.post(&endpoint))
@@ -114,6 +116,12 @@ impl DaemonClient {
             .send()
             .await?;
         resp.json().await
+    }
+
+    pub async fn cancel_search(&self, payload: serde_json::Value) -> Result<(u16, serde_json::Value), reqwest::Error> {
+        let resp = self.apply_auth(self.client.post(format!("{}/api/search/cancel", self.base_url)))
+            .json(&payload).send().await?;
+        Ok((resp.status().as_u16(), resp.json().await?))
     }
 
     pub async fn start_download(

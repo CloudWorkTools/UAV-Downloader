@@ -39,6 +39,7 @@ pub struct SearchBody {
     pub query: String,
     pub page: Option<u32>,
     pub search_id: Option<String>,
+    pub request_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -67,6 +68,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/watcher/targets", get(watcher_targets_handler))
         .route("/api/browse", post(browse_handler))
         .route("/api/search", post(search_handler))
+        .route("/api/search/cancel", post(cancel_search_handler))
         .route("/api/download/start", post(start_download_handler))
         .route("/api/download/cancel", post(cancel_download_handler))
         .route("/api/download/action", post(task_action_handler))
@@ -140,9 +142,16 @@ async fn search_handler(
     Json(body): Json<SearchBody>,
 ) -> impl IntoResponse {
     let page = body.page.unwrap_or(1);
-    match state.client.search(&body.site, &body.query, page, body.search_id.as_deref()).await {
+    match state.client.search(&body.site, &body.query, page, body.search_id.as_deref(), body.request_id.as_deref()).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn cancel_search_handler(State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    match state.client.cancel_search(body).await {
+        Ok((status, value)) => (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(value)).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }
 }
 
