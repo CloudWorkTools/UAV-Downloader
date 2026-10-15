@@ -35,6 +35,18 @@
     ::-webkit-scrollbar-track { background: #121217; }
     ::-webkit-scrollbar-thumb { background: #2e2e3a; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #4a4a5a; }
+    .browse-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+    .browse-content { min-width: 0; }
+    #category-groups { display: flex; flex-direction: column; gap: 8px; padding: 0 8px 8px; }
+    #category-groups summary { overflow-wrap: anywhere; }
+    #category-groups button { width: 100%; text-align: left; height: auto; min-height: 40px; padding: 6px 8px; overflow-wrap: anywhere; }
+    #video-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); }
+    #category-sidebar { max-height: 45dvh; overflow-y: auto; }
+    @media (min-width: 900px) {
+      .browse-layout { grid-template-columns: 180px minmax(0, 1fr); }
+      .category-sidebar { position: sticky; top: 128px; min-width: 0; }
+      #category-sidebar { max-height: calc(100dvh - 144px); }
+    }
   </style>
 </head>
 <body class="bg-[#121217] text-gray-100 min-h-screen flex flex-col font-sans selection:bg-brand-500 selection:text-white">
@@ -106,11 +118,14 @@
         </div>
       </div>
 
-      <details class="bg-[#1a1a22] rounded-xl border border-[#2e2e3a]" open>
-        <summary class="cursor-pointer px-4 py-3 text-sm font-semibold">分類與標籤 <span id="selected-category-label" class="ml-2 text-brand-500"></span></summary>
-        <div id="category-groups" class="grid grid-cols-1 md:grid-cols-2 gap-3 px-4 pb-4 items-start" aria-label="各站分類與標籤"></div>
-      </details>
-
+      <div class="browse-layout">
+        <aside class="category-sidebar" aria-label="分類側欄">
+          <details id="category-sidebar" class="bg-[#1a1a22] rounded-xl border border-[#2e2e3a]">
+            <summary class="cursor-pointer px-3 py-3 text-sm font-semibold">分類與標籤 <span id="selected-category-label" class="block mt-1 text-xs text-brand-500 break-words"></span></summary>
+            <div id="category-groups" aria-label="各站分類與標籤"></div>
+          </details>
+        </aside>
+        <div class="browse-content space-y-4">
       <!-- Video Grid -->
       <div id="video-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         <!-- Cards injected dynamically -->
@@ -130,6 +145,8 @@
         <button onclick="changePage(-1)" id="btn-prev-page" class="px-4 py-2 bg-[#282832] hover:bg-[#343442] border border-[#3e3e4e] text-sm rounded-lg disabled:opacity-40">上一頁</button>
         <span id="page-indicator" class="text-sm text-gray-400 font-medium">第 1 頁</span>
         <button onclick="changePage(1)" id="btn-next-page" class="px-4 py-2 bg-[#282832] hover:bg-[#343442] border border-[#3e3e4e] text-sm rounded-lg">下一頁</button>
+      </div>
+        </div>
       </div>
     </section>
 
@@ -399,6 +416,9 @@
       if (tabId === 'watcher') loadWatcherTargets();
     }
 
+    if (window.matchMedia) {
+      document.getElementById('category-sidebar').open = window.matchMedia('(min-width: 900px)').matches;
+    }
     const categoryBrowser = window.createCategoryBrowser?.(
       document.getElementById('category-groups'), item => {
         const select = document.getElementById('category-select');

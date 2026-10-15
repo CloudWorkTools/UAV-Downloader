@@ -23,11 +23,11 @@
           const details = document.createElement('details');
           details.className = 'rounded-lg border border-[#3e3e4e] bg-[#20202a]';
           const summary = document.createElement('summary');
-          summary.className = 'cursor-pointer px-3 py-2 text-sm font-medium text-gray-200';
+          summary.className = 'cursor-pointer px-2 py-2 text-sm font-medium text-gray-200';
           summary.textContent = `${group.name} (${group.items.length})`;
           details.appendChild(summary);
           const list = document.createElement('div');
-          list.className = 'flex flex-wrap gap-2 p-3 pt-1';
+          list.className = 'flex flex-col gap-1 p-2 pt-1';
           group.items.forEach(item => {
             const button = document.createElement('button');
             button.type = 'button';
