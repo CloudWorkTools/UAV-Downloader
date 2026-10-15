@@ -31,6 +31,7 @@ class DownloadTask:
     dest: str
     resolution: Optional[str] = None
     max_workers: Optional[int] = None
+    download_cover: bool = True
     enable_subtitles: bool = False
     subtitle_mode: str = "none"
     nas_settings: dict = field(default_factory=dict, repr=False)
@@ -68,6 +69,8 @@ class DownloadTask:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "enable_subtitles": self.enable_subtitles,
+            "subtitle_mode": self.subtitle_mode,
+            "download_cover": self.download_cover,
         }
 
     def _format_speed(self) -> str:
@@ -153,10 +156,20 @@ class TaskManager:
         dest: Optional[str] = None,
         resolution: Optional[str] = None,
         max_workers: Optional[int] = None,
-        enable_subtitles: bool = False,
-        subtitle_mode: str = "none",
+        enable_subtitles: Optional[bool] = None,
+        subtitle_mode: Optional[str] = None,
+        download_cover: Optional[bool] = None,
     ) -> DownloadTask:
-        target_dest = dest or os.environ.get("DOWNLOAD_DIR") or config._load_prefs().get("download_dir")
+        subtitle_mode = config.get_subtitle_pref() if subtitle_mode is None else subtitle_mode
+        if subtitle_mode not in config.VALID_SUBTITLE_PREFS:
+            raise ValueError("不支援的字幕模式")
+        if enable_subtitles is not None and not isinstance(enable_subtitles, bool):
+            raise ValueError("字幕開關必須為開啟或關閉")
+        if download_cover is not None and not isinstance(download_cover, bool):
+            raise ValueError("下載封面必須為開啟或關閉")
+        enable_subtitles = subtitle_mode != "none" if enable_subtitles is None else enable_subtitles
+        download_cover = config.get_download_cover() if download_cover is None else download_cover
+        target_dest = dest or config._load_prefs().get("download_dir") or os.environ.get("DOWNLOAD_DIR")
         if not target_dest:
             target_dest = os.path.join(os.getcwd(), "download")
 
@@ -184,6 +197,7 @@ class TaskManager:
             resolution=resolution,
             max_workers=max_workers,
             enable_subtitles=enable_subtitles,
+            download_cover=download_cover,
             subtitle_mode=subtitle_mode if enable_subtitles else "none",
         )
 
@@ -334,6 +348,8 @@ class TaskManager:
                 max_workers=task.max_workers,
             )
             task.job = job
+            if job is not None:
+                job.download_cover = task.download_cover
 
             if task.cancelled_event.is_set():
                 if job:
@@ -482,6 +498,8 @@ class TaskManager:
 
     def _run_subtitles(self, task: DownloadTask, job: Any) -> None:
         try:
+            if os.name != "nt":
+                raise RuntimeError("目前內建字幕引擎僅支援 Windows，Linux／Docker 尚不支援產生字幕")
             from uav_downloader.subtitles.engine import generate_subtitles
             target_file = os.path.join(job.dest_folder() or task.dest, f"{task.name}.mp4")
             if storage_fs(target_file).isfile(target_file):

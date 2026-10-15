@@ -221,3 +221,21 @@ def test_daemon_uses_persistent_config_directory(manager, monkeypatch, tmp_path)
     assert second.task_manager.list_tasks()[0]['task_id'] == task.task_id
     assert second.task_manager.get_task(task.task_id).status == 'failed'
     second.stop()
+
+
+@pytest.mark.parametrize('cover,mode', [(False, 'ja'), (True, 'all'), (False, 'none')])
+def test_worker_applies_cover_and_subtitle_defaults(manager, monkeypatch, cover, mode):
+    monkeypatch.setattr(tm.config, 'get_download_cover', lambda: cover)
+    monkeypatch.setattr(tm.config, 'get_subtitle_pref', lambda: mode)
+    task = manager.add_task('https://missav.ai/mimk-290')
+    def download(job):
+        assert job.download_cover is cover
+        (Path(job.dest_folder()) / 'MIMK-290.mp4').write_bytes(b'video')
+        return True
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    subtitles = MagicMock()
+    monkeypatch.setattr(manager, '_run_subtitles', subtitles)
+    manager._run_task(task)
+    assert task.status == 'completed'
+    assert subtitles.call_count == int(mode != 'none')
+    assert task.subtitle_mode == mode

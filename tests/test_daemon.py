@@ -2,6 +2,7 @@
 
 import json
 import socket
+import tempfile
 import threading
 import time
 import unittest
@@ -41,6 +42,12 @@ def request_json(url: str, method: str = 'GET', data: dict = None, headers: dict
 class TestDaemon(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.preferences = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.preferences.cleanup)
+        preferences_patch = patch('uav_downloader.core.config._ui_prefs_path',
+                                  return_value=f'{cls.preferences.name}/ui_prefs.json')
+        preferences_patch.start()
+        cls.addClassCleanup(preferences_patch.stop)
         cls.port = get_free_port()
         cls.server = DaemonServer(host='127.0.0.1', port=cls.port)
         cls.server.start()

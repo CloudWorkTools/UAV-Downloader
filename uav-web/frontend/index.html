@@ -290,6 +290,7 @@
                 <option value="1080">1080p</option>
                 <option value="720">720p</option>
                 <option value="480">480p</option>
+                <option value="360">360p</option>
                 <option value="lowest">最低畫質 (Lowest)</option>
               </select>
             </div>
@@ -313,6 +314,11 @@
             </div>
           </div>
 
+          <label class="flex items-center justify-between gap-3 p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg">
+            <span>下載影片封面<span class="block text-xs text-gray-400">封面圖片與影片存放在同一目錄</span></span>
+            <input type="checkbox" id="setting-download-cover" checked class="w-5 h-5 accent-brand-600 rounded">
+          </label>
+
           <!-- AI Subtitle Setting -->
           <div class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-2">
             <div class="flex items-center justify-between">
@@ -320,16 +326,38 @@
                 <span class="font-medium text-white">AI 自動生成字幕</span>
                 <p class="text-xs text-gray-400">日語音軌辨識並輸出 .srt（NAS 上預設停用以降低 CPU 負載）</p>
               </div>
-              <input type="checkbox" id="setting-subtitles" class="w-5 h-5 accent-brand-600 rounded">
+              <input type="checkbox" id="setting-subtitles" aria-label="AI 自動生成字幕" onchange="updateSubtitleOptions()" class="w-5 h-5 accent-brand-600 rounded">
             </div>
-            <div id="subtitles-options" class="hidden pt-2 grid grid-cols-2 gap-2 text-xs">
-              <label><input type="radio" name="sub_mode" value="zh" checked> 繁體中文 (.zh-TW.srt)</label>
-              <label><input type="radio" name="sub_mode" value="all"> 三語 (日 / 英 / 繁中)</label>
+            <p id="subtitle-runtime-warning" role="status" class="text-xs text-amber-400"></p>
+            <div id="subtitles-options" class="hidden pt-2 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <label>字幕語言
+                <select id="setting-subtitle-mode" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+                  <option value="ja">日文（僅語音辨識）</option>
+                  <option value="en">英文翻譯</option>
+                  <option value="zh" selected>繁體中文翻譯</option>
+                  <option value="all">日文／英文／繁中三語</option>
+                </select>
+              </label>
+              <label>語音辨識品質
+                <select id="setting-recognition-quality" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+                  <option value="auto">自動</option>
+                  <option value="quality">高品質</option>
+                  <option value="balanced">均衡</option>
+                  <option value="fast">快速</option>
+                </select>
+              </label>
+              <p class="text-xs text-gray-400 sm:col-span-2">字幕會另外產生 SRT 檔案。首次使用需下載辨識與翻譯模型；高品質辨識需要較多記憶體與時間。</p>
             </div>
           </div>
 
           <div>
-            <label class="block text-gray-300 font-medium mb-1">代理伺服器 (Proxy URL)</label>
+            <label for="setting-proxy-mode" class="block text-gray-300 font-medium mb-1">代理模式</label>
+            <select id="setting-proxy-mode" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white mb-3">
+              <option value="direct">直接連線</option>
+              <option value="manual">手動代理</option>
+              <option value="system">使用系統代理</option>
+            </select>
+            <label for="setting-proxy-url" class="block text-gray-300 font-medium mb-1">代理伺服器 (Proxy URL)</label>
             <input type="text" id="setting-proxy-url" placeholder="例如 http://127.0.0.1:7890 或 socks5://..." class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
           </div>
         </div>
@@ -782,6 +810,10 @@
     }
 
     // Settings
+    function updateSubtitleOptions() {
+      document.getElementById('subtitles-options').classList.toggle('hidden', !document.getElementById('setting-subtitles').checked);
+    }
+
     async function loadSettings() {
       try {
         const resp = await fetch('/api/settings');
@@ -794,7 +826,13 @@
         document.getElementById('setting-concurrency').value = data.download_concurrency || 2;
         document.getElementById('setting-workers').value = data.max_workers_per_video || 4;
         document.getElementById('setting-proxy-url').value = data.proxy_url || '';
-        document.getElementById('setting-subtitles').checked = data.subtitle_pref && data.subtitle_pref !== 'none';
+        document.getElementById('setting-subtitles').checked = !!data.subtitle_pref && data.subtitle_pref !== 'none';
+        document.getElementById('setting-subtitle-mode').value = data.subtitle_pref && data.subtitle_pref !== 'none' ? data.subtitle_pref : 'zh';
+        document.getElementById('setting-recognition-quality').value = data.recognition_quality || 'auto';
+        document.getElementById('setting-download-cover').checked = data.download_cover !== false;
+        document.getElementById('setting-proxy-mode').value = data.proxy_mode || 'direct';
+        document.getElementById('subtitle-runtime-warning').textContent = data.subtitle_runtime_supported === false ? '目前內建字幕引擎僅支援 Windows；Linux／Docker 可保存設定，但尚無法產生字幕。' : '';
+        updateSubtitleOptions();
       } catch (e) { alert('設定載入失敗: ' + e.message); }
     }
 
@@ -807,7 +845,10 @@
         download_concurrency: parseInt(document.getElementById('setting-concurrency').value),
         max_workers_per_video: parseInt(document.getElementById('setting-workers').value),
         proxy_url: document.getElementById('setting-proxy-url').value,
-        subtitle_pref: document.getElementById('setting-subtitles').checked ? 'zh' : 'none'
+        proxy_mode: document.getElementById('setting-proxy-mode').value,
+        download_cover: document.getElementById('setting-download-cover').checked,
+        recognition_quality: document.getElementById('setting-recognition-quality').value,
+        subtitle_pref: document.getElementById('setting-subtitles').checked ? document.getElementById('setting-subtitle-mode').value : 'none'
       };
 
       try {

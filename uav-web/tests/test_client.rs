@@ -19,6 +19,7 @@ fn test_download_request_serialization() {
         resolution: Some("1080".to_string()),
         max_workers: Some(4),
         enable_subtitles: Some(false),
+        download_cover: Some(true),
         subtitle_mode: Some("none".to_string()),
     };
 

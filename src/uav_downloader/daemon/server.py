@@ -159,9 +159,12 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 prefs = config._load_prefs()
                 return self._send_json({
                     "nas": nas.load_settings(),
-                    "download_dir": os.environ.get("DOWNLOAD_DIR") or prefs.get("download_dir") or os.path.abspath("download"),
+                    "download_dir": prefs.get("download_dir") or os.environ.get("DOWNLOAD_DIR") or os.path.abspath("download"),
                     "resolution": config.get_resolution_pref(),
                     "subtitle_pref": config.get_subtitle_pref(),
+                    "download_cover": config.get_download_cover(),
+                    "recognition_quality": config.get_recognition_quality(),
+                    "subtitle_runtime_supported": os.name == "nt",
                     "filename_mode": config.get_filename_mode(),
                     "download_concurrency": config.get_download_concurrency(),
                     "max_workers_per_video": config.get_max_workers_per_video(),
@@ -172,7 +175,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             else:
                 return self._send_error(f"路徑不存在: {path}", 404)
 
-        except nas.NasError as exc:
+        except ValueError as exc:
             return self._send_error(str(exc), 400)
         except Exception as exc:
             return self._send_error(str(exc), 500)
@@ -225,8 +228,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 dest = body.get("dest")
                 resolution = body.get("resolution")
                 max_workers = body.get("max_workers")
-                enable_subtitles = bool(body.get("enable_subtitles", False))
-                subtitle_mode = body.get("subtitle_mode", "none")
+                enable_subtitles = body.get("enable_subtitles")
+                subtitle_mode = body.get("subtitle_mode")
 
                 task = self.task_manager.add_task(
                     url=url,
@@ -235,6 +238,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     max_workers=max_workers,
                     enable_subtitles=enable_subtitles,
                     subtitle_mode=subtitle_mode,
+                    download_cover=body.get("download_cover"),
                 )
                 return self._send_json({
                     "success": True,
@@ -275,7 +279,15 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 if "resolution" in body:
                     config.set_resolution_pref(body["resolution"])
                 if "subtitle_pref" in body:
+                    if body["subtitle_pref"] not in config.VALID_SUBTITLE_PREFS:
+                        raise ValueError("不支援的字幕模式")
                     config.set_subtitle_pref(body["subtitle_pref"])
+                if "download_cover" in body:
+                    config.set_download_cover(body["download_cover"])
+                if "recognition_quality" in body:
+                    if body["recognition_quality"] not in config.VALID_RECOGNITION_QUALITIES:
+                        raise ValueError("不支援的字幕辨識品質")
+                    config.set_recognition_quality(body["recognition_quality"])
                 if "filename_mode" in body:
                     config.set_filename_mode(body["filename_mode"])
                 if "download_concurrency" in body:
@@ -293,7 +305,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             else:
                 return self._send_error(f"路徑不存在: {path}", 404)
 
-        except nas.NasError as exc:
+        except ValueError as exc:
             return self._send_error(str(exc), 400)
         except Exception as exc:
             return self._send_error(str(exc), 500)
@@ -307,7 +319,7 @@ class DaemonServer:
         host: str = "127.0.0.1",
         port: int = 52341,
         auth_token: Optional[str] = None,
-        max_concurrent: int = 2,
+        max_concurrent: Optional[int] = None,
     ):
         self.host = host
         self.port = port
@@ -317,7 +329,7 @@ class DaemonServer:
 
         # Bind shared TaskManager
         self.task_manager = TaskManager(
-            max_concurrent=max_concurrent,
+            max_concurrent=config.get_download_concurrency() if max_concurrent is None else max_concurrent,
             state_path=nas._directory() / "web_download_tasks.json",
         )
         DaemonRequestHandler.task_manager = self.task_manager
@@ -344,7 +356,7 @@ def start_daemon(
     host: str = "127.0.0.1",
     port: int = 52341,
     auth_token: Optional[str] = None,
-    max_concurrent: int = 2,
+    max_concurrent: Optional[int] = None,
 ) -> DaemonServer:
     server = DaemonServer(
         host=host, port=port, auth_token=auth_token, max_concurrent=max_concurrent
@@ -358,7 +370,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=52341, help="Listen port (default: 52341)")
     parser.add_argument("--token", default=None, help="Optional authentication token")
-    parser.add_argument("--concurrency", type=int, default=2, help="Max concurrent video downloads")
+    parser.add_argument("--concurrency", type=int, default=None, help="Max concurrent video downloads (default: saved setting)")
     args = parser.parse_args()
 
     print(f"啟動 UAV Downloader 常駐 Worker 於 http://{args.host}:{args.port}", flush=True)

@@ -23,6 +23,7 @@ pub struct StartDownloadRequest {
     pub resolution: Option<String>,
     pub max_workers: Option<u32>,
     pub enable_subtitles: Option<bool>,
+    pub download_cover: Option<bool>,
     pub subtitle_mode: Option<String>,
 }
 

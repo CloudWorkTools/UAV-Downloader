@@ -527,6 +527,7 @@ class M3U8Crawler:
         self._temp_folder = None
         self._targetName = None
         self._imageUrl = None
+        self.download_cover = config.get_download_cover()
         self._m3u8url = None
         if max_workers is None:
             max_workers = config.get_max_workers_per_video()
@@ -1072,7 +1073,8 @@ class M3U8Crawler:
         self._cancel_job = False
         self._progress_unit = 'preparing'
         self._create_dest_folder()
-        self.download_image()
+        if self.download_cover:
+            self.download_image()
         if not self.is_target_video_exist():
             self._create_temp_folder()
             self._create_m3u8()

@@ -58,7 +58,7 @@ def _cf_store_path():
 
 
 def _ui_prefs_path():
-    return os.path.join(os.path.dirname(_cf_store_path()), 'ui_prefs.json')
+    return os.path.join(os.environ.get('CONFIG_DIR') or os.path.dirname(_cf_store_path()), 'ui_prefs.json')
 
 
 def queue_csv_path():
@@ -154,6 +154,20 @@ def set_resolution_pref(pref):
             _save_prefs(prefs)
     except Exception:
         pass
+
+
+def get_download_cover():
+    return _load_prefs().get('download_cover', True) is not False
+
+
+def set_download_cover(enabled):
+    if not isinstance(enabled, bool):
+        raise ValueError('下載封面必須為開啟或關閉')
+    with _prefs_lock:
+        prefs = _load_prefs()
+        prefs['download_cover'] = enabled
+        _save_prefs(prefs)
+    return enabled
 
 
 def get_subtitle_pref():
