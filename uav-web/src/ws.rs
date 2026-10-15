@@ -29,6 +29,11 @@ impl WsHub {
                             "data": tasks.get("tasks").unwrap_or(&json!([]))
                         });
                         let _ = self.tx.send(msg.to_string());
+                        let activity = json!({"type": "activity", "data": {
+                            "activities": tasks.get("activities").unwrap_or(&json!([])),
+                            "observed_at": tasks.get("observed_at")
+                        }});
+                        let _ = self.tx.send(activity.to_string());
                     }
                     Err(e) => {
                         debug!("Poll tasks failed (daemon reconnecting?): {}", e);

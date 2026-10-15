@@ -200,6 +200,8 @@ class TestDaemon(unittest.TestCase):
         self.assertEqual(status_list, 200)
         task_ids = [t["task_id"] for t in list_res.get("tasks", [])]
         self.assertIn(task_id, task_ids)
+        self.assertIn('activities', list_res)
+        self.assertIsInstance(list_res['observed_at'], (int, float))
 
         # 3. Query single task
         status_single, single_res = request_json(f"{self.base_url}/api/download/task?task_id={task_id}")
@@ -238,6 +240,38 @@ class TestDaemon(unittest.TestCase):
             code, result = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action': 'remove', 'task_id': task.task_id})
             self.assertEqual(code, 200)
             self.assertIsNone(self.server.task_manager.get_task(task.task_id))
+            completed = self.server.task_manager.add_task('https://jable.tv/videos/clear-completed-fixture/', dest=folder)
+            completed.status = 'completed'
+            code, result = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action': 'clear_completed'})
+            self.assertEqual(code, 200)
+            self.assertTrue(result['success'])
+            self.assertGreaterEqual(result['removed'], 1)
+            self.assertIsNone(self.server.task_manager.get_task(completed.task_id))
+
+    def test_progress_is_visible_while_search_response_is_pending(self):
+        from uav_downloader.core import activity
+        started, release = threading.Event(), threading.Event()
+        results = []
+        def slow_search(*args):
+            activity.report('讀取第 4 頁', part='條件一')
+            started.set()
+            assert release.wait(3)
+            return {'videos': [], 'count': 0}
+        with patch.object(BrowseService, 'search_videos', side_effect=slow_search):
+            thread = threading.Thread(target=lambda: results.append(request_json(
+                f'{self.base_url}/api/search', method='POST', data={'site':'JableTV', 'query':'live progress fixture'})))
+            thread.start()
+            try:
+                self.assertTrue(started.wait(3))
+                code, data = request_json(f'{self.base_url}/api/download/tasks')
+                record = next(item for item in data['activities'] if item['query']=='live progress fixture')
+                self.assertEqual(code, 200)
+                self.assertEqual(record['state'], 'running')
+                self.assertEqual(record['parts']['條件一'], '讀取第 4 頁')
+            finally:
+                release.set()
+                thread.join(3)
+            self.assertEqual(results[0][0], 200)
 
     def test_history(self):
         status, res = request_json(f"{self.base_url}/api/history?limit=10&offset=0")

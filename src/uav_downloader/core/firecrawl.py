@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 import requests
 from bs4 import BeautifulSoup
 
-from uav_downloader.core import config
+from uav_downloader.core import config, activity
 
 _lock = threading.Lock()
 _status = {}
@@ -41,6 +41,7 @@ def save_settings(value):
 
 def scrape(url):
     """Return a requests-compatible HTML response, never generated or partial text."""
+    activity.report('透過獨立 Firecrawl 擷取原站網頁')
     parsed = urlsplit(url)
     allowed = {host for hosts in config.MIRRORS.values() for host in hosts}
     allowed.update({'hanime1.me', 'example.com'})
@@ -90,7 +91,9 @@ def fallback(url):
     return None
 
 
+@activity.track('Firecrawl 站台測試')
 def probe(site='JableTV'):
+    activity.report(f'測試 {site} 的實際影片清單')
     if site not in _PROBES:
         raise ValueError('不支援的測試站台')
     if not settings()['enabled']:

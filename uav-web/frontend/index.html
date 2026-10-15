@@ -98,6 +98,11 @@
 
   <!-- Main Content Container -->
   <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+    <details open class="mb-5 bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-4">
+      <summary class="cursor-pointer text-sm font-semibold">後端工作動態 <span id="backend-work-count" class="text-gray-400 font-normal ml-2">等待連線</span></summary>
+      <p id="backend-last-update" class="text-xs text-gray-500 mt-2">等待後端回報，連線後約每秒更新</p>
+      <div id="backend-work-list" class="mt-3 max-h-48 overflow-y-auto space-y-2 text-xs text-gray-300">等待後端回報工作狀態</div>
+    </details>
 
     <!-- TAB 1: BROWSE -->
     <section id="tab-browse" class="tab-content space-y-6">
@@ -145,7 +150,7 @@
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
         </svg>
-        <span>載入影片中...</span>
+        <span id="browse-loading-message" role="status">載入影片中...</span>
       </div>
 
       <!-- Pagination -->
@@ -170,6 +175,7 @@
           <button id="pause-tasks-button" onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button>
           <button id="resume-tasks-button" onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button>
           <button id="retry-tasks-button" onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重試所選</button>
+          <button id="clear-completed-button" onclick="clearCompletedTasks()" disabled title="只從下載清單移除已完成紀錄，保留影片及下載歷史" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">清除已完成項目</button>
           <button onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
           <button id="cancel-tasks-button" onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消所選 (0)</button>
           <button onclick="openQuickDownloadModal()" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
@@ -421,12 +427,17 @@
   <!-- Client-side Logic -->
   <script>
     let currentSite = 'JableTV';
+    let latestDownloadTasks = [];
+    let backendActivity = {activities: []};
+    let browseLoading = false;
     let currentPage = 1;
     let currentCategoryUrl = '';
     let currentSearchQuery = '';
     const selection = createVideoSelection({startDownload: startSingleDownload});
     const taskSelection = createTaskSelection({cancelTask, taskAction});
     const busyTaskActions = new Set();
+    let clearingCompleted = false;
+    let completedTaskCount = 0;
     let watcherTargetsData = {};
 
     // WebSocket connection
@@ -445,13 +456,17 @@
           const msg = JSON.parse(event.data);
           if (msg.type === 'tasks') {
             renderTasks(msg.data);
+          } else if (msg.type === 'activity') {
+            renderBackendActivity(msg.data);
           } else if (msg.type === 'daemon_status' && !msg.connected) {
+            document.getElementById('backend-last-update').textContent = '後端重新連線中，畫面保留最後回報狀態';
             document.getElementById('daemon-status-badge').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> 守護進程重新連線中...';
           }
         } catch (e) {}
       };
 
       ws.onclose = () => {
+        document.getElementById('backend-last-update').textContent = '連線中斷，畫面保留最後回報狀態';
         document.getElementById('daemon-status-badge').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span> 連線中斷，重試中...';
         setTimeout(initWebSocket, 2000);
       };
@@ -507,6 +522,8 @@
     // Site selection
     async function selectSite(site) {
       const requestId = ++browseRequestId;
+      browseLoading = false;
+      document.getElementById('browse-loading-message').textContent = '讀取站台分類中…';
       currentCategoryUrl = '';
       currentSearchQuery = '';
       categoryBrowser?.render([], '');
@@ -575,6 +592,8 @@
       const loader = document.getElementById('browse-loading');
       grid.innerHTML = '';
       selection.setVisible([]);
+      browseLoading = true;
+      document.getElementById('browse-loading-message').textContent = '請求已送出，等待後端讀取影片清單…';
       loader.classList.remove('hidden');
       document.getElementById('search-warning').textContent = '';
 
@@ -591,6 +610,7 @@
         const res = await resp.json();
         if (requestId !== browseRequestId) return;
         if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
+        browseLoading = false;
         loader.classList.add('hidden');
         renderVideos(res.videos || []);
         document.getElementById('search-warning').textContent = res.warning || '';
@@ -599,6 +619,7 @@
         document.getElementById('btn-prev-page').disabled = (currentPage <= 1);
       } catch (e) {
         if (requestId !== browseRequestId) return;
+        browseLoading = false;
         loader.classList.add('hidden');
         showBrowseError('清單讀取失敗：' + e.message);
       }
@@ -673,9 +694,35 @@
       await fetchBrowse();
     }
 
+    function renderBackendActivity(data = backendActivity) {
+      backendActivity = data;
+      const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
+      const running = (data.activities || []).filter(item => item.state === 'running');
+      const recent = (data.activities || []).filter(item => item.state !== 'running').slice(0, 3);
+      const downloads = latestDownloadTasks.filter(task => ['preparing','downloading','subtitles','publishing','uploading','pausing','cancelling'].includes(task.status));
+      document.getElementById('backend-work-count').textContent = `執行中 ${running.length + downloads.length} 項`;
+      if (data.observed_at) document.getElementById('backend-last-update').textContent = `後端回報：${new Date(data.observed_at * 1000).toLocaleTimeString('zh-TW')}（約每秒更新）`;
+      const rows = [...running, ...recent].map(item => {
+        const state = item.state === 'running' ? '執行中' : item.state === 'failed' ? '失敗' : '完成';
+        const parts = Object.values(item.parts || {}).map(message => `<div class="text-gray-400 ml-3 mt-1">${safe(message)}</div>`).join('');
+        return `<div class="border-l-2 ${item.state === 'failed' ? 'border-rose-500' : 'border-brand-600'} pl-3"><span class="text-white">${safe(item.title)} ${safe(item.site)}</span> · ${state} · ${safe(item.elapsed_seconds)} 秒<div class="mt-1">${safe(item.message)}</div>${parts}</div>`;
+      });
+      rows.splice(running.length, 0, ...downloads.map(task => `<div class="border-l-2 border-sky-500 pl-3"><span class="text-white">${safe(task.name || '下載任務')}</span><div class="mt-1">${safe(task.phase || task.status)}${task.phase_total ? ` · ${safe(task.phase_done)} / ${safe(task.phase_total)}` : ''}</div></div>`));
+      document.getElementById('backend-work-list').innerHTML = rows.join('') || '目前沒有執行中的工作';
+      if (browseLoading) {
+        const current = running.find(item => item.site === currentSite && item.page === currentPage &&
+          (currentSearchQuery ? item.title === '搜尋影片' && item.query === currentSearchQuery : item.title === '載入影片清單'));
+        if (current) document.getElementById('browse-loading-message').textContent = `${current.message} · 已執行 ${current.elapsed_seconds} 秒`;
+      }
+    }
+
     // Render Tasks in Downloads Tab
     function renderTasks(tasks) {
       const container = document.getElementById('tasks-container');
+      latestDownloadTasks = tasks;
+      renderBackendActivity();
+      completedTaskCount = tasks.filter(task => task.status === 'completed').length;
+      document.getElementById('clear-completed-button').disabled = clearingCompleted || !completedTaskCount;
       const priority = {downloading: 0, preparing: 1, uploading: 1, subtitles: 1, publishing: 1, pausing: 1, cancelling: 1, pending: 2, paused: 3};
       tasks = [...tasks]
         .sort((a, b) => (priority[a.status] ?? 4) - (priority[b.status] ?? 4));
@@ -743,6 +790,7 @@
                   `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-10 px-3.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
               </div>
             </div>
+            ${t.phase ? `<p class="text-xs text-gray-400">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
             ${t.error ? `<p role="alert" class="text-sm text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : ''}
             <!-- Progress Bar -->
             <div class="space-y-1">
@@ -758,6 +806,29 @@
         `;
       }).join('');
       taskSelection.update();
+    }
+
+    async function clearCompletedTasks() {
+      if (clearingCompleted || !completedTaskCount) return;
+      clearingCompleted = true;
+      const button = document.getElementById('clear-completed-button');
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/download/action', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action: 'clear_completed'})
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || '清除已完成項目失敗');
+        const refresh = await fetch('/api/download/tasks');
+        if (!refresh.ok) throw new Error('清單更新失敗，請稍候重新整理');
+        renderTasks((await refresh.json()).tasks || []);
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        clearingCompleted = false;
+        button.disabled = !completedTaskCount;
+      }
     }
 
     async function taskAction(action, taskId) {

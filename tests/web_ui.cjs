@@ -165,6 +165,26 @@ async function run() {
   release({ok:true,json:async()=>({success:true})});
   assert.equal(await firstAction, true);
   assert.equal(submissions, 1);
+  const clearRequests = [];
+  context.renderTasks([{task_id:'done', status:'completed'}, {task_id:'keep', status:'downloading'}]);
+  assert.equal(element('clear-completed-button').disabled, false);
+  context.fetch = async (path, options) => {
+    clearRequests.push(path);
+    if (options) {
+      assert.deepEqual(JSON.parse(options.body), {action:'clear_completed'});
+      return {ok:true, json:async()=>({success:true, removed:1})};
+    }
+    return {ok:true, json:async()=>({tasks:[{task_id:'keep',status:'downloading'}]})};
+  };
+  await Promise.all([context.clearCompletedTasks(), context.clearCompletedTasks()]);
+  assert.deepEqual(clearRequests, ['/api/download/action','/api/download/tasks']);
+  assert.equal(element('clear-completed-button').disabled, true);
+  assert.match(element('tasks-container').innerHTML, /data-task-id="keep"/);
+  context.renderTasks([{task_id:'done',status:'completed'}]);
+  context.fetch = async () => ({ok:false,json:async()=>({success:false,error:'clear failed'})});
+  await context.clearCompletedTasks();
+  assert.equal(element('clear-completed-button').disabled, false);
+  assert.equal(alerts.at(-1), 'clear failed');
   console.log('Video/task selection, batch cancellation, failure retention and NAS password UI: PASS');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

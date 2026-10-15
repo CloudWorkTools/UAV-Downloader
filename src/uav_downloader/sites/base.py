@@ -15,7 +15,7 @@ except Exception:
     _use_cffi = False
 import urllib.request
 import m3u8
-from uav_downloader.core import config
+from uav_downloader.core import config, activity
 from uav_downloader.core.storage import StorageWriteError, storage_open, storage_fs
 from Crypto.Cipher import AES
 from uav_downloader.core.config import headers
@@ -170,7 +170,8 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
     if not order:
         order = list(mirrors)
     saw_real = False
-    for host in order:
+    for index, host in enumerate(order, 1):
+        activity.report(f'連線 {site_key} 站台（鏡像 {index}/{len(order)}）')
         target = _swap_host(url, host)
         base_hdrs = dict(headers_factory(host) or {}) if headers_factory else {}
         ov = config.get_cf_override(host)
@@ -197,7 +198,9 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
                     transport_failures += 1
                     continue
                 if r.status_code == 429 and rate_limit_waits:
-                    time.sleep(rate_limit_waits.pop(0))   # rate limited: wait, then same host again
+                    wait = rate_limit_waits.pop(0)
+                    activity.report(f'站台限制請求速度，等待 {wait} 秒後重試')
+                    time.sleep(wait)   # rate limited: wait, then same host again
                     continue
                 break
             if r is None:
@@ -807,6 +810,8 @@ class M3U8Crawler:
                 try: storage_fs(p).remove(p)
                 except OSError: pass
         n = len(self._tsList)
+        stage = getattr(self, '_stage_callback', lambda *args: None)
+        stage('合併影片片段', 0, n)
         print(f'開始合成影片...共有 {n} 個片段', flush=True)
 
         # Keep the full-size merge and remux copies on the selected download
@@ -835,14 +840,17 @@ class M3U8Crawler:
                     with storage_open(seg, 'rb') as f:
                         shutil.copyfileobj(f, out, 1024 * 1024)
                     remaining -= 1
+                    stage('合併影片片段', n - remaining, n)
                     print(f'\r合成影片中, 剩餘 {remaining} 個片段', end="")
             print()
             if self._cancel_job:
                 return 0
 
+            stage('重新封裝 MP4，讀取及寫回目的地', 0, 0)
             ok = self._remux_to_mp4(merged, out_mp4, workdir)
             if self._cancel_job:
                 return 0
+            stage('儲存合成影片', 0, 0)
             if ok:
                 moved = self._cancellable_move(out_mp4, part)
             else:

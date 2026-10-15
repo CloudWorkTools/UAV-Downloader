@@ -20,7 +20,7 @@ from uav_downloader.apps.watch_categories import (
     SUPJAV_GROUPS,
 )
 from uav_downloader.core import config
-from uav_downloader.core import firecrawl
+from uav_downloader.core import firecrawl, activity
 from uav_downloader.core.history import get_history_manager
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.daemon import nas
@@ -114,7 +114,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
             elif path == "/api/categories":
                 site = query.get("site", ["JableTV"])[0]
-                categories = BrowseService.get_categories(site)
+                with activity.track('載入分類', site):
+                    categories = BrowseService.get_categories(site)
                 return self._send_json({
                     "site": site,
                     "categories": categories,
@@ -133,7 +134,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
             elif path == "/api/download/tasks":
                 tasks = self.task_manager.list_tasks()
-                return self._send_json({"tasks": tasks})
+                return self._send_json({"tasks": tasks, "activities": activity.snapshot(), "observed_at": time.time()})
 
             elif path == "/api/download/task":
                 task_id = query.get("task_id", [""])[0]
@@ -205,7 +206,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     cats = BrowseService.get_categories(site)
                     url = cats[0]["url"] if cats else "https://jable.tv/latest-updates/"
 
-                result = BrowseService.fetch_videos(site, url, page)
+                with activity.track('載入影片清單', site, page=page):
+                    result = BrowseService.fetch_videos(site, url, page)
                 return self._send_json(result)
 
             elif path == "/api/search":
@@ -217,7 +219,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     return self._send_error("請提供搜尋關鍵字", 400)
 
                 try:
-                    result = BrowseService.search_videos(site, query, page)
+                    with activity.track('搜尋影片', site, query, page):
+                        result = BrowseService.search_videos(site, query, page)
                 except ValueError as exc:
                     return self._send_error(str(exc), 400)
                 return self._send_json(result)
@@ -249,10 +252,15 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
             elif path == '/api/download/action':
                 action, task_id = body.get('action'), body.get('task_id')
+                if action == 'clear_completed':
+                    return self._send_json({'success': True, 'removed': self.task_manager.clear_completed()})
                 if action == 'test_destination':
                     if task_id is not None and (not isinstance(task_id, str) or not task_id):
                         return self._send_error('task_id 必須是文字', 400)
-                    return self._send_json(self.task_manager.check_destination(task_id))
+                    with activity.track('測試下載目的地'):
+                        activity.report('建立、寫入、重新命名、讀回與刪除測試中')
+                        result = self.task_manager.check_destination(task_id)
+                    return self._send_json(result)
                 operations = {'pause': self.task_manager.pause_task,
                               'resume': self.task_manager.restart_task,
                               'retry': self.task_manager.restart_task,

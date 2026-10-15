@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from functools import lru_cache
 from itertools import count
 import re
@@ -12,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
+from uav_downloader.core import activity
 
 from uav_downloader.sites.hanime1 import (
     Hanime1Browser,
@@ -43,6 +45,7 @@ class BrowseService:
         browser = SITES.get(site_name)
         if not browser:
             raise ValueError(f"不支援的站台: {site_name}")
+        activity.report('讀取站台分類與標籤目錄')
         return browser.fetch_categories()
 
     @staticmethod
@@ -96,6 +99,7 @@ class BrowseService:
             if catalog_url in visited:
                 continue
             visited.add(catalog_url)
+            activity.report(f'讀取標籤目錄第 {len(visited)} 頁')
             response, _, reason = fetch_with_mirrors(
                 SITES[site_name]._get_scraper(), catalog_url, site_key,
                 lambda resp: resp.status_code == 200 and bool(
@@ -140,7 +144,9 @@ class BrowseService:
 
         page_url = cls.get_page_url(site_name, base_url, page)
         try:
+            activity.report(f'讀取第 {page} 頁影片清單')
             raw_videos = browser.fetch_page(page_url)
+            activity.report(f'整理第 {page} 頁影片資料')
             videos = []
             for item in raw_videos or []:
                 videos.append({
@@ -151,6 +157,7 @@ class BrowseService:
                     "date": item.get("date", ""),
                     "author": item.get("author", ""),
                 })
+            activity.report(f'第 {page} 頁影片清單完成，共 {len(videos)} 筆')
             return {
                 "site": site_name,
                 "page": page,
@@ -160,6 +167,7 @@ class BrowseService:
                 "blocked": False,
             }
         except MirrorsBlockedError:
+            activity.report('站台防護阻擋，無法取得清單', state='failed')
             return {
                 "site": site_name,
                 "page": page,
@@ -170,6 +178,7 @@ class BrowseService:
                 "error": "Cloudflare 或站台防護阻擋",
             }
         except Exception as exc:
+            activity.report('影片清單讀取失敗', state='failed')
             return {
                 "site": site_name,
                 "page": page,
@@ -213,7 +222,9 @@ class BrowseService:
             urls = cls._search_urls(site_name, terms[0], bucket)
             if len(urls) == 1:
                 return cls.fetch_videos(site_name, urls[0], page)
+        activity.report('比對標題與標籤的交集')
         videos = cls._search_term(site_name, terms, bucket)
+        activity.report(f'交集核對完成，共 {len(videos)} 筆結果')
         start = (page - 1) * 24
         selected = videos[start:start + 24]
         return {
@@ -228,10 +239,12 @@ class BrowseService:
         for url in cls._search_urls(site_name, term, bucket):
             seen = set()
             for page in count(1):
+                activity.report(f'條件「{term}」：讀取第 {page} 頁', part=term)
                 result = cls.fetch_videos(site_name, url, page)
                 if result.get('blocked') or result.get('error'):
                     raise RuntimeError(f"關鍵字「{term}」查詢失敗：{result.get('error') or '站台防護阻擋'}")
                 if not result['videos']:
+                    activity.report(f'條件「{term}」：此來源已讀完 {page - 1} 頁', part=term)
                     break
                 videos = {}
                 for video in result['videos']:
@@ -243,6 +256,7 @@ class BrowseService:
                 if not videos or not set(videos) - seen:
                     raise RuntimeError('原站重複分頁或回傳無效影片，無法確認完整搜尋結果')
                 seen.update(videos)
+                activity.report(f'條件「{term}」：已讀第 {page} 頁，累計 {len(seen)} 筆', part=term)
                 yield videos
 
     @classmethod
@@ -260,7 +274,10 @@ class BrowseService:
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             while not any(state['done'] for state in states):
-                list(pool.map(advance, states))
+                futures = [pool.submit(copy_context().run, advance, state) for state in states]
+                for future in futures:
+                    future.result()
+            activity.report('已讀完一個條件，正在核對全部候選影片')
             seed = min((state for state in states if state['done']),
                        key=lambda state: len(state['videos']))
             candidates = dict(seed['videos'])

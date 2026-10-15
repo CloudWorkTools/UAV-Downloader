@@ -45,12 +45,19 @@ class DownloadTask:
     total_segments: int = 0
     speed_bps: float = 0.0
     error: Optional[str] = None
+    phase: str = ''
+    phase_done: int = 0
+    phase_total: int = 0
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     job: Any = None
     thread: Optional[threading.Thread] = None
     cancelled_event: threading.Event = field(default_factory=threading.Event)
     paused_event: threading.Event = field(default_factory=threading.Event)
+
+    def set_phase(self, message, done=0, total=0):
+        self.phase, self.phase_done, self.phase_total = message, done, total
+        self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
         destination = self.dest
@@ -75,6 +82,9 @@ class DownloadTask:
             "download_cover": self.download_cover,
             "resolution": self.resolution,
             "max_workers": self.max_workers,
+            "phase": self.phase,
+            "phase_done": self.phase_done,
+            "phase_total": self.phase_total,
         }
 
     def _format_speed(self) -> str:
@@ -283,6 +293,7 @@ class TaskManager:
             task.job = None
             task.error = None
             task.status = 'pending'
+            task.set_phase('等待下載')
             task.speed_bps = 0
             task.updated_at = datetime.now(timezone.utc).isoformat()
             self._queue.append(task_id)
@@ -300,6 +311,15 @@ class TaskManager:
             del self._tasks[task_id]
             self._save_tasks()
             return True
+
+    def clear_completed(self) -> int:
+        with self._lock:
+            ids = [task_id for task_id, task in self._tasks.items()
+                   if task.status == 'completed' and task_id not in self._active]
+            for task_id in ids:
+                del self._tasks[task_id]
+            self._save_tasks()
+            return len(ids)
 
     def check_destination(self, task_id=None):
         task = self.get_task(task_id) if task_id else None
@@ -436,6 +456,7 @@ class TaskManager:
             self._save_tasks()
             return
 
+        task.set_phase('連線下載目的地')
         storage = ExitStack()
         direct_smb = task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "smb"
         try:
@@ -444,6 +465,7 @@ class TaskManager:
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "direct":
                 nas.direct_destination(task.nas_settings)
 
+            task.set_phase('測試實際下載目的地')
             probe_destination(task.dest)
 
             if existing_video(task.dest, task.url):
@@ -481,6 +503,7 @@ class TaskManager:
                 task.downloaded_segments = 0
                 task.total_segments = 0
             self._save_tasks()
+            task.set_phase('讀取影片資訊與下載來源')
             job = M3U8Sites.CreateSite(
                 task.url,
                 savepath=task.files.workdir,
@@ -539,6 +562,7 @@ class TaskManager:
                 if task.cancelled_event.is_set() or task.paused_event.is_set():
                     return
                 task.downloaded_segments = downloaded
+                task.set_phase('下載影片片段', downloaded, total)
                 task.total_segments = total
                 task.speed_bps = speed
                 if total > 0:
@@ -546,6 +570,7 @@ class TaskManager:
                 task.updated_at = datetime.now(timezone.utc).isoformat()
 
             job._progress_callback = progress_cb
+            job._stage_callback = task.set_phase
 
             ok = job.start_download()
 
@@ -567,6 +592,7 @@ class TaskManager:
             # Check for AI subtitles if enabled (default false)
             if task.enable_subtitles and task.subtitle_mode != "none":
                 task.status = "subtitles"
+                task.set_phase('處理影片字幕')
                 task.updated_at = datetime.now(timezone.utc).isoformat()
                 self._run_subtitles(task, job)
 
@@ -576,12 +602,14 @@ class TaskManager:
             video_file = os.path.join(task.files.workdir, f"{task.name}.mp4")
             if not storage_fs(video_file).isfile(video_file):
                 raise OSError("下載器未產生完成的影片，已保留暫存檔")
+            task.set_phase('發布完成檔案至下載目的地')
             task.files.publish(task.cancelled_event)
             if task.cancelled_event.is_set():
                 self._finish_task(task, "cancelled")
                 return
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode", "upload") == "upload":
                 task.status = "uploading"
+                task.set_phase('傳送影片至 NAS')
                 task.updated_at = datetime.now(timezone.utc).isoformat()
                 nas.upload_video(task.nas_settings,
                                  os.path.join(task.dest, f"{task.name}.mp4"),
@@ -675,5 +703,7 @@ class TaskManager:
         with self._lock:
             task.status = ('cancelling' if task.cancelled_event.is_set() else
                            'pausing' if task.paused_event.is_set() else status)
+            if task.status == 'completed':
+                task.set_phase('影片已儲存完成')
             task.updated_at = datetime.now(timezone.utc).isoformat()
         self._save_tasks()

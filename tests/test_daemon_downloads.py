@@ -296,6 +296,9 @@ def test_pause_resume_keeps_segments_and_settings(manager, monkeypatch, tmp_path
         work = Path(job.dest_folder())
         workdirs.append(work)
         if len(workdirs) == 1:
+            job._stage_callback('合併影片片段', 3, 8)
+            assert task.to_dict()['phase'] == '合併影片片段'
+            assert (task.phase_done, task.phase_total) == (3, 8)
             (work / 'segment.ts').write_bytes(b'keep')
             assert manager.pause_task(task.task_id)
             assert task.status == 'pausing'
@@ -438,3 +441,33 @@ def test_restored_cancel_removes_only_owned_workspace(manager, tmp_path):
     assert restored.cancel_task(task.task_id)
     assert not Path(task.files.workdir).exists()
     assert unrelated.read_bytes() == b'original'
+
+
+def test_clear_completed_keeps_files_history_and_other_states(manager, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    folder = tmp_path / 'videos'
+    folder.mkdir()
+    statuses = ['completed', 'completed', 'failed', 'downloading', 'paused', 'pending', 'cancelled', 'skipped']
+    tasks = []
+    for i, status in enumerate(statuses):
+        task = manager.add_task(f'https://missav.ai/mimk-{300+i}')
+        task.status = status
+        tasks.append(task)
+    manager._active[tasks[1].task_id] = tasks[1]
+    video = folder / 'MIMK-300.mp4'
+    cover = folder / 'MIMK-300.jpg'
+    subtitles = folder / 'MIMK-300.srt'
+    for path in (video, cover, subtitles):
+        path.write_bytes(b'keep unchanged')
+    tm.get_history_manager().record_download(tasks[0].url, title='MIMK-300', dest_dir=str(folder), file_path=str(video))
+    tasks[0].files = SimpleNamespace(cleanup=MagicMock(side_effect=AssertionError('Never clean files')))
+    assert manager.clear_completed() == 1
+    assert manager.get_task(tasks[0].task_id) is None
+    assert all(manager.get_task(task.task_id) is task for task in tasks[1:])
+    assert tm.get_history_manager().find_downloaded(tasks[0].url) is not None
+    for path in (video, cover, subtitles):
+        assert path.read_bytes() == b'keep unchanged'
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert restored.get_task(tasks[0].task_id) is None
+    assert len(restored.list_tasks()) == len(tasks) - 1
+    assert manager.clear_completed() == 0

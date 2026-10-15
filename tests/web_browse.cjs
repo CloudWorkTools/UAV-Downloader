@@ -114,6 +114,15 @@ async function run() {
   assert.equal(pending[++index].path, '/api/browse', 'Switching sites exits search mode');
   respond(pending[index], {videos:[]});
   await switching;
+  vm.runInContext("currentSite='JableTV'; currentSearchQuery='MIMK'; currentPage=1; browseLoading=true", context);
+  context.renderBackendActivity({observed_at:1700000000, activities:[{title:'搜尋影片',site:'JableTV',query:'MIMK',page:1,state:'running',elapsed_seconds:12,message:'讀取第 4 頁',parts:{MIMK:'已讀取 4 頁'}}]});
+  assert.match(element('browse-loading-message').textContent, /讀取第 4 頁.*12 秒/);
+  assert.match(element('backend-work-list').innerHTML, /已讀取 4 頁/);
+  context.renderBackendActivity({activities:[{title:'搜尋影片',site:'MissAV',query:'other',page:1,state:'running',elapsed_seconds:1,message:'wrong query'}]});
+  assert.ok(!element('browse-loading-message').textContent.includes('wrong query'));
+  context.renderBackendActivity({activities:[{title:'<script>',state:'failed',message:'<img onerror=alert(1)>',elapsed_seconds:1}]});
+  assert.ok(!element('backend-work-list').innerHTML.includes('<img onerror'));
+  assert.match(element('backend-work-list').innerHTML, /&lt;img/);
   console.log('Search pagination, page reset, category/site reset, preview and request races: PASS');
 }
 run().catch(e => {console.error(e);process.exitCode=1;});
