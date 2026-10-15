@@ -61,10 +61,12 @@ Canonical v3 assets and legacy aliases are both generated from that one build.
 
 Web 服務位於 `uav-web/`，透過 JSON API 呼叫 Python daemon。Rust 不接觸 NAS 密碼的永久儲存，也不直接呼叫爬蟲。
 
-`daemon/nas.py` 提供設定讀寫、連線測試及影片傳送。HTTP handler 呼叫設定介面；任務管理器在加入任務時保存目的地快照，直接模式在下載前驗證 NAS 掛載並保留目的檔案，傳送模式在影片與字幕完成後呼叫傳送介面。NAS 模組不回呼任務管理器，傳送取消透過事件傳入。
+`daemon/nas.py` 提供設定讀寫、連線測試及影片傳送。HTTP handler 呼叫設定介面；任務管理器在加入任務時保存目的地快照，原生 SMB 模式在任務期間註冊獨立儲存連線，進階掛載模式在下載前驗證 NAS 掛載，兩者都保留目的檔案，傳送模式在影片與字幕完成後呼叫傳送介面。NAS 模組不回呼任務管理器，傳送取消透過事件傳入。
+
+`core/storage.py` 提供共用檔案操作介面，本機操作沿用標準函式庫。`core/smb_storage.py` 以 SMB 帳密處理 NAS 檔案，並透過隨機網址、只監聽 loopback 的單檔讀取介面支援媒體工具；合成結果以有界記憶體串流寫回 SMB。虛擬 SMB 路徑失去連線時一律失敗，不會落到本機檔案系統。網站解析不需要知道帳密或掛載方式。
 
 `uav-web/frontend/video-selection.js` 只管理批次選取與送出，由頁面傳入下載方法與完成回呼。
 
 `uav-web/frontend/nas-settings.js` 只管理 NAS 表單，以 `load`、`payload` 與 `testConnection` 接入設定頁面。一般下載設定及影片瀏覽仍由現有頁面管理，新增 NAS 欄位不會修改網站爬蟲。
 
-擴充測試分別位於 `tests/test_nas.py`、`tests/test_daemon.py` 與 `tests/web_ui.cjs`。容器啟動檢查由 `scripts/check_web_container.sh` 執行，上游同步的判斷流程見[上游更新維護](upstream-sync.md)。
+擴充測試分別位於 `tests/test_nas.py`、`tests/test_smb_storage.py`、`tests/test_daemon.py` 與 `tests/web_ui.cjs`。容器啟動檢查由 `scripts/check_web_container.sh` 執行，上游同步的判斷流程見[上游更新維護](upstream-sync.md)。

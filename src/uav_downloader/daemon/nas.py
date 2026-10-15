@@ -17,6 +17,7 @@ from urllib.parse import unquote, urlsplit
 
 from Crypto.Cipher import AES
 from uav_downloader.core.paths import product_data_dir
+from uav_downloader.core.storage import SMB_PATH_ROOT, registered_storage, storage_fs
 
 _lock = threading.RLock()
 _FIELDS = ('enabled', 'mode', 'host', 'share', 'directory', 'username', 'direct_path')
@@ -113,19 +114,21 @@ def prepare_settings(body):
         raise NasError('NAS 設定格式錯誤')
     old = load_settings()
     result = {'enabled': body.get('enabled', False), 'mode': body.get('mode', 'upload')}
-    if result['mode'] not in ('upload', 'direct'):
+    if result['mode'] not in ('upload', 'direct', 'smb'):
         raise NasError('不支援的 NAS 儲存模式')
     for key in ('host', 'share', 'directory', 'username', 'direct_path'):
         value = body.get(key, '')
         if not isinstance(value, str) or len(value) > (4096 if key == 'direct_path' else 255) or any(ord(c) < 32 for c in value):
             raise NasError('NAS 欄位格式錯誤')
         result[key] = value.strip()
+    if result['mode'] != 'direct' and result['direct_path'].lower().startswith('smb:'):
+        result['direct_path'] = ''
     _normalize_address(result)
     password = body.get('password', '')
     if not isinstance(password, str) or len(password) > 1024:
         raise NasError('NAS 密碼格式錯誤')
     same_account = all(result[k] == old[k] for k in ('host', 'username'))
-    result['password'] = password or (load_settings(secret=True)['password'] if result['mode'] == 'upload' and same_account and old['password_saved'] else '')
+    result['password'] = password or (load_settings(secret=True)['password'] if result['mode'] in ('upload', 'smb') and same_account and old['password_saved'] else '')
     if any(c in result['share'] for c in '\\/:*?"<>|') or result['share'] in ('.', '..'):
         raise NasError('共享資料夾名稱不可包含路徑或特殊符號')
     parts = result['directory'].replace('\\', '/').split('/')
@@ -134,7 +137,7 @@ def prepare_settings(body):
     result['directory'] = '\\'.join(p for p in parts if p)
     if result['enabled'] and result['mode'] == 'direct':
         result['direct_path'] = direct_destination(result, probe=True)
-    if result['enabled'] and result['mode'] == 'upload' and not all(result[k] for k in ('host', 'share', 'username', 'password')):
+    if result['enabled'] and result['mode'] in ('upload', 'smb') and not all(result[k] for k in ('host', 'share', 'username', 'password')):
         raise NasError('請填寫 NAS 位址、共享資料夾、帳號及密碼')
     return result
 
@@ -177,7 +180,10 @@ def _connection(settings):
         root = ntpath.join('\\\\' + settings['host'], settings['share'], settings['directory'])
         yield smbclient, root, {'connection_cache': cache}
     except Exception:
-        raise NasError('NAS 連線或傳送失敗，請檢查位址或名稱解析、帳密、共享目錄與寫入權限；本機檔案已保留') from None
+        message = 'NAS 連線或傳送失敗，請檢查位址或名稱解析、帳密、共享目錄與寫入權限'
+        if settings.get('mode', 'upload') == 'upload':
+            message += '；本機檔案已保留'
+        raise NasError(message) from None
     finally:
         smbclient.reset_connection_cache(fail_on_error=False, connection_cache=cache)
 
@@ -261,7 +267,7 @@ def _is_network_path(path):
 def direct_destination(settings, *, probe=False):
     value = settings.get('direct_path', '')
     if isinstance(value, str) and value.lower().startswith('smb:'):
-        raise NasError('這是 SMB 連線網址，不是已掛載的絕對路徑。直接儲存請先將 NAS 掛載到系統，再填寫容器內路徑，例如 /nas；帳密連線請選 SMB 傳送模式')
+        raise NasError('這是 SMB 連線網址，不是已掛載的絕對路徑。直接儲存請先將 NAS 掛載到系統，再填寫容器內路徑，例如 /nas；帳密直接連線請選「透過 SMB 直接儲存至 NAS」')
     if not isinstance(value, str) or not os.path.isabs(value):
         raise NasError('請填寫已掛載的 NAS 絕對路徑，例如 /nas 或 Windows 網路路徑')
     try:
@@ -282,21 +288,48 @@ def _target_lock_name(filename):
     return '.uav-' + hashlib.sha256(filename.casefold().encode()).hexdigest() + '.lock'
 
 
+def smb_destination():
+    return os.path.join(SMB_PATH_ROOT, uuid.uuid4().hex)
+
+
+def public_destination(settings, filename=''):
+    from urllib.parse import quote
+    parts = [settings['share'], *settings.get('directory', '').replace('\\', '/').split('/')]
+    if filename:
+        parts.append(filename)
+    return 'smb://' + settings['host'] + '/' + '/'.join(quote(part, safe='') for part in parts if part)
+
+
+@contextmanager
+def open_smb_storage(settings, destination):
+    from uav_downloader.core.smb_storage import SmbStorage
+    backend = SmbStorage(settings, destination)
+    try:
+        with registered_storage(destination, backend):
+            if not backend.isdir(destination):
+                raise NasError('NAS 共享資料夾或子目錄不存在')
+            yield backend
+    finally:
+        backend.close()
+
+
 @contextmanager
 def reserve_direct_target(settings, filename):
-    folder = Path(direct_destination(settings))
-    target = folder / filename
-    lock = folder / _target_lock_name(filename)
+    folder = (settings['_smb_path'] if settings.get('mode') == 'smb'
+              else direct_destination(settings))
+    target = os.path.join(folder, filename)
+    lock = os.path.join(folder, _target_lock_name(filename))
+    filesystem = storage_fs(folder)
     try:
-        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        handle = filesystem.open(lock, 'xb')
     except FileExistsError:
         raise NasError('此 NAS 檔案已有下載任務使用中，請勿重複下載；若服務曾異常中止，請確認後清除 .uav-*.lock') from None
     except OSError:
         raise NasError('NAS 無法保留下載位置，請確認連線與寫入權限') from None
     try:
-        if target.exists() or target.is_symlink():
+        if filesystem.exists(target) or filesystem.islink(target):
             raise NasError('NAS 已存在同名影片，已停止下載以避免覆寫')
         yield
     finally:
-        os.close(fd)
-        lock.unlink(missing_ok=True)
+        handle.close()
+        filesystem.remove(lock)

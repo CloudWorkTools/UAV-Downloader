@@ -2,6 +2,11 @@
 
 import errno
 import re
+import os
+import shutil
+import tempfile
+import threading
+from contextlib import contextmanager
 
 
 def storage_failure_message(message):
@@ -28,7 +33,7 @@ class _StorageFile:
     def __init__(self, path, mode, *args, **kwargs):
         self.path = path
         try:
-            self.file = open(path, mode, *args, **kwargs)
+            self.file = storage_fs(path).open(path, mode, *args, **kwargs)
         except OSError as exc:
             raise StorageWriteError(path, exc) from exc
 
@@ -37,6 +42,10 @@ class _StorageFile:
             return getattr(self.file, method)(*args, **kwargs)
         except OSError as exc:
             raise StorageWriteError(self.path, exc) from exc
+        except Exception:
+            if storage_fs(self.path).remote:
+                raise StorageWriteError(self.path, OSError(errno.EIO, 'NAS SMB I/O failed')) from None
+            raise
 
     def write(self, data):
         written = self._io('write', data)
@@ -72,3 +81,85 @@ class _StorageFile:
 
 def storage_open(path, mode, *args, **kwargs):
     return _StorageFile(path, mode, *args, **kwargs)
+
+
+# Virtual paths are never local folders, including after a task disconnects.
+SMB_PATH_ROOT = os.path.abspath(os.path.join(os.path.sep, '__uav_smb__'))
+_backends = {}
+_backend_lock = threading.RLock()
+
+
+class LocalStorage:
+    remote = False
+
+    def open(self, path, mode, *args, **kwargs):
+        return open(path, mode, *args, **kwargs)
+
+    def stat(self, path, **kwargs):
+        return os.stat(path, **kwargs)
+
+    def exists(self, path):
+        return os.path.exists(path)
+
+    def isfile(self, path):
+        return os.path.isfile(path)
+
+    def isdir(self, path):
+        return os.path.isdir(path)
+
+    def islink(self, path):
+        return os.path.islink(path)
+
+    def getsize(self, path):
+        return os.path.getsize(path)
+
+    def makedirs(self, path, exist_ok=False):
+        return os.makedirs(path, exist_ok=exist_ok)
+
+    def mkdtemp(self, *, prefix, dir):
+        return tempfile.mkdtemp(prefix=prefix, dir=dir)
+
+    def remove(self, path):
+        return os.remove(path)
+
+    def removedirs(self, path):
+        return os.removedirs(path)
+
+    def rmtree(self, path, ignore_errors=False):
+        return shutil.rmtree(path, ignore_errors=ignore_errors)
+
+    def replace(self, source, destination):
+        return os.replace(source, destination)
+
+    publish = replace
+
+    @contextmanager
+    def media_source(self, path):
+        yield path
+
+
+_local = LocalStorage()
+
+
+def storage_fs(path):
+    value = os.fsdecode(path)
+    if value == SMB_PATH_ROOT or value.startswith(SMB_PATH_ROOT + os.path.sep):
+        with _backend_lock:
+            for root, backend in _backends.items():
+                if value == root or value.startswith(root + os.path.sep):
+                    return backend
+        raise StorageWriteError(value, OSError(errno.ENOTCONN, 'NAS SMB connection is not active'))
+    return _local
+
+
+@contextmanager
+def registered_storage(root, backend):
+    with _backend_lock:
+        if root in _backends:
+            raise ValueError('Storage destination is already active')
+        _backends[root] = backend
+    try:
+        yield backend
+    finally:
+        with _backend_lock:
+            _backends.pop(root, None)

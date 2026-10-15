@@ -16,7 +16,7 @@ except Exception:
 import urllib.request
 import m3u8
 from uav_downloader.core import config
-from uav_downloader.core.storage import StorageWriteError, storage_open
+from uav_downloader.core.storage import StorageWriteError, storage_open, storage_fs
 from Crypto.Cipher import AES
 from uav_downloader.core.config import headers
 import concurrent.futures
@@ -617,16 +617,16 @@ class M3U8Crawler:
         return data
 
     def _create_temp_folder(self):
-        if not os.path.exists(self._temp_folder):
+        if not storage_fs(self._temp_folder).exists(self._temp_folder):
             try:
-                os.makedirs(self._temp_folder, exist_ok=True)
+                storage_fs(self._temp_folder).makedirs(self._temp_folder, exist_ok=True)
             except OSError as exc:
                 raise StorageWriteError(self._temp_folder, exc) from exc
 
     def _create_dest_folder(self):
-        if not os.path.exists(self._dest_folder):
+        if not storage_fs(self._dest_folder).exists(self._dest_folder):
             try:
-                os.makedirs(self._dest_folder, exist_ok=True)
+                storage_fs(self._dest_folder).makedirs(self._dest_folder, exist_ok=True)
             except OSError as exc:
                 raise StorageWriteError(self._dest_folder, exc) from exc
 
@@ -640,11 +640,11 @@ class M3U8Crawler:
     def get_url_full(self): return self._url
 
     def is_target_video_exist(self):
-        return os.path.exists(self._get_video_savename())
+        return storage_fs(self._get_video_savename()).exists(self._get_video_savename())
 
     def is_target_image_exist(self):
         if self._imageUrl is None: return True
-        return os.path.exists(self._get_image_savename())
+        return storage_fs(self._get_image_savename()).exists(self._get_image_savename())
 
     def _m3u8_headers(self):
         """Merged headers for m3u8 and segment requests."""
@@ -752,14 +752,14 @@ class M3U8Crawler:
     def _deleteMp4Chunks(self):
         for i in range(len(self._tsList)):
             saveName = self._seg_savename(i)
-            if os.path.exists(saveName):
-                try: os.remove(saveName)
+            if storage_fs(saveName).exists(saveName):
+                try: storage_fs(saveName).remove(saveName)
                 except OSError: pass
 
     def _cancellable_move(self, src, dst):
         """Move src->dst honoring cancel. Fast same-volume rename, else chunked copy."""
         try:
-            os.replace(src, dst)   # same volume: instant + atomic
+            storage_fs(src).replace(src, dst)   # same volume: instant + atomic
             return True
         except OSError as exc:
             import errno
@@ -772,11 +772,11 @@ class M3U8Crawler:
                         break
                     buf = fi.read(4 * 1024 * 1024)
                     if not buf:
-                        try: os.remove(src)
+                        try: storage_fs(src).remove(src)
                         except OSError: pass
                         return True
                     fo.write(buf)
-            try: os.remove(dst)      # cancelled mid-copy
+            try: storage_fs(dst).remove(dst)      # cancelled mid-copy
             except OSError: pass
             return False
         except StorageWriteError:
@@ -789,8 +789,10 @@ class M3U8Crawler:
         saveName = self._get_video_savename()
         part = saveName + '.part'
         for p in (saveName, part):
-            if os.path.exists(p):
-                try: os.remove(p)
+            if storage_fs(p).exists(p):
+                if p == saveName and storage_fs(p).remote:
+                    raise StorageWriteError(p, FileExistsError('NAS 已存在同名影片'))
+                try: storage_fs(p).remove(p)
                 except OSError: pass
         n = len(self._tsList)
         print(f'開始合成影片...共有 {n} 個片段', flush=True)
@@ -800,7 +802,7 @@ class M3U8Crawler:
         # using it here could consume almost two extra copies of a video after
         # the segment progress had already reached 100%.
         try:
-            workdir = tempfile.mkdtemp(
+            workdir = storage_fs(self._dest_folder).mkdtemp(
                 prefix='uav-remux-', dir=self._dest_folder)
         except OSError as exc:
             raise StorageWriteError(self._dest_folder, exc) from exc
@@ -814,7 +816,7 @@ class M3U8Crawler:
                     if self._cancel_job:
                         return 0
                     seg = self._seg_savename(idx)
-                    if not os.path.exists(seg):
+                    if not storage_fs(seg).exists(seg):
                         if not self._cancel_job:
                             print(f"\n片段 {idx} 遺失, 合成失敗!!!", flush=True)
                         return 0
@@ -835,26 +837,26 @@ class M3U8Crawler:
                 print('[合成] ffmpeg 無法使用或重新封裝失敗，改用原始合併（檔案可播放，但部分播放器/NAS 拖曳進度可能異常）', flush=True)
                 moved = self._cancellable_move(merged, part)
             if self._cancel_job or not moved:
-                if os.path.exists(part):
-                    try: os.remove(part)
+                if storage_fs(part).exists(part):
+                    try: storage_fs(part).remove(part)
                     except OSError: pass
                 return 0
             try:
-                os.replace(part, saveName)
+                storage_fs(part).publish(part, saveName)
             except OSError as exc:
                 raise StorageWriteError(saveName, exc) from exc
             published = True
         finally:
-            shutil.rmtree(workdir, ignore_errors=True)
-            if not published and os.path.exists(part):
-                try: os.remove(part)
+            storage_fs(workdir).rmtree(workdir, ignore_errors=True)
+            if not published and storage_fs(part).exists(part):
+                try: storage_fs(part).remove(part)
                 except OSError: pass
 
         spent_time = time.time() - start_time
         print(f'\n合成完成，花費 {spent_time:.1f} 秒', flush=True)
         self._deleteMp4Chunks()
         if self._temp_folder != self._dest_folder:
-            try: os.removedirs(self._temp_folder)
+            try: storage_fs(self._temp_folder).removedirs(self._temp_folder)
             except OSError: pass
         return spent_time
 
@@ -863,6 +865,11 @@ class M3U8Crawler:
         if not ffmpeg:
             print('[合成] 找不到 ffmpeg，略過重新封裝', flush=True)
             return False
+        backend = storage_fs(merged_ts)
+        if backend.remote:
+            return backend.remux_to_mp4(
+                merged_ts, out_mp4, ffmpeg, lambda: self._cancel_job,
+                lambda process: setattr(self, '_ffmpeg_proc', process))
         ff_dir = _ffmpeg_safe_dir(workdir)
         in_arg = os.path.join(ff_dir, os.path.basename(merged_ts))
         out_arg = os.path.join(ff_dir, os.path.basename(out_mp4))
@@ -895,7 +902,7 @@ class M3U8Crawler:
         if self._cancel_job:
             return False
         try:
-            if proc.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 0:
+            if proc.returncode == 0 and storage_fs(out_mp4).exists(out_mp4) and storage_fs(out_mp4).getsize(out_mp4) > 0:
                 return True
         except OSError as exc:
             raise StorageWriteError(out_mp4, exc) from exc
@@ -923,7 +930,7 @@ class M3U8Crawler:
             return False
         seq_num, url = task
         saveName = self._seg_savename(seq_num)
-        if os.path.exists(saveName):
+        if storage_fs(saveName).exists(saveName):
             # Segment already on disk (e.g. from a resumed job) — drop from pending
             with self._speed_lock:
                 self._pending_set.discard((seq_num, url))
@@ -952,7 +959,7 @@ class M3U8Crawler:
             with storage_open(part, 'wb') as f:
                 f.write(content_ts)
             try:
-                os.replace(part, saveName)
+                storage_fs(part).publish(part, saveName)
             except OSError as exc:
                 raise StorageWriteError(saveName, exc) from exc
             with self._speed_lock:
@@ -1029,7 +1036,7 @@ class M3U8Crawler:
         self._pending_set = set()
         for i, url in enumerate(self._tsList):
             saveName = self._seg_savename(i)
-            if not os.path.exists(saveName):
+            if not storage_fs(saveName).exists(saveName):
                 self._pending_set.add((i, url))
         if self._pending_set:
             self._startCrawl()
@@ -1053,9 +1060,9 @@ class M3U8Crawler:
         try:
             temp = getattr(self, '_temp_folder', None)
             dest = getattr(self, '_dest_folder', None)
-            if (temp and os.path.isdir(temp) and
+            if (temp and storage_fs(temp).isdir(temp) and
                     os.path.abspath(temp) != os.path.abspath(dest or '')):
-                shutil.rmtree(temp, ignore_errors=True)
+                storage_fs(temp).rmtree(temp, ignore_errors=True)
         except Exception:
             pass
 

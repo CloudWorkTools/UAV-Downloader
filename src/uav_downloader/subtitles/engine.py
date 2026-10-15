@@ -16,6 +16,7 @@ import json
 import math
 import multiprocessing
 import os
+import uuid
 import re
 import secrets
 import shutil
@@ -38,7 +39,7 @@ import requests
 
 from uav_downloader.core import config
 from uav_downloader.core.storage import (
-    StorageWriteError, storage_open, storage_failure_message)
+    StorageWriteError, storage_open, storage_failure_message, storage_fs)
 from uav_downloader.core.paths import product_data_dir
 from uav_downloader.metadata import PRODUCT_NAME
 from uav_downloader.sites.base import locate_ffmpeg
@@ -548,7 +549,7 @@ def render_srt(cues: Iterable[SrtCue]) -> str:
 
 def _read_srt_text(path: str) -> str:
     try:
-        with open(path, 'rb') as handle:
+        with storage_open(path, 'rb') as handle:
             payload = handle.read(MAX_SRT_FILE_BYTES + 1)
     except OSError as exc:
         raise SubtitleError('Subtitle file could not be read') from exc
@@ -685,7 +686,7 @@ def _sha256(
         path: str,
         cancel_check: Optional[CancelCheck] = None) -> str:
     digest = hashlib.sha256()
-    with open(path, 'rb') as handle:
+    with storage_open(path, 'rb') as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b''):
             _check_cancel(cancel_check)
             digest.update(chunk)
@@ -1527,13 +1528,14 @@ def _extract_audio(video_path: str, wav_path: str, log_path: str,
     if not ffmpeg:
         raise _asr_failure('audio')
     try:
-        _run_process([
-            ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-            '-i', video_path, '-vn', '-ac', '1', '-ar', '16000',
-            '-c:a', 'pcm_s16le', wav_path,
-        ], log_path, cancel_check,
-            disk_guard_path=os.path.dirname(wav_path),
-            timeout_seconds=AUDIO_EXTRACTION_TIMEOUT_SECONDS)
+        with storage_fs(video_path).media_source(video_path) as source:
+            _run_process([
+                ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+                '-i', source, '-vn', '-ac', '1', '-ar', '16000',
+                '-c:a', 'pcm_s16le', wav_path,
+            ], log_path, cancel_check,
+                disk_guard_path=os.path.dirname(wav_path),
+                timeout_seconds=AUDIO_EXTRACTION_TIMEOUT_SECONDS)
     except SubtitleCancelled:
         raise
     except SubtitleStorageError:
@@ -2949,6 +2951,18 @@ def _run_recognition(
 
 
 def _atomic_copy(source: str, destination: str) -> None:
+    if storage_fs(source).remote or storage_fs(destination).remote:
+        filesystem = storage_fs(destination)
+        filesystem.makedirs(os.path.dirname(destination), exist_ok=True)
+        temporary = destination + '.' + uuid.uuid4().hex + '.tmp'
+        try:
+            with storage_open(source, 'rb') as src, storage_open(temporary, 'xb') as dst:
+                shutil.copyfileobj(src, dst, 256 * 1024)
+            filesystem.replace(temporary, destination)
+        finally:
+            if filesystem.exists(temporary):
+                filesystem.remove(temporary)
+        return
     destination_dir = os.path.dirname(destination)
     os.makedirs(destination_dir, exist_ok=True)
     descriptor, temp = tempfile.mkstemp(
@@ -4601,6 +4615,11 @@ def run_llm_translation_diagnostic(destination_path: str) -> dict:
 
 @contextmanager
 def _destination_workspace(video_path):
+    if storage_fs(video_path).remote:
+        # ASR executables need local WAV input; video and final sidecars stay on SMB.
+        with tempfile.TemporaryDirectory(prefix='uav-subtitle-audio-') as workspace:
+            yield workspace
+        return
     destination = os.path.dirname(os.path.abspath(video_path))
     try:
         workspace = tempfile.TemporaryDirectory(
@@ -4625,6 +4644,19 @@ def _atomic_write_text(destination: str, text: str) -> None:
 
 
 def _atomic_write_text_impl(destination: str, text: str) -> None:
+    if storage_fs(destination).remote:
+        filesystem = storage_fs(destination)
+        filesystem.makedirs(os.path.dirname(destination), exist_ok=True)
+        temporary = destination + '.' + uuid.uuid4().hex + '.tmp'
+        try:
+            with storage_open(temporary, 'x', encoding='utf-8', newline='\n') as handle:
+                handle.write(text)
+                handle.flush()
+            filesystem.replace(temporary, destination)
+        finally:
+            if filesystem.exists(temporary):
+                filesystem.remove(temporary)
+        return
     destination_dir = os.path.dirname(destination)
     os.makedirs(destination_dir, exist_ok=True)
     descriptor, temp = tempfile.mkstemp(
@@ -4777,8 +4809,8 @@ def _media_identity(path: str) -> str:
     """Return a path-free, copy-stable sampled identity for downloaded media."""
     try:
         digest = hashlib.sha256()
-        with open(path, 'rb') as handle:
-            metadata = os.fstat(handle.fileno())
+        with storage_open(path, 'rb') as handle:
+            metadata = storage_fs(path).stat(path) if storage_fs(path).remote else os.fstat(handle.fileno())
             size = int(metadata.st_size)
             sample_size = 64 * 1024
             offsets = sorted({
@@ -4792,7 +4824,7 @@ def _media_identity(path: str) -> str:
                 digest.update(offset.to_bytes(8, 'big', signed=False))
                 digest.update(len(chunk).to_bytes(4, 'big', signed=False))
                 digest.update(chunk)
-            after = os.fstat(handle.fileno())
+            after = storage_fs(path).stat(path) if storage_fs(path).remote else os.fstat(handle.fileno())
     except OSError as exc:
         raise SubtitleError('Downloaded video file was not found') from exc
     if (
@@ -4860,17 +4892,17 @@ def _empty_subtitle_provenance() -> dict:
 def _load_subtitle_provenance(path: str) -> dict:
     """Load bounded app metadata; malformed metadata never owns a subtitle."""
     source_path = path
-    if not os.path.isfile(source_path):
+    if not storage_fs(source_path).isfile(source_path):
         legacy_path = _legacy_subtitle_provenance_path(path)
-        if os.path.isfile(legacy_path):
+        if storage_fs(legacy_path).isfile(legacy_path):
             source_path = legacy_path
     try:
         if (
-                not os.path.isfile(source_path)
-                or os.path.getsize(source_path) <= 0
-                or os.path.getsize(source_path) > MAX_SUBTITLE_PROVENANCE_BYTES):
+                not storage_fs(source_path).isfile(source_path)
+                or storage_fs(source_path).getsize(source_path) <= 0
+                or storage_fs(source_path).getsize(source_path) > MAX_SUBTITLE_PROVENANCE_BYTES):
             return _empty_subtitle_provenance()
-        with open(source_path, 'rb') as handle:
+        with storage_open(source_path, 'rb') as handle:
             raw = handle.read(MAX_SUBTITLE_PROVENANCE_BYTES + 1)
         if len(raw) > MAX_SUBTITLE_PROVENANCE_BYTES:
             return _empty_subtitle_provenance()
@@ -4945,7 +4977,7 @@ def _subtitle_track_state(
         source_identity: Optional[str] = None,
 ) -> _SubtitleTrackState:
     try:
-        if not os.path.isfile(path) or os.path.getsize(path) <= 0:
+        if not storage_fs(path).isfile(path) or storage_fs(path).getsize(path) <= 0:
             return _SubtitleTrackState('missing')
     except OSError:
         return _SubtitleTrackState('missing')
@@ -5032,7 +5064,7 @@ def _record_derived_track(
 
 def _existing(path: str) -> bool:
     try:
-        if not os.path.isfile(path) or os.path.getsize(path) <= 0:
+        if not storage_fs(path).isfile(path) or storage_fs(path).getsize(path) <= 0:
             return False
         return bool(parse_srt(_read_srt_text(path)))
     except (OSError, SubtitleError):
@@ -5066,7 +5098,7 @@ def generate_subtitles(video_path: str, mode,
     if not requested:
         return SubtitleResult((), ())
     video_path = os.path.abspath(video_path)
-    if not os.path.isfile(video_path):
+    if not storage_fs(video_path).isfile(video_path):
         raise SubtitleError('Downloaded video file was not found')
     paths = subtitle_paths(video_path)
 
@@ -5226,7 +5258,7 @@ def generate_subtitles(video_path: str, mode,
                     provenance_changed = False
                     for language in stale_languages:
                         try:
-                            os.remove(paths[language])
+                            storage_fs(paths[language]).remove(paths[language])
                         except FileNotFoundError:
                             pass
                         except OSError as exc:

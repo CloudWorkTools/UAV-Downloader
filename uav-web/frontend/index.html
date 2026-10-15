@@ -253,8 +253,9 @@
             <label for="nas-storage-mode" class="block">下載儲存位置</label>
             <select id="nas-storage-mode" onchange="NasSettings.updateMode()" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
               <option value="local">本機目錄</option>
-              <option value="direct">直接儲存至 NAS（已掛載路徑）</option>
+              <option value="smb">透過 SMB 直接儲存至 NAS（帳密登入，不需掛載）</option>
               <option value="upload">先下載到本機，再以 SMB 傳送至 NAS</option>
+              <option value="direct">使用系統已掛載的 NAS 路徑（進階）</option>
             </select>
             <div id="nas-direct-fields" class="hidden space-y-2">
               <label for="nas-direct-path" class="block">NAS 已掛載路徑（不是 SMB 網址）</label>

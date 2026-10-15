@@ -419,8 +419,8 @@ class SiteSupJav(M3U8Crawler):
     @staticmethod
     def _safe_remove(path):
         try:
-            if path and os.path.exists(path):
-                os.remove(path)
+            if path and storage_fs(path).exists(path):
+                storage_fs(path).remove(path)
         except Exception:
             pass
 
@@ -471,7 +471,7 @@ class SiteSupJav(M3U8Crawler):
             raise Exception("下載不完整（連線中斷？請重試）")
         self._progress_unit = 'postprocess'
         try:
-            os.replace(part, out)
+            storage_fs(part).publish(part, out)
         except OSError as exc:
             raise StorageWriteError(out, exc) from exc
         except Exception:
@@ -618,7 +618,7 @@ class SiteSupJav(M3U8Crawler):
         return done, total
 
     def _download_direct_serial(self, part, ref, start_time):
-        done = os.path.getsize(part) if os.path.exists(part) else 0
+        done = storage_fs(part).getsize(part) if storage_fs(part).exists(part) else 0
         total = 0
         retries = 0
         session = _get_session()

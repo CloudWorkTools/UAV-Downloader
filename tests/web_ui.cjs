@@ -71,6 +71,10 @@ async function run() {
   assert.equal(nas.payload().mode, 'direct');
   assert.equal(nas.payload().direct_path, '/nas/videos');
   assert.equal(element('setting-download-dir').disabled, true);
+  nas.load({enabled: true, mode: 'smb', host: 'nas.local', username: 'nas-user', password_saved: true});
+  assert.equal(nas.payload().mode, 'smb');
+  assert.equal(nas.payload().host, 'nas.local');
+  assert.equal(element('setting-download-dir').disabled, true);
   nas.load({enabled: false});
   assert.equal(nas.payload().enabled, false);
   assert.equal(element('setting-download-dir').disabled, false);

@@ -42,11 +42,12 @@ Web 介面目前沒有登入驗證，因此範例只開放本機連線。遠端�
 
 在「系統設定」的「下載儲存位置」選擇：
 
-- **直接儲存至 NAS**：填入系統已掛載的 NAS 路徑，例如容器內的 `/nas`。影片分段、合成檔與字幕都寫入 NAS，不先保留完整影片到本機。未掛載或已存在同名影片時會停止下載。
+- **透過 SMB 直接儲存至 NAS**：填寫 NAS 位址、帳號與密碼，直接以 SMB 寫入分段與影片，不需預先掛載。支援 `smb://nas.local/download` 或 `nas.local/download`。
+- **使用系統已掛載的 NAS 路徑（進階）**：填入系統已掛載的 NAS 路徑，例如容器內的 `/nas`。影片分段、合成檔與字幕都寫入 NAS，不先保留完整影片到本機。未掛載或已存在同名影片時會停止下載。
 - **先下載到本機，再以 SMB 傳送至 NAS**：填寫 NAS IP／主機名稱或 SMB 網址，並分開填寫帳號、密碼。網址可省略 `smb://`；網址內的共享資料夾與子目錄會優先套用。完成後傳送，保留本機檔案。
 - **本機目錄**：使用一般本機下載目錄。
 
-先按「測試連線」，再按「儲存設定」。直接模式使用作業系統的 NAS 掛載，SMB 帳密表單則用於下載後傳送模式。Docker 掛載方式見 [Web 與 NAS 使用說明](docs/web-ui.md)。
+先按「測試連線」，再按「儲存設定」。SMB 直接儲存與下載後傳送都使用表單的帳密；只有進階掛載模式使用作業系統掛載。Docker 掛載方式見 [Web 與 NAS 使用說明](docs/web-ui.md)。
 
 密碼會加密保存在掛載的 `/config`，網頁只顯示是否已保存。重新編輯時留空可沿用密碼；變更 NAS 位址或帳號時須重新輸入。備份設定時請一併保留 `nas.json` 與 `nas.key`，並限制備份的讀取權限。能讀取這兩個檔案的系統管理者仍可解密密碼。
 
@@ -59,11 +60,11 @@ Web 介面目前沒有登入驗證，因此範例只開放本機連線。遠端�
 | 原作者下載核心 | `src/uav_downloader/sites/`、`core/`、`subtitles/` | 網站解析、下載與字幕 |
 | Web HTTP 與靜態頁面 | `uav-web/` | Rust 網頁服務、JSON API 轉接、瀏覽介面 |
 | 背景任務 | `src/uav_downloader/daemon/` | 下載佇列及下載核心的銜接 |
-| NAS 擴充 | `src/uav_downloader/daemon/nas.py` | NAS 掛載驗證、加密保存與完成檔案傳送 |
+| NAS 擴充 | `src/uav_downloader/daemon/nas.py` | SMB 連線、掛載驗證、加密保存與完成檔案傳送 |
 | 批次選取介面 | `uav-web/frontend/video-selection.js` | 全選、跨頁選取與批次送出 |
 | NAS 設定介面 | `uav-web/frontend/nas-settings.js` | NAS 表單、密碼保存狀態與連線測試 |
 
-NAS 模組不修改網站爬蟲；任務管理器在下載前檢查 NAS 掛載，或在影片完成後呼叫傳送介面。模組責任與新增功能規範見 [架構說明](docs/architecture.md)及 [貢獻指南](CONTRIBUTING.md)。
+各網站共用儲存介面，解析程式不接觸 NAS 帳密；任務管理器負責選擇原生 SMB、系統掛載或下載後傳送模式。模組責任與新增功能規範見 [架構說明](docs/architecture.md)及 [貢獻指南](CONTRIBUTING.md)。
 
 ## 上游更新
 

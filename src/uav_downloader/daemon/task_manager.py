@@ -15,7 +15,7 @@ from uav_downloader import sites as M3U8Sites
 from uav_downloader.core import config
 from uav_downloader.daemon import nas
 from uav_downloader.core.history import get_history_manager
-from uav_downloader.core.storage import StorageWriteError
+from uav_downloader.core.storage import StorageWriteError, storage_fs
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.sites.base import MirrorsBlockedError
 
@@ -44,10 +44,13 @@ class DownloadTask:
     cancelled_event: threading.Event = field(default_factory=threading.Event)
 
     def to_dict(self) -> Dict[str, Any]:
+        destination = self.dest
+        if self.nas_settings.get("enabled") and self.nas_settings.get("mode") == "smb":
+            destination = nas.public_destination(self.nas_settings)
         return {
             "task_id": self.task_id,
             "url": self.url,
-            "dest": self.dest,
+            "dest": destination,
             "name": self.name,
             "status": self.status,
             "progress": round(self.progress, 1),
@@ -121,6 +124,12 @@ class TaskManager:
                     raise nas.NasError("直接 NAS 模式不接受其他下載目錄，請先修改 NAS 儲存設定")
             else:
                 nas_settings = nas.load_settings(secret=True)
+                if nas_settings.get("mode") == "smb":
+                    if dest:
+                        raise nas.NasError("直接 SMB 模式不接受本機下載目錄，請修改 NAS 連線設定")
+                    nas.test_connection(nas_settings)
+                    target_dest = nas.smb_destination()
+                    nas_settings['_smb_path'] = target_dest
 
         task_id = f"task_{uuid.uuid4().hex[:10]}"
         task = DownloadTask(
@@ -207,7 +216,10 @@ class TaskManager:
             return
 
         storage = ExitStack()
+        direct_smb = task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "smb"
         try:
+            if direct_smb:
+                storage.enter_context(nas.open_smb_storage(task.nas_settings, task.dest))
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "direct":
                 nas.direct_destination(task.nas_settings)
 
@@ -247,7 +259,7 @@ class TaskManager:
                 return
 
             task.name = job.target_name() or "video"
-            if task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "direct":
+            if task.nas_settings.get("enabled") and task.nas_settings.get("mode") in ("direct", "smb"):
                 if os.path.normcase(os.path.abspath(job.dest_folder())) != os.path.normcase(task.dest):
                     raise nas.NasError("下載器未使用指定的 NAS 目錄，已停止下載")
                 storage.enter_context(nas.reserve_direct_target(task.nas_settings, f"{task.name}.mp4"))
@@ -300,11 +312,17 @@ class TaskManager:
             try:
                 history = get_history_manager()
                 video_file = os.path.join(job.dest_folder() or task.dest, f"{task.name}.mp4")
+                destination = job.dest_folder() or task.dest
+                file_path = video_file if storage_fs(video_file).exists(video_file) else ""
+                if direct_smb:
+                    destination = nas.public_destination(task.nas_settings)
+                    if file_path:
+                        file_path = nas.public_destination(task.nas_settings, task.name + '.mp4')
                 history.record_download(
                     url=task.url,
                     title=task.name,
-                    dest_dir=job.dest_folder() or task.dest,
-                    file_path=video_file if os.path.exists(video_file) else "",
+                    dest_dir=destination,
+                    file_path=file_path,
                     site=site_from_url(task.url),
                 )
             except Exception:
@@ -334,7 +352,7 @@ class TaskManager:
         try:
             from uav_downloader.subtitles.engine import generate_subtitles
             target_file = os.path.join(job.dest_folder() or task.dest, f"{task.name}.mp4")
-            if os.path.isfile(target_file):
+            if storage_fs(target_file).isfile(target_file):
                 generate_subtitles(
                     target_file,
                     mode=task.subtitle_mode,
