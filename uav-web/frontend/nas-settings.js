@@ -19,6 +19,10 @@ window.NasSettings = (() => {
       document.getElementById('nas-direct-fields').classList.toggle('hidden', mode !== 'direct');
       document.getElementById('nas-upload-fields').classList.toggle('hidden', mode !== 'upload');
       document.getElementById('nas-address-help').classList.toggle('hidden', mode !== 'upload');
+      document.getElementById('nas-credentials-help').textContent = mode === 'direct'
+        ? '帳密可加密保存供 SMB 連線使用。已掛載路徑使用系統掛載時的帳密，這裡的帳密不會自動掛載 NAS。'
+        : mode === 'local' ? '可先填寫 NAS 帳號與密碼；選擇 SMB 傳送模式後使用。'
+        : '填寫 NAS 帳號與密碼，按測試連線後儲存設定；密碼會加密保存。';
       document.getElementById('nas-test-button').disabled = mode === 'local';
       document.getElementById('setting-download-dir').disabled = mode === 'direct';
     }
