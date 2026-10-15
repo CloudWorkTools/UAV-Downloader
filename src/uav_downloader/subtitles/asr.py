@@ -90,7 +90,7 @@ def save_settings(value):
                 or type(clear) is not bool):
             raise ValueError('辨識 API 金鑰格式錯誤')
         old = _read()
-        # Never carry credentials to a different server when its URL changes.
+        # Saved credentials belong to one server URL.
         if not clear and not key and raw['base_url'] == old.get('base_url', DEFAULT_URL):
             raw['api_key_encrypted'] = old.get('api_key_encrypted', '')
         folder = _folder()

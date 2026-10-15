@@ -6,7 +6,7 @@ Japanese speech recognition runs via the official whisper.cpp Windows build.
 English and Taiwan Traditional Chinese translation defaults to pinned,
 integrity-checked local models.  A user can instead opt in to a configured LLM
 provider, in which case only Japanese subtitle cue text is sent to that
-provider; video and audio always remain on the computer.
+provider. Web jobs may delegate recognition to a configured ASR service.
 """
 
 from __future__ import annotations
@@ -5346,7 +5346,7 @@ def generate_subtitles(video_path: str, mode,
                     )
                     if uses_api:
                         # External providers translate Japanese directly to
-                        # the target. Video and audio never leave the computer.
+                        # the target. Only cue text is sent to the translator.
                         chinese_source = japanese_source
                         chinese_source_language = 'ja'
                         chinese_source_identity = japanese_source_identity

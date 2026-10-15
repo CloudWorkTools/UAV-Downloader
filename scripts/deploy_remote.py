@@ -129,9 +129,6 @@ def main():
                 subprocess.run(['docker', 'pull', dependency], check=True)
             images += ['uav-firecrawl-api:2.11.162', 'uav-firecrawl-browser:2.11.162',
                        'uav-firecrawl-postgres:2.11.162', 'redis:7.4-alpine', 'rabbitmq:3.13-management']
-            files = {filename: (ROOT / filename).read_text() for filename in
-                     ('docker-compose.yml',)}
-            bundle = base64.b64encode(json.dumps(files).encode()).decode()
         archive = Path(temporary) / 'image.tar'
         subprocess.run(['docker', 'save', '-o', str(archive), *images], check=True)
         with archive.open('rb') as source:
