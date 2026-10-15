@@ -371,6 +371,7 @@
     let currentSite = 'JableTV';
     let currentPage = 1;
     let currentCategoryUrl = '';
+    let currentSearchQuery = '';
     const selection = createVideoSelection({startDownload: url => startSingleDownload(url, false), onComplete: () => switchTab('queue')});
     let watcherTargetsData = {};
 
@@ -453,6 +454,7 @@
     async function selectSite(site) {
       const requestId = ++browseRequestId;
       currentCategoryUrl = '';
+      currentSearchQuery = '';
       categoryBrowser?.render([], '');
       document.getElementById('selected-category-label').textContent = '';
       currentSite = site;
@@ -505,6 +507,7 @@
     function onCategoryChange() {
       const select = document.getElementById('category-select');
       currentCategoryUrl = select.value;
+      currentSearchQuery = '';
       categoryBrowser?.select(currentCategoryUrl);
       document.getElementById('selected-category-label').textContent = select.selectedOptions[0]?.textContent || '';
       currentPage = 1;
@@ -521,12 +524,12 @@
       loader.classList.remove('hidden');
 
       try {
-        const resp = await fetch('/api/browse', {
+        const resp = await fetch(currentSearchQuery ? '/api/search' : '/api/browse', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             site: currentSite,
-            url: currentCategoryUrl,
+            ...(currentSearchQuery ? {query: currentSearchQuery} : {url: currentCategoryUrl}),
             page: currentPage
           })
         });
@@ -605,30 +608,9 @@
     async function executeSearch() {
       const q = document.getElementById('search-input').value.trim();
       if (!q) return;
-      const requestId = ++browseRequestId;
+      currentSearchQuery = q;
       currentPage = 1;
-      const grid = document.getElementById('video-grid');
-      const loader = document.getElementById('browse-loading');
-      grid.innerHTML = '';
-      selection.setVisible([]);
-      loader.classList.remove('hidden');
-
-      try {
-        const resp = await fetch('/api/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ site: currentSite, query: q, page: 1 })
-        });
-        const res = await resp.json();
-        if (requestId !== browseRequestId) return;
-        if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
-        loader.classList.add('hidden');
-        renderVideos(res.videos || []);
-      } catch (e) {
-        if (requestId !== browseRequestId) return;
-        loader.classList.add('hidden');
-        showBrowseError('搜尋失敗：' + e.message);
-      }
+      await fetchBrowse();
     }
 
     // Render Tasks in Downloads Tab
