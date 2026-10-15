@@ -564,3 +564,57 @@ def test_resume_unfinished_repairs_waiting_queue_and_wakes_dispatcher(manager, m
     start.assert_called_once()
     manager.resume_unfinished()
     assert manager._queue == [queued.task_id, orphan.task_id]
+
+
+def test_remove_duplicate_codes_preserves_live_tasks_files_history_and_distinct_codes(manager, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    live = manager.add_task('https://missav.ai/mimk-054')
+    duplicate = manager.add_task('https://jable.tv/videos/MIMK-054-chinese-subtitle/')
+    done = manager.add_task('https://missav.ai/mimk-120')
+    done.status = 'completed'
+    done_duplicate = manager.add_task('https://jable.tv/videos/mimk-120/')
+    done_duplicate.status = 'completed'
+    partial = manager.add_task('https://missav.ai/mimk-121')
+    partial.status = 'failed'
+    partial.files = tm.DownloadFiles(partial.dest, partial.task_id)
+    fragment = Path(partial.files.workdir, 'keep.ts')
+    fragment.write_bytes(b'resumable')
+    partial_duplicate = manager.add_task('https://jable.tv/videos/mimk-121/')
+    partial_duplicate.status = 'skipped'
+    distinct = manager.add_task('https://missav.ai/mimk-0540')
+    manager._queue = [live.task_id, distinct.task_id]
+    manager._active[live.task_id] = live
+    videos = [Path(done.dest, 'MIMK-120.mp4'), Path(done.dest, 'MIMK-120-copy.mp4')]
+    for video in videos:
+        video.write_bytes(b'completed video')
+    tm.get_history_manager().record_download(done.url, title='MIMK-120')
+    before_history = tm.get_history_manager().history_file.read_bytes()
+    assert manager.remove_duplicates() == {'removed': 3, 'protected': 0}
+    assert set(manager._tasks) == {live.task_id, done.task_id, partial.task_id, distinct.task_id}
+    assert manager._queue == [live.task_id, distinct.task_id]
+    assert fragment.read_bytes() == b'resumable'
+    assert all(video.read_bytes() == b'completed video' for video in videos)
+    assert tm.get_history_manager().history_file.read_bytes() == before_history
+    assert manager.remove_duplicates() == {'removed': 0, 'protected': 0}
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert set(restored._tasks) == set(manager._tasks)
+
+
+def test_remove_duplicates_keeps_both_tasks_when_each_has_recovery_state(manager):
+    first = manager.add_task('https://missav.ai/mimk-200')
+    first.status = 'failed'
+    first.cleanup_unverified = True
+    second = manager.add_task('https://jable.tv/videos/mimk-200/')
+    second.status = 'paused'
+    manager._queue.clear()
+    assert manager.remove_duplicates() == {'removed': 0, 'protected': 1}
+    assert set(manager._tasks) == {first.task_id, second.task_id}
+
+
+def test_remove_duplicates_does_not_merge_unidentified_titles(manager):
+    a = manager.add_task('https://example.com/watch?id=1')
+    b = manager.add_task('https://example.com/watch?id=2')
+    a.name = b.name = 'same title without code'
+    a.status = b.status = 'cancelled'
+    manager._queue.clear()
+    assert manager.remove_duplicates() == {'removed': 0, 'protected': 0}

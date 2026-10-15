@@ -222,6 +222,31 @@ async function run() {
   assert.deepEqual(waitingRequests, ['/api/download/action','/api/download/tasks']);
   assert.match(element('queue-action-status').textContent, /6 筆執行中.*12 筆等待/);
   assert.equal(element('resume-unfinished-button').disabled, false);
+  context.renderTasks([{task_id:'keep-live',status:'downloading'}, {task_id:'duplicate',status:'skipped'}]);
+  assert.equal(element('remove-duplicate-tasks-button').disabled, false);
+  const duplicateRequests = [];
+  let finishDuplicates;
+  context.fetch = (path, options) => {
+    duplicateRequests.push(path);
+    if (options) {
+      assert.deepEqual(JSON.parse(options.body), {action:'remove_duplicates'});
+      return new Promise(resolve => {finishDuplicates=resolve;});
+    }
+    return Promise.resolve({ok:true,json:async()=>({tasks:[{task_id:'keep-live',status:'downloading'}]})});
+  };
+  const removal = context.removeDuplicateTasks();
+  await context.removeDuplicateTasks();
+  assert.equal(element('remove-duplicate-tasks-button').disabled, true);
+  finishDuplicates({ok:true,json:async()=>({success:true,removed:1,protected:1})});
+  await removal;
+  assert.deepEqual(duplicateRequests, ['/api/download/action','/api/download/tasks']);
+  assert.match(element('queue-action-status').textContent, /已移除 1.*影片與下載歷史均保留.*另保留 1/);
+  assert.equal(element('remove-duplicate-tasks-button').disabled, true);
+  context.renderTasks([{task_id:'a',status:'failed'}, {task_id:'b',status:'skipped'}]);
+  context.fetch = async () => ({ok:false,json:async()=>({error:'整理失敗'})});
+  await context.removeDuplicateTasks();
+  assert.equal(element('queue-action-status').textContent, '整理失敗');
+  assert.equal(element('remove-duplicate-tasks-button').disabled, false);
   console.log('Video/task selection, batch cancellation, failure retention and NAS password UI: PASS');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

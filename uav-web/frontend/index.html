@@ -177,6 +177,7 @@
           <button id="pause-tasks-button" onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button>
           <button id="resume-tasks-button" onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button>
           <button id="retry-tasks-button" onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重試所選</button>
+          <button id="remove-duplicate-tasks-button" onclick="removeDuplicateTasks()" disabled title="移除同番號的多餘清單紀錄，保留檔案、歷史及可續傳任務" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">移除重複番號</button>
           <button id="clear-completed-button" onclick="clearCompletedTasks()" disabled title="只從下載清單移除已完成紀錄，保留影片及下載歷史" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">清除已完成項目</button>
           <button onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
           <button id="cancel-tasks-button" onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消所選 (0)</button>
@@ -450,6 +451,7 @@
     const taskSelection = createTaskSelection({cancelTask, taskAction});
     const busyTaskActions = new Set();
     let clearingCompleted = false;
+    let removingDuplicates = false;
     let resumingUnfinished = false;
     let completedTaskCount = 0;
     let watcherTargetsData = {};
@@ -822,6 +824,7 @@
     function renderTasks(tasks) {
       const container = document.getElementById('tasks-container');
       latestDownloadTasks = tasks;
+      document.getElementById('remove-duplicate-tasks-button').disabled = removingDuplicates || tasks.length < 2;
       renderBackendActivity();
       document.getElementById('resume-unfinished-button').disabled = resumingUnfinished || !tasks.some(task => ['pending', 'paused', 'failed'].includes(task.status));
       completedTaskCount = tasks.filter(task => task.status === 'completed').length;
@@ -935,6 +938,32 @@
       } finally {
         resumingUnfinished = false;
         button.disabled = !latestDownloadTasks.some(task => ['pending', 'paused', 'failed'].includes(task.status));
+      }
+    }
+
+    async function removeDuplicateTasks() {
+      if (removingDuplicates || latestDownloadTasks.length < 2) return;
+      removingDuplicates = true;
+      const button = document.getElementById('remove-duplicate-tasks-button');
+      const status = document.getElementById('queue-action-status');
+      button.disabled = true;
+      status.textContent = '正在整理重複番號…';
+      try {
+        const response = await fetch('/api/download/action', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action: 'remove_duplicates'})
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || '移除重複番號失敗');
+        status.textContent = `已移除 ${result.removed} 筆重複紀錄，影片與下載歷史均保留。` + (result.protected ? `另保留 ${result.protected} 筆仍在執行或有續傳資料的重複任務。` : '');
+        const refresh = await fetch('/api/download/tasks');
+        if (!refresh.ok) throw new Error('整理已完成，但清單更新失敗，請稍後重新整理');
+        renderTasks((await refresh.json()).tasks || []);
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        removingDuplicates = false;
+        button.disabled = latestDownloadTasks.length < 2;
       }
     }
 

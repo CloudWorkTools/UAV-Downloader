@@ -268,6 +268,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 action, task_id = body.get('action'), body.get('task_id')
                 if action == 'resume_unfinished':
                     return self._send_json({'success': True, **self.task_manager.resume_unfinished()})
+                if action == 'remove_duplicates':
+                    return self._send_json({'success': True, **self.task_manager.remove_duplicates()})
                 if action == 'clear_completed':
                     return self._send_json({'success': True, 'removed': self.task_manager.clear_completed()})
                 if action == 'test_destination':
