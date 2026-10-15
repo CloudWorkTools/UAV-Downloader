@@ -525,11 +525,11 @@ def test_resume_unfinished_requires_no_selection_and_preserves_segments(manager)
     fragment.write_bytes(b'partial video')
     manager._queue.append(tasks[2].task_id)
     result = manager.resume_unfinished()
-    assert result == {'resumed': 2, 'errors': []}
+    assert result == {'resumed': 2, 'errors': [], 'waiting': 3, 'running': 0}
     assert manager._queue == [tasks[2].task_id, tasks[0].task_id, tasks[1].task_id]
     assert [task.status for task in tasks] == ['pending', 'pending', *states[2:]]
     assert fragment.read_bytes() == b'partial video'
-    assert manager.resume_unfinished() == {'resumed': 0, 'errors': []}
+    assert manager.resume_unfinished() == {'resumed': 0, 'errors': [], 'waiting': 3, 'running': 0}
 
 
 def test_resume_unfinished_reports_one_failure_and_continues_others(manager, monkeypatch):
@@ -547,3 +547,20 @@ def test_resume_unfinished_reports_one_failure_and_continues_others(manager, mon
     assert result['resumed'] == 1
     assert result['errors'] == [{'task_id': bad.task_id, 'error': 'NAS 帳號已變更'}]
     assert bad.status == 'failed' and good.status == 'pending'
+
+
+def test_resume_unfinished_repairs_waiting_queue_and_wakes_dispatcher(manager, monkeypatch):
+    queued = manager.add_task('https://missav.ai/mimk-700')
+    orphan = manager.add_task('https://missav.ai/mimk-701')
+    running = manager.add_task('https://missav.ai/mimk-702')
+    running.status = 'downloading'
+    manager._active[running.task_id] = running
+    manager._queue = [queued.task_id]
+    start = MagicMock()
+    monkeypatch.setattr(manager, 'start_dispatcher', start)
+    result = manager.resume_unfinished()
+    assert manager._queue == [queued.task_id, orphan.task_id]
+    assert result['waiting'] == 2 and result['running'] == 1
+    start.assert_called_once()
+    manager.resume_unfinished()
+    assert manager._queue == [queued.task_id, orphan.task_id]

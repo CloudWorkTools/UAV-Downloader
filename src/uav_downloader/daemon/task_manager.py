@@ -303,6 +303,9 @@ class TaskManager:
 
     def resume_unfinished(self):
         with self._lock:
+            for task in self._tasks.values():
+                if task.status == 'pending' and task.task_id not in self._active and task.task_id not in self._queue:
+                    self._queue.append(task.task_id)
             ids = [task.task_id for task in self._tasks.values() if task.status in ('paused', 'failed')]
         resumed, errors = 0, []
         for task_id in ids:
@@ -310,7 +313,10 @@ class TaskManager:
                 resumed += bool(self.restart_task(task_id))
             except ValueError as exc:
                 errors.append({'task_id': task_id, 'error': str(exc)})
-        return {'resumed': resumed, 'errors': errors}
+        self.start_dispatcher()
+        with self._lock:
+            waiting = sum(task.status == 'pending' and task.task_id not in self._active for task in self._tasks.values())
+            return {'resumed': resumed, 'errors': errors, 'waiting': waiting, 'running': len(self._active)}
 
     def remove_task(self, task_id: str) -> bool:
         with self._lock:

@@ -210,6 +210,18 @@ async function run() {
   assert.equal(element('queue-action-status').textContent, '服務暫時無法使用');
   context.renderTasks([{task_id:'already-running',status:'downloading'}, {task_id:'cancelled',status:'cancelled'}]);
   assert.equal(element('resume-unfinished-button').disabled, true);
+  context.renderTasks([{task_id:'waiting',status:'pending',progress:82.5}, {task_id:'active',status:'downloading'}]);
+  assert.equal(element('resume-unfinished-button').disabled, false, 'Waiting partial downloads must allow resume');
+  const waitingRequests = [];
+  context.fetch = async (path, options) => {
+    waitingRequests.push(path);
+    if (options) return {ok:true,json:async()=>({success:true,resumed:0,errors:[],waiting:12,running:6})};
+    return {ok:true,json:async()=>({tasks:[{task_id:'waiting',status:'pending'}]})};
+  };
+  await context.resumeUnfinishedTasks();
+  assert.deepEqual(waitingRequests, ['/api/download/action','/api/download/tasks']);
+  assert.match(element('queue-action-status').textContent, /6 筆執行中.*12 筆等待/);
+  assert.equal(element('resume-unfinished-button').disabled, false);
   console.log('Video/task selection, batch cancellation, failure retention and NAS password UI: PASS');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });
