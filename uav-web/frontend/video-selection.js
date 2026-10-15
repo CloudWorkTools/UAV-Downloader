@@ -1,4 +1,4 @@
-window.createVideoSelection = ({startDownload, onComplete}) => {
+window.createVideoSelection = ({startDownload}) => {
     const selectedUrls = new Set();
     let visibleUrls = [];
     let submittingDownloads = false;
@@ -50,7 +50,6 @@ window.createVideoSelection = ({startDownload, onComplete}) => {
       submittingDownloads = false;
       document.querySelectorAll('#video-grid input[type="checkbox"]').forEach((c, i) => c.checked = selectedUrls.has(visibleUrls[i]));
       update();
-      if (!selectedUrls.size) onComplete();
     }
 
     return {setVisible, has: url => selectedUrls.has(url), togglePage, toggle, clear, download};

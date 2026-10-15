@@ -14,11 +14,13 @@ const element = id => {
 };
 const requests = [];
 const alerts = [];
+const tabChanges = [];
 let failedUrl = '';
 const context = vm.createContext({
   document: {getElementById: element, createElement: () => ({}), querySelectorAll: selector => selector.startsWith('#tasks-container') ? taskBoxes : boxes},
   window: {addEventListener() {}},
   alert: message => alerts.push(message),
+  tabChanges,
   fetch: async (path, options) => {
     assert.equal(path, '/api/download/start');
     const body = JSON.parse(options.body);
@@ -32,7 +34,7 @@ vm.runInContext(fs.readFileSync('uav-web/frontend/task-selection.js', 'utf8'), c
 context.createTaskSelection = context.window.createTaskSelection;
 vm.runInContext(script, context);
 const selection = vm.runInContext('selection', context);
-vm.runInContext("switchTab = () => {}", context);
+vm.runInContext("switchTab = tab => tabChanges.push(tab)", context);
 async function run() {
   context.renderVideos([{url: 'a'}, {url: 'b'}]);
   boxes = [{checked: false}, {checked: false}];
@@ -55,6 +57,16 @@ async function run() {
   failedUrl = '';
   await selection.download();
   assert.equal(element('download-selected-button').disabled, true);
+  vm.runInContext("currentPage = 5; currentSearchQuery = 'saved query'", context);
+  const browseContent = element('video-grid').innerHTML;
+  await context.startSingleDownload('single');
+  element('modal-urls-input').value = 'modal-a\nmodal-b';
+  await context.submitModalUrls();
+  assert.deepEqual(tabChanges, [], 'Adding single, selected or pasted URLs keeps the current tab');
+  assert.equal(vm.runInContext('currentPage', context), 5);
+  assert.equal(vm.runInContext('currentSearchQuery', context), 'saved query');
+  assert.equal(element('video-grid').innerHTML, browseContent);
+  assert.deepEqual(requests.slice(-3), ['single', 'modal-a', 'modal-b']);
   context.renderVideos([]);
   assert.equal(element('select-page-button').disabled, true);
   vm.runInContext(fs.readFileSync('uav-web/frontend/nas-settings.js', 'utf8'), context);
@@ -81,6 +93,16 @@ async function run() {
   nas.load({enabled: false});
   assert.equal(nas.payload().enabled, false);
   assert.equal(element('setting-download-dir').disabled, false);
+  const mixedTasks = ['completed', 'pending', 'uploading', 'downloading', 'failed', 'downloading', 'preparing', 'subtitles', 'cancelling']
+    .map((status, i) => ({task_id: String(i), name: `task-${i}`, status}));
+  context.renderTasks(mixedTasks);
+  const renderedOrder = () => [...element('tasks-container').innerHTML.matchAll(/<h4[^>]*>(task-\d+)<\/h4>/g)].map(match => match[1]);
+  assert.deepEqual(renderedOrder(), ['task-3', 'task-5', 'task-2', 'task-6', 'task-7', 'task-8', 'task-1', 'task-0', 'task-4']);
+  assert.equal(mixedTasks[0].status, 'completed', 'Rendering does not mutate the source order');
+  mixedTasks[3].status = 'completed';
+  mixedTasks[1].status = 'downloading';
+  context.renderTasks(mixedTasks);
+  assert.deepEqual(renderedOrder().slice(0, 2), ['task-1', 'task-5'], 'Live status updates reorder active downloads');
   const tasks = [
     {task_id:'a', status:'pending'}, {task_id:'b', status:'subtitles'},
     {task_id:'c', status:'completed'}, {task_id:'d', status:'failed'},
@@ -107,7 +129,7 @@ async function run() {
     return {ok: id !== 'd', json: async () => ({success:id !== 'd', error:'test failure'})};
   };
   await Promise.all([taskSelection.cancel(), taskSelection.cancel()]);
-  assert.deepEqual(cancellations, ['a','b','d']);
+  assert.deepEqual(cancellations, ['b','a','d']);
   assert.equal(taskSelection.has('d'), true, 'Keep failed cancellations selected for retry');
   assert.equal(element('cancel-tasks-button').textContent, '取消所選 (1)');
   context.renderTasks(tasks.map(t => ({...t, status:'completed'})));

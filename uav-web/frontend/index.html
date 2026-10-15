@@ -414,7 +414,7 @@
     let currentPage = 1;
     let currentCategoryUrl = '';
     let currentSearchQuery = '';
-    const selection = createVideoSelection({startDownload: url => startSingleDownload(url, false), onComplete: () => switchTab('queue')});
+    const selection = createVideoSelection({startDownload: startSingleDownload});
     const taskSelection = createTaskSelection({cancelTask});
     let watcherTargetsData = {};
 
@@ -634,7 +634,7 @@
       });
     }
 
-    async function startSingleDownload(url, navigate = true) {
+    async function startSingleDownload(url) {
       try {
         const resp = await fetch('/api/download/start', {
           method: 'POST',
@@ -643,7 +643,6 @@
         });
         const res = await resp.json();
         if (!resp.ok || !res.success) throw new Error(res.error || '加入下載失敗');
-        if (navigate) switchTab('queue');
         return true;
       } catch (e) {
         alert('加入下載佇列失敗: ' + e);
@@ -666,7 +665,9 @@
     // Render Tasks in Downloads Tab
     function renderTasks(tasks) {
       const container = document.getElementById('tasks-container');
-      tasks = tasks.filter(task => task.status !== 'cancelled' || task.error);
+      const priority = {downloading: 0, preparing: 1, uploading: 1, subtitles: 1, cancelling: 1, pending: 2};
+      tasks = tasks.filter(task => task.status !== 'cancelled' || task.error)
+        .sort((a, b) => (priority[a.status] ?? 3) - (priority[b.status] ?? 3));
       taskSelection.setTasks(tasks);
       const safe = value => String(value || '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
       const badge = document.getElementById('queue-badge');
@@ -759,10 +760,9 @@
       const text = document.getElementById('modal-urls-input').value;
       const urls = text.split('\n').map(u => u.trim()).filter(u => u && !u.startsWith('#'));
       for (const url of urls) {
-        await startSingleDownload(url, false);
+        await startSingleDownload(url);
       }
       closeQuickDownloadModal();
-      switchTab('queue');
     }
 
     // History
