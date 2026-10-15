@@ -265,7 +265,7 @@
             <div id="nas-upload-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-3 hidden">
               <div><label for="nas-host" class="block mb-1">NAS 位址（IP、主機名稱或 SMB 網址）</label><input id="nas-host" type="text" placeholder="smb://nas.local/download 或 nas.local/download" autocomplete="off" aria-describedby="nas-address-help" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
               <div><label for="nas-share" class="block mb-1">共享資料夾（網址已包含時可留空）</label><input id="nas-share" type="text" placeholder="video" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
-              <div><label for="nas-directory" class="block mb-1">子目錄（可留空，須已存在）</label><input id="nas-directory" type="text" placeholder="UAV" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-directory" class="block mb-1">子目錄（可留空，不存在時自動建立）</label><input id="nas-directory" type="text" placeholder="UAV" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
 
             </div>
             <div id="nas-credentials" class="grid grid-cols-1 sm:grid-cols-2 gap-3">

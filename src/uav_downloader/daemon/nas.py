@@ -178,6 +178,8 @@ def _connection(settings):
                                    password=settings['password'], connection_timeout=10,
                                    connection_cache=cache)
         root = ntpath.join('\\\\' + settings['host'], settings['share'], settings['directory'])
+        if settings['directory']:
+            smbclient.makedirs(root, exist_ok=True, connection_cache=cache)
         yield smbclient, root, {'connection_cache': cache}
     except Exception:
         message = 'NAS 連線或傳送失敗，請檢查位址或名稱解析、帳密、共享目錄與寫入權限'
@@ -306,6 +308,8 @@ def open_smb_storage(settings, destination):
     backend = SmbStorage(settings, destination)
     try:
         with registered_storage(destination, backend):
+            if settings['directory']:
+                backend.makedirs(destination, exist_ok=True)
             if not backend.isdir(destination):
                 raise NasError('NAS 共享資料夾或子目錄不存在')
             yield backend

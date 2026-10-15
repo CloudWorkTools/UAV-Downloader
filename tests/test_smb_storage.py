@@ -251,3 +251,13 @@ def test_media_remux_cancellation_stops_process(smb):
                                        ffmpeg, lambda: True, lambda process: processes.append(process) if process else None)
     assert processes and all(process.poll() is not None for process in processes)
     assert not (smb.folder / 'cancelled.mp4').exists()
+
+
+def test_native_smb_creates_missing_nested_directory(smb):
+    settings = {**smb.settings, 'directory': r'new\nested'}
+    destination = nas.smb_destination()
+    for _ in range(2):
+        with nas.open_smb_storage(settings, destination) as backend:
+            assert backend.isdir(destination)
+    assert (smb.folder / 'new' / 'nested').is_dir()
+    assert not Path(destination).exists()

@@ -57,6 +57,7 @@ def test_replacing_unreadable_password(profile):
 class Remote:
     def __init__(self):
         self.files = {}
+        self.directories = set()
         self.fail = False
         self.path = self
 
@@ -73,6 +74,12 @@ class Remote:
             yield stream
         finally:
             self.files[path] = stream.getvalue()
+
+    def makedirs(self, path, exist_ok=False, **kwargs):
+        assert exist_ok
+        if self.fail:
+            raise PermissionError("private credentials should never escape")
+        self.directories.add(path)
 
     def rename(self, src, dst, **kwargs):
         if dst in self.files:
@@ -92,7 +99,7 @@ def remote(monkeypatch):
     remote = Remote()
     monkeypatch.setattr(smbclient, 'register_session', lambda *a, **kw: None)
     monkeypatch.setattr(smbclient, 'reset_connection_cache', lambda **kw: None)
-    for name in ('open_file', 'rename', 'remove'):
+    for name in ('open_file', 'rename', 'remove', 'makedirs'):
         monkeypatch.setattr(smbclient, name, getattr(remote, name))
     monkeypatch.setattr(smbclient.path, 'exists', remote.exists)
     return remote
@@ -101,6 +108,7 @@ def remote(monkeypatch):
 def test_probe_is_removed_and_does_not_save(profile, remote):
     nas.test_connection(profile)
     assert not remote.files
+    assert ntpath.join(r'\\192.168.1.10\video', 'UAV') in remote.directories
     assert not (nas._directory() / 'nas.json').exists()
 
 
@@ -308,3 +316,10 @@ def test_url_and_hostname_reuse_same_saved_password(profile):
     nas.save_settings({**profile, 'host': 'smb://nas.local/video/UAV'})
     result = nas.prepare_settings({**profile, 'host': 'nas.local', 'password': ''})
     assert result['password'] == profile['password']
+
+
+@pytest.mark.parametrize('directory', ['', 'new/nested'])
+def test_probe_creates_only_requested_subdirectories(profile, remote, directory):
+    nas.test_connection({**profile, 'directory': directory})
+    expected = {ntpath.join(r'\\192.168.1.10\video', 'new', 'nested')} if directory else set()
+    assert remote.directories == expected
