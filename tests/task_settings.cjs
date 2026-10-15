@@ -19,8 +19,7 @@ const context = vm.createContext({window: {}, document: {getElementById: element
 vm.runInContext(fs.readFileSync('uav-web/frontend/task-selection.js', 'utf8'), context);
 const selection = context.window.createTaskSelection({});
 selection.setTasks([{task_id: 'a', status: 'paused'}, {task_id: 'b', status: 'downloading'}, {task_id: 'c', status: 'pending'}]);
-selection.toggleAll();
-selection.toggle('c', false);
+selection.toggle('a', true);
 (async () => {
   await selection.edit();
   assert.equal(element('task-edit-count').textContent, 1);
@@ -61,7 +60,7 @@ selection.toggle('c', false);
   assert.equal(sent.dest, undefined);
   assert.equal(sent.subtitle_mode, 'none');
   assert.equal(selection.has('a'), false);
-  assert.equal(selection.has('b'), true);
+  assert.equal(selection.has('b'), false);
   assert.equal(selection.has('c'), false);
   assert.equal(element('task-edit-dialog').open, false);
   for (const mode of ['upload', 'smb', 'direct']) {

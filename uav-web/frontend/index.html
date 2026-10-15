@@ -460,7 +460,7 @@
   <dialog id="task-edit-dialog" aria-labelledby="task-edit-title" class="bg-[#1a1a22] text-gray-100 rounded-xl border border-[#3e3e4e] p-6 w-full max-w-lg backdrop:bg-black/70">
     <form onsubmit="taskSelection.saveEdit(event)" class="space-y-4">
       <h2 id="task-edit-title" class="font-bold">修改所選設定（<span id="task-edit-count">0</span> 個任務）</h2>
-      <p class="text-sm text-gray-400">適用等待中、已暫停、失敗或已取消的任務。執行中的任務請先暫停，再勾選修改。</p>
+      <p class="text-sm text-gray-400">可修改單筆或多筆任務。下載中的任務會在套用時先暫停；設定完成後按「繼續」恢復下載。</p>
       <div class="text-sm space-y-1">
         <label class="flex items-center gap-2"><input id="task-edit-change-staging" type="checkbox" onchange="document.getElementById('task-edit-staging').disabled = !this.checked">修改暫存區</label>
         <input id="task-edit-staging" disabled type="text" placeholder="例如 /downloads/.staging；留空停用" class="w-full bg-[#282832] rounded p-2">

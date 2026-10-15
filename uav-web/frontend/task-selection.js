@@ -5,7 +5,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
   const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'paused', 'failed'].includes(task?.status);
   let tasksById = new Map();
   const canAction = (task, action) => ({
-    edit: task?.subtitles_only ? [] : ['pending', 'paused', 'failed', 'cancelled'],
+    edit: task?.subtitles_only ? [] : ['pending', 'preparing', 'downloading', 'paused', 'failed', 'cancelled'],
     pause: ['pending', 'preparing', 'downloading'], resume: ['paused'],
     retry: ['failed', 'cancelled'], remove: ['completed', 'skipped', 'cancelled', 'failed']
   }[action] || []).includes(task?.status);
@@ -155,9 +155,29 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     save.disabled = true;
     status.textContent = '驗證目的地並儲存中…';
     try {
+      const running = editingIds.filter(id => ['preparing', 'downloading'].includes(tasksById.get(id)?.status));
+      if (running.length) {
+        status.textContent = '正在暫停下載，保留片段後套用設定…';
+        for (const id of running) {
+          const response = await fetch('/api/download/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'pause', task_id:id})});
+          const result = await response.json();
+          if (!response.ok || !result.success) throw new Error(result.error || '任務目前無法暫停，請稍後再試');
+        }
+        let stopped = false;
+        for (let attempt = 0; attempt < 120; attempt++) {
+          const response = await fetch('/api/download/tasks');
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || '無法確認暫停狀態');
+          stopped = running.every(id => !result.tasks.some(task => task.task_id === id && ['preparing', 'downloading', 'pausing'].includes(task.status)));
+          if (stopped) break;
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        if (!stopped) throw new Error('任務仍在暫停中，請等下載停止後再套用');
+      }
       const response = await fetch('/api/download/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || '修改失敗');
+      if (!result.updated.length && result.skipped.length) throw new Error('任務狀態已變更，尚未套用設定；請確認任務已暫停後重試');
       for (const id of result.updated) selected.delete(id);
       document.getElementById('task-edit-password').value = '';
       document.getElementById('queue-action-status').textContent = `已修改 ${result.updated.length} 個任務；略過 ${result.skipped.length} 個（狀態已變更）。已暫停或失敗的任務請按繼續或重試。`;
