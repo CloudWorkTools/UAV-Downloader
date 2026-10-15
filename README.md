@@ -45,6 +45,15 @@
 
 </details>
 
+<details>
+<summary>查看來源重複分頁時保留結果的畫面</summary>
+
+來源重複分頁時，提示停止該來源並保留已確認的交集；其他來源仍可繼續比對。部分來源停止時，不能把目前筆數當成完整總數。
+
+![來源分頁異常時保留 14 筆交集結果，顯示警告並繼續比對其他來源](docs/assets/web-search-warning.png)
+
+</details>
+
 ## 本機啟動
 
 需要 Docker Compose 與 Buildx。唯一的啟動檔是 [docker-compose.yml](docker-compose.yml)，包含 Web、獨立 Firecrawl 與其資料服務。第一次建置會下載 Rust、Python、FFmpeg 與 Firecrawl 的依賴。
