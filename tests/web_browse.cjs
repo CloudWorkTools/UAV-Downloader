@@ -25,6 +25,12 @@ const respond = (request, body, ok=true) => request.resolve({ok, json: async () 
 async function run() {
   context.renderVideos([{url: 'https://example.com/video', thumbnail: 'https://example.com/image.jpg'}]);
   assert.match(cards.at(-1).innerHTML, /referrerpolicy="no-referrer"/, 'Preview must not send the application Referer to image CDNs');
+  assert.match(cards.at(-1).innerHTML, /<a href="https:\/\/example.com\/video" target="_blank" rel="noopener noreferrer"/);
+  assert.match(cards.at(-1).innerHTML, /開啟原頁/);
+  context.renderVideos([{url:'https://example.com/watch?v=1&name="quoted"'}]);
+  assert.match(cards.at(-1).innerHTML, /href="https:\/\/example.com\/watch\?v=1&amp;name=&quot;quoted&quot;"/);
+  context.renderVideos([{url:'javascript:alert(1)'}]);
+  assert.ok(!cards.at(-1).innerHTML.includes('<a href='));
   const first = context.selectSite('JableTV');
   const second = context.selectSite('MissAV');
   respond(pending[1], {categories: [{name:'Latest',url:'https://missav.ai/latest'}]});

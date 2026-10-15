@@ -599,6 +599,7 @@
         card.className = 'group relative bg-[#1a1a22] rounded-xl overflow-hidden border border-[#2e2e3a] hover:border-brand-600/50 transition shadow-md flex flex-col';
 
         const isChecked = selection.has(v.url) ? 'checked' : '';
+        const pageUrl = /^https?:\/\//i.test(v.url || '') ? v.url.replace(/[&<>"]/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'}[char])) : '';
 
         card.innerHTML = `
           <div class="relative aspect-video bg-[#282832] overflow-hidden">
@@ -612,9 +613,12 @@
             </h4>
             <div class="mt-2.5 flex items-center justify-between text-[11px] text-gray-400">
               <span>${v.date || currentSite}</span>
+              <div class="flex shrink-0 items-center gap-1.5">
+              ${pageUrl ? `<a href="${pageUrl}" target="_blank" rel="noopener noreferrer" title="在新分頁開啟原始影片頁面" class="px-2 py-1 bg-[#282832] hover:bg-brand-600 hover:text-white rounded border border-[#3e3e4e] transition text-gray-200">開啟原頁 ↗</a>` : ''}
               <button onclick="startSingleDownload('${v.url}')" class="px-2 py-1 bg-[#282832] hover:bg-brand-600 hover:text-white rounded border border-[#3e3e4e] transition text-gray-200">
                 立即下載
               </button>
+              </div>
             </div>
           </div>
         `;
