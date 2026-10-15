@@ -75,6 +75,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     } finally { busy = false; update(); }
   }
   let editingIds = [];
+  let savedNas = {};
   function updateEditStorage() {
     const mode = document.getElementById('task-edit-storage').value;
     const local = ['local', 'upload'].includes(mode);
@@ -86,13 +87,14 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
       const field = document.getElementById('task-edit-' + key);
       field.disabled = key === 'direct-path' ? mode !== 'direct' : !smb;
       field.required = !field.disabled && ['host', 'username', 'password', 'direct-path'].includes(key);
+      if (key === 'password' && savedNas.password_saved) field.required = false;
     }
     const input = document.getElementById('task-edit-dest');
     input.disabled = !local;
     input.required = local;
     if (local) input.focus();
   }
-  function edit(taskId) {
+  async function edit(taskId) {
     if (busy) return;
     editingIds = (taskId ? [taskId] : [...selected]).filter(id => canAction(tasksById.get(id), 'edit'));
     if (!editingIds.length) return;
@@ -100,9 +102,24 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     document.getElementById('task-edit-storage').value = '';
     document.getElementById('task-edit-dest').value = '';
     for (const key of ['host', 'share', 'directory', 'username', 'password', 'direct-path']) document.getElementById('task-edit-' + key).value = '';
+    savedNas = {};
+    busy = true;
+    update();
+    let message = '';
+    try {
+      const response = await fetch('/api/settings');
+      const settings = await response.json();
+      if (!response.ok) throw new Error(settings.error || '讀取失敗');
+      savedNas = settings.nas || {};
+      for (const key of ['host', 'share', 'directory', 'username']) document.getElementById('task-edit-' + key).value = savedNas[key] || '';
+      document.getElementById('task-edit-direct-path').value = savedNas.direct_path || '';
+      document.getElementById('task-edit-dest').value = settings.download_dir || '';
+      message = '已帶入設定區已儲存的內容，可在此單獨修改。';
+    } catch (error) { message = `無法讀取預設設定：${error.message}；仍可自行填寫。`; }
+    finally { busy = false; update(); }
     updateEditStorage();
     document.getElementById('task-edit-subtitles').value = '';
-    document.getElementById('task-edit-status').textContent = '';
+    document.getElementById('task-edit-status').textContent = message;
     document.getElementById('task-edit-dialog').showModal();
   }
   async function saveEdit(event) {
@@ -122,6 +139,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
       payload.storage = 'custom';
       payload.nas = {enabled: true, mode: storage};
       for (const key of ['host', 'share', 'directory', 'username', 'password']) payload.nas[key] = document.getElementById('task-edit-' + key).value;
+      payload.nas.use_saved_password = !!savedNas.password_saved && !payload.nas.password;
       payload.nas.direct_path = document.getElementById('task-edit-direct-path').value;
     }
     if (subtitles) payload.subtitle_mode = subtitles;

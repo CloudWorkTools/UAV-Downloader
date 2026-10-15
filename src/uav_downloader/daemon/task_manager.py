@@ -268,7 +268,8 @@ class TaskManager:
         settings = {}
         if storage is not None:
             if storage == 'custom':
-                settings = nas.prepare_settings(nas_settings, use_saved_password=False)
+                reuse_password = isinstance(nas_settings, dict) and nas_settings.get('use_saved_password') is True
+                settings = nas.prepare_settings(nas_settings, use_saved_password=reuse_password)
                 if not settings['enabled']:
                     raise ValueError('請選擇 NAS 儲存模式')
                 if settings['mode'] in ('smb', 'direct'):

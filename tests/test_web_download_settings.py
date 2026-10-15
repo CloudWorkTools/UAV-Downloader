@@ -350,3 +350,33 @@ def test_custom_nas_requires_own_credentials(web_settings):
     code, _ = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'],
                                               'storage': 'custom', 'nas': {'enabled': True, 'mode': 'smb', 'host': 'nas.local', 'share': 'videos', 'username': 'user'}})
     assert code == 400
+
+
+def test_queue_can_import_saved_nas_password_without_coupling_later_changes(web_settings, monkeypatch):
+    from uav_downloader.daemon import nas
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root = web_settings
+    profile = dict(enabled=True, mode='smb', host='saved.local', share='videos', directory='original', username='user', password='saved-private-secret')
+    monkeypatch.setattr(nas, 'load_settings', lambda **kw: {**profile, 'password_saved': True})
+    monkeypatch.setattr(nas, 'test_connection', lambda settings, **kw: None)
+    task = DownloadTask('task', 'https://missav.ai/import', str(root / 'old'), status='paused')
+    server.task_manager._tasks[task.task_id] = task
+    imported = {**profile, 'directory': 'task-only', 'password': '', 'use_saved_password': True}
+    code, result = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'], 'storage': 'custom', 'nas': imported})
+    assert code == 200 and result['updated'] == ['task']
+    assert task.nas_settings['password'] == 'saved-private-secret'
+    assert task.nas_settings['directory'] == 'task-only' and profile['directory'] == 'original'
+    assert 'saved-private-secret' not in server.task_manager._state_path.read_text()
+    profile.update(host='other.local', password='new-secret')
+    restored = TaskManager(state_path=server.task_manager._state_path)
+    assert restored.restart_task('task')
+    assert restored.get_task('task').nas_settings['password'] == 'saved-private-secret'
+
+
+def test_queue_cannot_reuse_saved_password_for_another_nas(web_settings, monkeypatch):
+    from uav_downloader.daemon import nas
+    request, _, _ = web_settings
+    monkeypatch.setattr(nas, 'load_settings', lambda **kw: dict(host='saved.local', username='user', password_saved=True, password='secret'))
+    code, _ = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'], 'storage': 'custom',
+        'nas': dict(enabled=True, mode='smb', host='another.local', share='videos', username='user', password='', use_saved_password=True)})
+    assert code == 400

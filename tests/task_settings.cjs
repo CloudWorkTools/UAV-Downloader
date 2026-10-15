@@ -11,6 +11,7 @@ let sent;
 let fail = false;
 const context = vm.createContext({window: {}, document: {getElementById: element, querySelectorAll: () => []},
   fetch: async (path, options) => {
+    if (path === '/api/settings') return {ok: true, json: async () => ({download_dir: '/downloads/default', nas: {host: 'saved.local', share: 'saved-videos', directory: 'saved-dir', username: 'saved-user', direct_path: '/nas/default', password_saved: true}})};
     assert.equal(path, '/api/download/action');
     sent = JSON.parse(options.body);
     return {ok: !fail, json: async () => fail ? {error: 'NAS 離線'} : {success: true, updated: sent.task_ids, skipped: []}};
@@ -20,10 +21,14 @@ const selection = context.window.createTaskSelection({});
 selection.setTasks([{task_id: 'a', status: 'paused'}, {task_id: 'b', status: 'downloading'}, {task_id: 'c', status: 'pending'}]);
 selection.toggleAll();
 selection.toggle('c', false);
-selection.edit();
-assert.equal(element('task-edit-count').textContent, 1);
-assert.equal(element('task-edit-dialog').open, true);
 (async () => {
+  await selection.edit();
+  assert.equal(element('task-edit-count').textContent, 1);
+  assert.equal(element('task-edit-dialog').open, true);
+  assert.equal(element('task-edit-host').value, 'saved.local');
+  assert.equal(element('task-edit-directory').value, 'saved-dir');
+  assert.equal(element('task-edit-dest').value, '/downloads/default');
+  assert.equal(element('task-edit-password').value, '');
   await selection.saveEdit({preventDefault() {}});
   assert.equal(sent, undefined, 'No changes must not send a request');
   element('task-edit-storage').value = 'local';
@@ -60,7 +65,7 @@ assert.equal(element('task-edit-dialog').open, true);
   assert.equal(selection.has('c'), false);
   assert.equal(element('task-edit-dialog').open, false);
   for (const mode of ['upload', 'smb', 'direct']) {
-    selection.edit('c');
+    await selection.edit('c');
     element('task-edit-storage').value = mode;
     selection.updateEditStorage();
     assert.equal(element('task-edit-local-fields').hidden, mode !== 'upload');
@@ -82,5 +87,13 @@ assert.equal(element('task-edit-dialog').open, true);
     assert.equal(sent.dest, mode === 'upload' ? '/downloads/staging' : undefined);
     assert.equal(element('task-edit-password').value, '');
   }
+  await selection.edit('c');
+  element('task-edit-storage').value = 'smb';
+  selection.updateEditStorage();
+  assert.equal(element('task-edit-password').required, false);
+  await selection.saveEdit({preventDefault() {}});
+  assert.equal(sent.nas.host, 'saved.local');
+  assert.equal(sent.nas.use_saved_password, true);
+  assert.equal(sent.nas.password, '');
   console.log('Batch task settings, partial selection and failure retention: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });

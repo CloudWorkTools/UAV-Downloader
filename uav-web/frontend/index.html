@@ -471,11 +471,11 @@
           <label>共享資料夾<input id="task-edit-share" disabled placeholder="網址包含時可留空" class="block w-full bg-[#282832] rounded p-2"></label>
           <label>NAS 子目錄<input id="task-edit-directory" disabled placeholder="可留空" class="block w-full bg-[#282832] rounded p-2"></label>
           <label>NAS 帳號<input id="task-edit-username" disabled autocomplete="off" class="block w-full bg-[#282832] rounded p-2"></label>
-          <label>NAS 密碼<input id="task-edit-password" type="password" disabled autocomplete="new-password" class="block w-full bg-[#282832] rounded p-2"></label>
+          <label>NAS 密碼（留空沿用已保存密碼）<input id="task-edit-password" type="password" disabled autocomplete="new-password" class="block w-full bg-[#282832] rounded p-2"></label>
         </div>
       </div>
       <div id="task-edit-direct-fields" hidden><label class="block text-sm">NAS 已掛載 path<input id="task-edit-direct-path" disabled placeholder="例如 /nas/videos" class="block w-full bg-[#282832] rounded p-2"></label></div>
-      <p class="text-sm text-gray-400">以上設定僅套用所選任務，可與系統預設及其他任務使用不同 NAS。NAS 密碼需重新填寫，會加密保存；本機下載後傳送 NAS 會保留本機檔案。</p>
+      <p class="text-sm text-gray-400">欄位先帶入設定區已儲存的內容，修改後僅套用所選任務。相同 NAS 主機與帳號可留空沿用密碼；更換主機或帳號請重新輸入。密碼會加密保存；本機下載後傳送 NAS 會保留本機檔案。</p>
       <p class="text-sm text-amber-400">更換儲存位置後會重新下載，原位置的片段與檔案會保留，不會自動搬移。</p>
       <label class="block text-sm">生成字幕
         <select id="task-edit-subtitles" class="block w-full mt-1 bg-[#282832] rounded p-2">
