@@ -169,24 +169,33 @@ def upload_video(settings, video_file, cancelled):
     files = [video] + sorted(p for p in video.parent.iterdir()
                              if p.is_file() and p.name.startswith(video.stem + '.') and p.suffix == '.srt')
     with _connection(settings) as (smb, root, options):
-        for source in files:
-            if cancelled.is_set():
-                return
-            target = ntpath.join(root, source.name)
-            temporary = ntpath.join(root, '.uav-' + uuid.uuid4().hex + '.part')
-            try:
-                with source.open('rb') as local, smb.open_file(temporary, mode='xb', **options) as remote:
-                    while chunk := local.read(1024 * 1024):
+        lock = ntpath.join(root, _target_lock_name(video.name))
+        reserved = False
+        try:
+            with smb.open_file(lock, mode='xb', **options):
+                reserved = True
+                for source in files:
+                    if cancelled.is_set():
+                        return
+                    target = ntpath.join(root, source.name)
+                    temporary = ntpath.join(root, '.uav-' + uuid.uuid4().hex + '.part')
+                    try:
+                        with source.open('rb') as local, smb.open_file(temporary, mode='xb', **options) as remote:
+                            while chunk := local.read(1024 * 1024):
+                                if cancelled.is_set():
+                                    return
+                                remote.write(chunk)
                         if cancelled.is_set():
                             return
-                        remote.write(chunk)
-                if cancelled.is_set():
-                    return
-                # rename refuses existing targets, preserving files already on the NAS.
-                smb.rename(temporary, target, **options)
-            finally:
-                if smb.path.exists(temporary, **options):
-                    smb.remove(temporary, **options)
+                        # rename refuses existing targets, preserving files already on the NAS.
+                        smb.rename(temporary, target, **options)
+                    finally:
+                        if smb.path.exists(temporary, **options):
+                            smb.remove(temporary, **options)
+        finally:
+            if reserved:
+                smb.remove(lock, **options)
+
 
 
 def _linux_mount_type(path, mountinfo):
@@ -234,11 +243,15 @@ def direct_destination(settings, *, probe=False):
     return path
 
 
+def _target_lock_name(filename):
+    return '.uav-' + hashlib.sha256(filename.casefold().encode()).hexdigest() + '.lock'
+
+
 @contextmanager
 def reserve_direct_target(settings, filename):
     folder = Path(direct_destination(settings))
     target = folder / filename
-    lock = folder / ('.uav-' + hashlib.sha256(filename.casefold().encode()).hexdigest() + '.lock')
+    lock = folder / _target_lock_name(filename)
     try:
         fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:

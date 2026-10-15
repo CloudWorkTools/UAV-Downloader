@@ -1,5 +1,6 @@
 import io
 import json
+import ntpath
 import threading
 from pathlib import Path
 from contextlib import contextmanager
@@ -64,6 +65,9 @@ class Remote:
         assert mode == 'xb'
         if self.fail:
             raise OSError('private credentials should never escape')
+        if path in self.files:
+            raise FileExistsError(path)
+        self.files[path] = b''
         stream = io.BytesIO()
         try:
             yield stream
@@ -261,3 +265,14 @@ def test_direct_reservation_preserves_existing_file_and_blocks_duplicates(direct
             pytest.fail('must not replace existing video')
     assert target.read_bytes() == b'existing video'
     assert not list(target.parent.glob('.uav-*.lock'))
+
+
+def test_upload_respects_direct_mode_reservation(profile, remote, tmp_path):
+    video = tmp_path / 'movie.mp4'
+    video.write_bytes(b'local video')
+    lock = ntpath.join('\\\\' + profile['host'], profile['share'], profile['directory'], nas._target_lock_name(video.name))
+    remote.files[lock] = b'direct download active'
+    with pytest.raises(nas.NasError):
+        nas.upload_video(profile, video, threading.Event())
+    assert remote.files == {lock: b'direct download active'}
+    assert video.read_bytes() == b'local video'
