@@ -280,7 +280,7 @@ class TaskManager:
                 return False
             if task.nas_settings.get('enabled') and task.nas_settings.get('mode') in ('smb', 'upload') and not task.nas_settings.get('password'):
                 current = nas.load_settings(secret=True)
-                if not current.get('enabled') or any(current.get(k) != task.nas_settings.get(k) for k in ('host', 'share', 'directory', 'username', 'mode')):
+                if not current.get('enabled') or any(current.get(k) != task.nas_settings.get(k) for k in ('host', 'share', 'username', 'mode')):
                     raise ValueError('NAS 設定已變更，請恢復原任務的 NAS 連線設定後重試')
                 task.nas_settings['password'] = current['password']
             if task.dest.startswith('smb:') and not task.nas_settings.get('enabled'):
@@ -334,7 +334,7 @@ class TaskManager:
                 destination = nas.direct_destination(settings)
         if settings.get('enabled') and settings.get('mode') in ('smb', 'upload') and not settings.get('password'):
             current = nas.load_settings(secret=True)
-            if any(current.get(k) != settings.get(k) for k in ('host', 'share', 'directory', 'username', 'mode')):
+            if any(current.get(k) != settings.get(k) for k in ('host', 'share', 'username', 'mode')):
                 raise ValueError('NAS 設定已變更，請恢復原任務的設定後測試')
             settings['password'] = current['password']
         with ExitStack() as storage:

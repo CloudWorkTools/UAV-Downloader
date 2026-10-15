@@ -471,3 +471,26 @@ def test_clear_completed_keeps_files_history_and_other_states(manager, tmp_path)
     assert restored.get_task(tasks[0].task_id) is None
     assert len(restored.list_tasks()) == len(tasks) - 1
     assert manager.clear_completed() == 0
+
+
+def test_retry_keeps_original_directory_when_same_nas_account_changes_folder(manager, monkeypatch):
+    settings = dict(enabled=True, mode='smb', host='nas', share='share', directory='original', username='user')
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.nas_settings = settings.copy()
+    task.status = 'failed'
+    monkeypatch.setattr(tm.nas, 'load_settings', lambda **kw: dict(settings, directory='new-folder', password='saved-secret'))
+    assert manager.restart_task(task.task_id)
+    assert task.nas_settings['directory'] == 'original'
+    assert task.nas_settings['password'] == 'saved-secret'
+
+
+@pytest.mark.parametrize('field,value', [('host', 'other-nas'), ('share', 'other-share'), ('username', 'other-user')])
+def test_retry_never_borrows_credentials_for_changed_nas_account(manager, monkeypatch, field, value):
+    settings = dict(enabled=True, mode='smb', host='nas', share='share', directory='original', username='user')
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.nas_settings = settings.copy()
+    task.status = 'failed'
+    monkeypatch.setattr(tm.nas, 'load_settings', lambda **kw: dict(settings, **{field:value, 'password':'different-account-secret'}))
+    with pytest.raises(ValueError, match='NAS 設定已變更'):
+        manager.restart_task(task.task_id)
+    assert 'password' not in task.nas_settings
