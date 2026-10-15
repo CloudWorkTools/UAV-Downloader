@@ -17,3 +17,5 @@ crash_native.log
 dltest
 download
 *.md
+
+.deploy.local*
