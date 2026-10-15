@@ -1,5 +1,6 @@
 """Web preferences must survive restarts and control actual download behavior."""
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -206,3 +207,106 @@ def test_translation_quality_persists_and_reaches_job_profile(web_settings, qual
     saved = json.loads((root / 'config' / 'ui_prefs.json').read_text())
     assert saved['translation_quality'] == quality
     assert get_translation_settings().quality == quality
+
+
+def test_batch_task_settings_only_change_selected_idle_tasks_and_persist(web_settings):
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root = web_settings
+    manager = server.task_manager
+    old = root / 'old'
+    old.mkdir()
+    partial = old / 'partial.ts'
+    partial.write_bytes(b'keep')
+    for tid, status in [('pending', 'pending'), ('paused', 'paused'), ('active', 'downloading'), ('other', 'pending'), ('done', 'completed')]:
+        manager._tasks[tid] = DownloadTask(tid, 'https://missav.ai/' + tid, str(old), status=status,
+                                           enable_subtitles=True, subtitle_mode='zh')
+    manager._active['active'] = manager._tasks['active']
+    from uav_downloader.daemon.download_files import DownloadFiles
+    manager._tasks['paused'].files = DownloadFiles(str(old), 'paused')
+    workdir = manager._tasks['paused'].files.workdir
+    target = str(root / 'new')
+    code, result = request('/api/download/action', {'action': 'update_settings',
+        'task_ids': ['pending', 'paused', 'active', 'done', 'missing', 'paused'],
+        'storage': 'local', 'dest': target, 'subtitle_mode': 'none'})
+    assert code == 200
+    assert result['updated'] == ['pending', 'paused']
+    assert result['skipped'] == ['active', 'done', 'missing']
+    assert partial.read_bytes() == b'keep'
+    assert Path(workdir).is_dir()
+    assert manager.get_task('paused').files is None
+    assert manager.get_task('paused').status == 'paused'
+    assert manager.get_task('other').dest == str(old)
+    restored = TaskManager(state_path=manager._state_path)
+    for tid in result['updated']:
+        task = restored.get_task(tid)
+        assert task.dest == target and task.subtitle_mode == 'none' and not task.enable_subtitles
+    assert manager.get_task('active').dest == str(old)
+
+
+@pytest.mark.parametrize('payload', [
+    {'task_ids': []}, {'task_ids': 'task'}, {'task_ids': [[]]},
+    {'task_ids': ['task'], 'storage': 'local', 'dest': ''},
+    {'task_ids': ['task'], 'storage': 'local', 'dest': 'smb://nas/video'},
+    {'task_ids': ['task'], 'subtitle_mode': []},
+    {'task_ids': ['task'], 'subtitle_mode': 'invalid'},
+    {'task_ids': ['task'], 'storage': []},
+])
+def test_invalid_batch_task_settings(web_settings, payload):
+    request, _, _ = web_settings
+    assert request('/api/download/action', {'action': 'update_settings', **payload})[0] == 400
+
+
+@pytest.mark.parametrize('mode', ['upload', 'smb', 'direct'])
+def test_batch_task_settings_apply_saved_nas_snapshot(web_settings, monkeypatch, mode):
+    from uav_downloader.daemon import nas
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root = web_settings
+    manager = server.task_manager
+    manager._tasks['task'] = DownloadTask('task', 'https://missav.ai/test', str(root / 'old'), status='paused')
+    profile = dict(enabled=True, mode=mode, host='nas.local', share='video', directory='new',
+                   username='user', password='secret')
+    monkeypatch.setattr(nas, 'load_settings', lambda **kw: dict(profile))
+    monkeypatch.setattr(nas, 'test_connection', lambda settings: None)
+    monkeypatch.setattr(nas, 'direct_destination', lambda settings, **kw: str(root / 'mounted'))
+    monkeypatch.setattr('uav_downloader.daemon.task_manager.probe_destination', lambda path: None)
+    code, result = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'],
+                                                    'storage': 'settings', 'subtitle_mode': 'ja'})
+    assert code == 200 and result['updated'] == ['task']
+    task = manager.get_task('task')
+    assert task.enable_subtitles and task.subtitle_mode == 'ja'
+    assert task.nas_settings['host'] == 'nas.local' and task.nas_settings['directory'] == 'new'
+    if mode == 'smb':
+        assert task.dest.startswith('/__uav_smb__/') and task.dest == task.nas_settings['_smb_path']
+    else:
+        assert task.dest == str(root / ('mounted' if mode == 'direct' else 'videos'))
+    profile['host'] = 'another.local'
+    assert task.nas_settings['host'] == 'nas.local'
+    assert 'secret' not in manager._state_path.read_text()
+
+
+def test_subtitle_only_edit_keeps_partial_download_and_original_storage(web_settings):
+    from uav_downloader.daemon.download_files import DownloadFiles
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root = web_settings
+    task = DownloadTask('task', 'https://missav.ai/test', str(root / 'old'), status='paused')
+    task.files = DownloadFiles(task.dest, task.task_id)
+    files = task.files
+    server.task_manager._tasks[task.task_id] = task
+    code, result = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'], 'subtitle_mode': 'zh'})
+    assert code == 200 and result['updated'] == ['task']
+    assert task.files is files and task.dest == str(root / 'old')
+    assert task.enable_subtitles and task.subtitle_mode == 'zh'
+
+
+def test_batch_destination_probe_failure_leaves_tasks_unchanged(web_settings, monkeypatch):
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root = web_settings
+    task = DownloadTask('task', 'https://missav.ai/test', str(root / 'old'), status='paused')
+    server.task_manager._tasks[task.task_id] = task
+    def reject(path):
+        raise ValueError('目的地無法寫入')
+    monkeypatch.setattr('uav_downloader.daemon.task_manager.probe_destination', reject)
+    code, _ = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'],
+                                              'storage': 'local', 'dest': str(root / 'new'), 'subtitle_mode': 'zh'})
+    assert code == 400
+    assert task.dest == str(root / 'old') and task.subtitle_mode == 'none'

@@ -5,6 +5,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
   const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'paused', 'failed'].includes(task?.status);
   let tasksById = new Map();
   const canAction = (task, action) => ({
+    edit: task?.subtitles_only ? [] : ['pending', 'paused', 'failed', 'cancelled'],
     pause: ['pending', 'preparing', 'downloading'], resume: ['paused'],
     retry: ['failed', 'cancelled'], remove: ['completed', 'skipped', 'cancelled', 'failed']
   }[action] || []).includes(task?.status);
@@ -17,8 +18,9 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     const cancellable = [...selected].filter(id => canCancel(tasksById.get(id))).length;
     cancel.disabled = busy || !cancellable;
     cancel.textContent = busy ? '處理中…' : `取消所選 (${cancellable})`;
-    for (const action of ['pause', 'resume', 'retry']) {
-      document.getElementById(`${action}-tasks-button`).disabled = busy || ![...selected].some(id => canAction(tasksById.get(id), action));
+    for (const action of ['pause', 'resume', 'retry', 'edit']) {
+      const button = document.getElementById(`${action}-tasks-button`);
+      if (button) button.disabled = busy || ![...selected].some(id => canAction(tasksById.get(id), action));
     }
     document.querySelectorAll('#tasks-container input[type="checkbox"]').forEach(box => {
       box.checked = selected.has(box.dataset.taskId);
@@ -72,5 +74,41 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
       }
     } finally { busy = false; update(); }
   }
-  return {setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, update};
+  let editingIds = [];
+  function edit() {
+    if (busy) return;
+    editingIds = [...selected].filter(id => canAction(tasksById.get(id), 'edit'));
+    if (!editingIds.length) return;
+    document.getElementById('task-edit-count').textContent = editingIds.length;
+    document.getElementById('task-edit-storage').value = '';
+    document.getElementById('task-edit-subtitles').value = '';
+    document.getElementById('task-edit-status').textContent = '';
+    document.getElementById('task-edit-dialog').showModal();
+  }
+  async function saveEdit(event) {
+    event.preventDefault();
+    if (busy) return;
+    const storage = document.getElementById('task-edit-storage').value;
+    const subtitles = document.getElementById('task-edit-subtitles').value;
+    const status = document.getElementById('task-edit-status');
+    if (!storage && !subtitles) { status.textContent = '請至少選擇一項修改'; return; }
+    const payload = {action: 'update_settings', task_ids: editingIds};
+    if (storage) { payload.storage = storage; payload.dest = document.getElementById('task-edit-dest').value; }
+    if (subtitles) payload.subtitle_mode = subtitles;
+    busy = true;
+    update();
+    const save = document.getElementById('task-edit-save');
+    save.disabled = true;
+    status.textContent = '驗證目的地並儲存中…';
+    try {
+      const response = await fetch('/api/download/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || '修改失敗');
+      for (const id of result.updated) selected.delete(id);
+      document.getElementById('queue-action-status').textContent = `已修改 ${result.updated.length} 個任務；略過 ${result.skipped.length} 個（狀態已變更）。已暫停或失敗的任務請按繼續或重試。`;
+      document.getElementById('task-edit-dialog').close();
+    } catch (error) { status.textContent = error.message; }
+    finally { busy = false; save.disabled = false; update(); }
+  }
+  return {setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, update, edit, saveEdit};
 };

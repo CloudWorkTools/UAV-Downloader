@@ -68,6 +68,7 @@ class DownloadTask:
             "task_id": self.task_id,
             "url": self.url,
             "dest": destination,
+            "final_dest": nas.public_destination(self.nas_settings) if self.nas_settings.get('enabled') and self.nas_settings.get('mode') == 'upload' else destination,
             "name": self.name,
             "status": self.status,
             "progress": round(self.progress, 1),
@@ -147,7 +148,7 @@ class TaskManager:
                 return
             records = []
             for task in self._tasks.values():
-                record = {key: value for key, value in task.to_dict().items() if key != 'speed_formatted'}
+                record = {key: value for key, value in task.to_dict().items() if key not in ('speed_formatted', 'final_dest')}
                 record['dest'] = task.dest
                 record['nas_settings'] = {key: value for key, value in task.nas_settings.items()
                                           if key not in ('password', 'password_encrypted', 'password_saved')}
@@ -253,6 +254,59 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[DownloadTask]:
         with self._lock:
             return self._tasks.get(task_id)
+
+    def update_tasks(self, task_ids, *, storage=None, dest=None, subtitle_mode=None):
+        if not isinstance(task_ids, list) or not task_ids or any(not isinstance(tid, str) or not tid for tid in task_ids):
+            raise ValueError('請提供要修改的任務')
+        if storage not in (None, 'local', 'settings'):
+            raise ValueError('不支援的儲存方式')
+        if subtitle_mode is not None and (not isinstance(subtitle_mode, str) or subtitle_mode not in config.VALID_SUBTITLE_PREFS):
+            raise ValueError('不支援的字幕模式')
+        if storage is None and subtitle_mode is None:
+            raise ValueError('請至少選擇一項修改')
+        target = None
+        settings = {}
+        if storage is not None:
+            if storage == 'settings':
+                settings = nas.load_settings(secret=True)
+                dest = config._load_prefs().get('download_dir') or os.environ.get('DOWNLOAD_DIR') or os.path.abspath('download')
+            if not isinstance(dest, str) or not dest.strip() or len(dest) > 4096 or any(ord(c) < 32 for c in dest) or dest.strip().lower().startswith('smb:'):
+                raise ValueError('請提供有效的本機或已掛載下載路徑；SMB 請使用系統儲存設定')
+            target = os.path.abspath(dest.strip())
+            if settings.get('enabled'):
+                if settings.get('mode') == 'direct':
+                    target = nas.direct_destination(settings, probe=True)
+                else:
+                    nas.test_connection(settings)
+                    if settings.get('mode') == 'smb':
+                        target = nas.smb_destination()
+                        settings['_smb_path'] = target
+            if not (settings.get('enabled') and settings.get('mode') == 'smb'):
+                probe_destination(target)
+        updated, skipped = [], []
+        with self._lock:
+            for tid in dict.fromkeys(task_ids):
+                task = self._tasks.get(tid)
+                if not task or tid in self._active or task.status not in ('pending', 'paused', 'failed', 'cancelled') or task.subtitles_only:
+                    skipped.append(tid)
+                    continue
+                if target is not None:
+                    changed = target != task.dest or any(settings.get(k) != task.nas_settings.get(k) for k in ('enabled', 'mode', 'host', 'share', 'directory', 'username', 'direct_path'))
+                    if changed:
+                        # Keep old files untouched; a changed destination starts a fresh download.
+                        task.files, task.remote_files, task.job = None, [], None
+                        task.cleanup_unverified = False
+                        task.name, task.progress = '', 0.0
+                        task.downloaded_segments = task.total_segments = 0
+                    task.dest, task.nas_settings = target, dict(settings)
+                if subtitle_mode is not None:
+                    task.subtitle_mode = subtitle_mode
+                    task.enable_subtitles = subtitle_mode != 'none'
+                task.error = None
+                task.set_phase('設定已修改；等待下載' if task.status == 'pending' else '設定已修改；請按繼續或重試')
+                updated.append(tid)
+            self._save_tasks()
+        return {'updated': updated, 'skipped': skipped}
 
     def list_tasks(self) -> List[Dict[str, Any]]:
         with self._lock:

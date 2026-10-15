@@ -269,6 +269,10 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
             elif path == '/api/download/action':
                 action, task_id = body.get('action'), body.get('task_id')
+                if action == 'update_settings':
+                    result = self.task_manager.update_tasks(body.get('task_ids'), storage=body.get('storage'),
+                                                            dest=body.get('dest'), subtitle_mode=body.get('subtitle_mode'))
+                    return self._send_json({'success': True, **result})
                 if action == 'nas_space':
                     return self._send_json({'success': True, **nas.storage_space()})
                 if action == 'resume_unfinished':

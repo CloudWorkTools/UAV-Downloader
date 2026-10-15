@@ -415,6 +415,7 @@ def test_legacy_smb_task_restores_current_matching_account(manager, monkeypatch,
     path = tmp_path / 'legacy.json'
     record = task.to_dict()
     record.pop('speed_formatted')
+    record.pop('final_dest')
     path.write_text(json.dumps([record]))
     monkeypatch.setattr(tm.nas, 'load_settings', lambda secret=False: dict(settings, **({'password':'from-encrypted-config'} if secret else {})))
     restored = tm.TaskManager(state_path=path)

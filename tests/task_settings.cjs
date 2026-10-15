@@ -1,0 +1,45 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const elements = new Map();
+const element = id => {
+  if (!elements.has(id)) elements.set(id, {value: '', textContent: '', disabled: false,
+    showModal() { this.open = true; }, close() { this.open = false; }});
+  return elements.get(id);
+};
+let sent;
+let fail = false;
+const context = vm.createContext({window: {}, document: {getElementById: element, querySelectorAll: () => []},
+  fetch: async (path, options) => {
+    assert.equal(path, '/api/download/action');
+    sent = JSON.parse(options.body);
+    return {ok: !fail, json: async () => fail ? {error: 'NAS 離線'} : {success: true, updated: ['a'], skipped: []}};
+  }});
+vm.runInContext(fs.readFileSync('uav-web/frontend/task-selection.js', 'utf8'), context);
+const selection = context.window.createTaskSelection({});
+selection.setTasks([{task_id: 'a', status: 'paused'}, {task_id: 'b', status: 'downloading'}, {task_id: 'c', status: 'pending'}]);
+selection.toggleAll();
+selection.toggle('c', false);
+selection.edit();
+assert.equal(element('task-edit-count').textContent, 1);
+assert.equal(element('task-edit-dialog').open, true);
+(async () => {
+  await selection.saveEdit({preventDefault() {}});
+  assert.equal(sent, undefined, 'No changes must not send a request');
+  element('task-edit-storage').value = 'settings';
+  element('task-edit-subtitles').value = 'none';
+  fail = true;
+  await selection.saveEdit({preventDefault() {}});
+  assert.equal(element('task-edit-status').textContent, 'NAS 離線');
+  assert.equal(selection.has('a'), true);
+  fail = false;
+  await selection.saveEdit({preventDefault() {}});
+  assert.deepEqual(sent.task_ids, ['a']);
+  assert.equal(sent.storage, 'settings');
+  assert.equal(sent.subtitle_mode, 'none');
+  assert.equal(selection.has('a'), false);
+  assert.equal(selection.has('b'), true);
+  assert.equal(selection.has('c'), false);
+  assert.equal(element('task-edit-dialog').open, false);
+  console.log('Batch task settings, partial selection and failure retention: PASS');
+})().catch(error => { console.error(error); process.exitCode = 1; });
