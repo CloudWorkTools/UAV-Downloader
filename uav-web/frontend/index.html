@@ -654,6 +654,7 @@
     // Render Tasks in Downloads Tab
     function renderTasks(tasks) {
       const container = document.getElementById('tasks-container');
+      tasks = tasks.filter(task => task.status !== 'cancelled' || task.error);
       taskSelection.setTasks(tasks);
       const safe = value => String(value || '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
       const badge = document.getElementById('queue-badge');
@@ -688,7 +689,7 @@
         } else if (t.status === 'cancelled') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-gray-500/20 text-gray-400 border border-gray-500/30 rounded font-medium">已取消</span>`;
         } else if (t.status === 'failed') {
-          statusBadge = `<span class="px-2 py-0.5 text-xs bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded font-medium" title="${safe(t.error)}">失敗: ${safe(t.error)}</span>`;
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded font-medium">失敗</span>`;
         } else {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded font-medium">${t.status}</span>`;
         }
@@ -707,6 +708,7 @@
                   `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-10 px-3.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
               </div>
             </div>
+            ${t.error ? `<p role="alert" class="text-sm text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : ''}
             <!-- Progress Bar -->
             <div class="space-y-1">
               <div class="w-full bg-[#282832] h-2 rounded-full overflow-hidden">

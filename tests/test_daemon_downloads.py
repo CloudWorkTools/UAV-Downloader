@@ -77,6 +77,7 @@ def test_cancel_waits_for_worker_then_removes_only_its_files(manager, monkeypatc
     monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
     manager._run_task(task)
     assert task.status == 'cancelled'
+    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
     assert sorted(p.name for p in folder.iterdir()) == ['other.mp4']
     assert task.task_id not in manager._active
     assert tm.get_history_manager().find_downloaded(task.url) is None
@@ -95,6 +96,7 @@ def test_subtitle_cancellation_does_not_complete_or_upload(manager, monkeypatch)
     monkeypatch.setattr(manager, '_run_subtitles', subtitles)
     manager._run_task(task)
     assert task.status == 'cancelled'
+    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
     assert not list(Path(task.dest).iterdir())
     assert tm.get_history_manager().find_downloaded(task.url) is None
 
@@ -134,6 +136,7 @@ def test_failed_download_can_be_cancelled_and_cleaned(manager, monkeypatch):
     assert Path(task.files.workdir).exists()
     assert manager.cancel_task(task.task_id)
     assert task.status == 'cancelled'
+    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
     assert not list(Path(task.dest).iterdir())
 
 
@@ -144,15 +147,18 @@ def test_cleanup_failure_remains_visible_and_retryable(manager, monkeypatch):
     assert manager.cancel_task(task.task_id)
     assert task.status == 'failed'
     assert '清除失敗' in task.error
+    assert 'offline' in manager.list_tasks()[0]['error']
     task.files.cleanup.side_effect = None
     assert manager.cancel_task(task.task_id)
     assert task.status == 'cancelled'
+    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
 
 
 def test_pending_cancel_never_starts_download(manager):
     task = manager.add_task('https://missav.ai/mimk-290')
     assert manager.cancel_task(task.task_id)
     assert task.status == 'cancelled'
+    assert task.task_id not in [record['task_id'] for record in manager.list_tasks()]
     assert task.task_id not in manager._queue
     assert not Path(task.dest).exists()
 
@@ -199,7 +205,11 @@ def test_restart_preserves_terminal_status(manager, tmp_path, status):
     manager._state_path = path
     task = manager.add_task('https://missav.ai/mimk-290')
     manager._finish_task(task, status)
-    assert tm.TaskManager(state_path=path).get_task(task.task_id).status == status
+    restored = tm.TaskManager(state_path=path).get_task(task.task_id)
+    if status == 'cancelled':
+        assert restored is None
+    else:
+        assert restored.status == status
 
 
 def test_corrupt_task_file_is_not_silently_overwritten(tmp_path):
@@ -239,3 +249,44 @@ def test_worker_applies_cover_and_subtitle_defaults(manager, monkeypatch, cover,
     assert task.status == 'completed'
     assert subtitles.call_count == int(mode != 'none')
     assert task.subtitle_mode == mode
+
+
+def test_successful_cancellation_is_removed_from_persisted_list(manager, tmp_path):
+    path = tmp_path / 'tasks.json'
+    manager._state_path = path
+    task = manager.add_task('https://missav.ai/mimk-290')
+    assert manager.cancel_task(task.task_id)
+    assert manager.list_tasks() == []
+    assert tm.TaskManager(state_path=path).list_tasks() == []
+
+
+def test_cleanup_failure_survives_restart_without_claiming_files_removed(manager, tmp_path):
+    path = tmp_path / 'tasks.json'
+    manager._state_path = path
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.files = SimpleNamespace(cleanup=MagicMock(side_effect=PermissionError('permission denied')))
+    assert manager.cancel_task(task.task_id)
+    assert 'permission denied' in manager.list_tasks()[0]['error']
+    restored = tm.TaskManager(state_path=path)
+    assert 'permission denied' in restored.list_tasks()[0]['error']
+    assert restored.cancel_task(task.task_id)
+    assert restored.list_tasks()[0]['status'] == 'failed'
+    assert '無法確認清除範圍' in restored.list_tasks()[0]['error']
+
+
+def test_cancelled_task_with_storage_close_failure_stays_visible(manager, monkeypatch):
+    from contextlib import ExitStack
+    stack = ExitStack()
+    def fail_close():
+        raise PermissionError('lock permission denied')
+    stack.callback(fail_close)
+    monkeypatch.setattr(tm, 'ExitStack', lambda: stack)
+    task = manager.add_task('https://missav.ai/mimk-290')
+    def download(job):
+        (Path(job.dest_folder()) / 'partial.part').write_bytes(b'partial')
+        manager.cancel_task(task.task_id)
+        return False
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+    assert task.status == 'failed'
+    assert 'lock permission denied' in manager.list_tasks()[0]['error']

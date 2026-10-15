@@ -37,6 +37,7 @@ class DownloadTask:
     nas_settings: dict = field(default_factory=dict, repr=False)
     files: Any = field(default=None, repr=False)
     remote_files: list = field(default_factory=list, repr=False)
+    cleanup_unverified: bool = field(default=False, repr=False)
     name: str = ""
     status: str = "pending"  # pending, preparing, downloading, subtitles, uploading, cancelling, cancelled, completed, skipped, failed
     progress: float = 0.0
@@ -104,6 +105,10 @@ class TaskManager:
                 records = json.load(source)
             for record in records:
                 task = DownloadTask(**record)
+                if task.status == "cancelled" and not task.error:
+                    continue
+                # Old snapshots have no file ownership manifest; never assume their files were removed.
+                task.cleanup_unverified = task.status not in ("pending", "completed", "skipped", "cancelled")
                 if task.status not in ("completed", "skipped", "cancelled", "failed"):
                     task.status = "failed"
                     task.error = "服務重啟中斷，未完成；請重新下載"
@@ -119,7 +124,8 @@ class TaskManager:
                 return
             # Persist public task fields only; NAS credentials and runtime objects stay in memory.
             records = [{key: value for key, value in task.to_dict().items()
-                        if key != "speed_formatted"} for task in self._tasks.values()]
+                        if key != "speed_formatted"} for task in self._tasks.values()
+                       if task.status != "cancelled" or task.error]
             snapshot = json.dumps(records, ensure_ascii=False)
             if snapshot == self._last_snapshot:
                 return
@@ -220,7 +226,8 @@ class TaskManager:
     def list_tasks(self) -> List[Dict[str, Any]]:
         with self._lock:
             # Return ordered list, newest first
-            return [task.to_dict() for task in reversed(list(self._tasks.values()))]
+            return [task.to_dict() for task in reversed(list(self._tasks.values()))
+                    if task.status != "cancelled" or task.error]
 
     def _duplicate_reason(self, task):
         key = video_key(task.url, task.name)
@@ -263,6 +270,8 @@ class TaskManager:
 
     def _cleanup_cancelled(self, task):
         try:
+            if task.cleanup_unverified:
+                raise OSError("服務重啟後缺少檔案歸屬紀錄，無法確認清除範圍；請手動檢查下載目錄")
             if task.remote_files:
                 nas.cleanup_upload(task.nas_settings, task.remote_files)
             if task.files:
@@ -489,9 +498,11 @@ class TaskManager:
                     task.error = f"影片已完成，但暫存檔清除失敗：{exc}"
             try:
                 storage.close()
-            except OSError:
-                warning = "NAS 暫存鎖無法清除，請確認連線後清除 .uav-*.lock"
+            except OSError as exc:
+                warning = f"NAS 暫存鎖無法清除：{exc}；請確認連線後清除 .uav-*.lock"
                 task.error = f"{task.error}；{warning}" if task.error else warning
+                if task.cancelled_event.is_set():
+                    task.status = "failed"
             with self._lock:
                 self._active.pop(task.task_id, None)
             self._save_tasks()

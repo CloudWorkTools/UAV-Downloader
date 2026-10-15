@@ -84,8 +84,14 @@ async function run() {
   const tasks = [
     {task_id:'a', status:'pending'}, {task_id:'b', status:'subtitles'},
     {task_id:'c', status:'completed'}, {task_id:'d', status:'failed'},
-    {task_id:'e', status:'cancelled'}, {task_id:'f', status:'skipped'}
+    {task_id:'e', status:'cancelled', name:'successfully-cleaned'}, {task_id:'f', status:'skipped'}
   ];
+  context.renderTasks(tasks);
+  assert.ok(!element('tasks-container').innerHTML.includes('successfully-cleaned'));
+  context.renderTasks([{task_id:'failed-cleanup', status:'failed', error:'清除失敗：Permission denied <folder>'}]);
+  assert.match(element('tasks-container').innerHTML, /<p role="alert"[^>]*>清除失敗：Permission denied &lt;folder&gt;<\/p>/);
+  context.renderTasks([{task_id:'e', status:'cancelled'}]);
+  assert.match(element('tasks-container').innerHTML, /目前沒有下載任務/);
   context.renderTasks(tasks);
   const taskSelection = vm.runInContext('taskSelection', context);
   taskSelection.toggleAll();
