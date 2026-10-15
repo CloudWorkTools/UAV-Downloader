@@ -75,12 +75,22 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     } finally { busy = false; update(); }
   }
   let editingIds = [];
+  function updateEditStorage() {
+    const local = document.getElementById('task-edit-storage').value === 'local';
+    document.getElementById('task-edit-local-fields').hidden = !local;
+    const input = document.getElementById('task-edit-dest');
+    input.disabled = !local;
+    input.required = local;
+    if (local) input.focus();
+  }
   function edit() {
     if (busy) return;
     editingIds = [...selected].filter(id => canAction(tasksById.get(id), 'edit'));
     if (!editingIds.length) return;
     document.getElementById('task-edit-count').textContent = editingIds.length;
     document.getElementById('task-edit-storage').value = '';
+    document.getElementById('task-edit-dest').value = '';
+    updateEditStorage();
     document.getElementById('task-edit-subtitles').value = '';
     document.getElementById('task-edit-status').textContent = '';
     document.getElementById('task-edit-dialog').showModal();
@@ -93,7 +103,11 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     const status = document.getElementById('task-edit-status');
     if (!storage && !subtitles) { status.textContent = '請至少選擇一項修改'; return; }
     const payload = {action: 'update_settings', task_ids: editingIds};
-    if (storage) { payload.storage = storage; payload.dest = document.getElementById('task-edit-dest').value; }
+    if (storage) payload.storage = storage;
+    if (storage === 'local') {
+      payload.dest = document.getElementById('task-edit-dest').value.trim();
+      if (!payload.dest) { status.textContent = '請填寫本機下載 path'; document.getElementById('task-edit-dest').focus(); return; }
+    }
     if (subtitles) payload.subtitle_mode = subtitles;
     busy = true;
     update();
@@ -110,5 +124,5 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     } catch (error) { status.textContent = error.message; }
     finally { busy = false; save.disabled = false; update(); }
   }
-  return {setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, update, edit, saveEdit};
+  return {setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, update, edit, saveEdit, updateEditStorage};
 };

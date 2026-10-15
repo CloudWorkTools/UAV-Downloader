@@ -456,11 +456,14 @@
       <h2 id="task-edit-title" class="font-bold">修改所選設定（<span id="task-edit-count">0</span> 個任務）</h2>
       <p class="text-sm text-gray-400">適用等待中、已暫停、失敗或已取消的任務。執行中的任務請先暫停，再勾選修改。</p>
       <label class="block text-sm">儲存位置
-        <select id="task-edit-storage" class="block w-full mt-1 bg-[#282832] rounded p-2">
-          <option value="">保持各任務原設定</option><option value="local">指定本機／已掛載路徑</option><option value="settings">套用目前已儲存的系統儲存設定</option>
+        <select id="task-edit-storage" onchange="taskSelection.updateEditStorage()" class="block w-full mt-1 bg-[#282832] rounded p-2">
+          <option value="">保持各任務原設定</option><option value="local">本機（指定 path）</option><option value="settings">套用目前已儲存的系統儲存設定</option>
         </select>
       </label>
-      <label class="block text-sm">本機／已掛載路徑（僅指定路徑時使用）<input id="task-edit-dest" type="text" placeholder="例如 /downloads 或 /nas/videos" class="block w-full mt-1 bg-[#282832] rounded p-2"></label>
+      <div id="task-edit-local-fields" hidden>
+        <label class="block text-sm">本機下載 path<input id="task-edit-dest" type="text" disabled aria-describedby="task-edit-path-help" placeholder="例如 /downloads/videos" class="block w-full mt-1 bg-[#282832] rounded p-2"></label>
+        <p id="task-edit-path-help" class="text-xs text-gray-400 mt-1">請填寫下載服務可存取的目錄。Docker 部署請使用容器內路徑，例如 /downloads/videos。</p>
+      </div>
       <p class="text-sm text-gray-400">先在「設定」儲存 NAS 位置與模式，再選擇套用系統設定；支援先下載至本機再傳送至 NAS（保留本機檔案）、直接寫入 NAS，或改到另一個 NAS。只修改所選任務，未勾選的任務保留原設定。</p>
       <p class="text-sm text-amber-400">更換儲存位置後會重新下載，原位置的片段與檔案會保留，不會自動搬移。</p>
       <label class="block text-sm">生成字幕
