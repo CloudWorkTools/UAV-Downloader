@@ -1,36 +1,25 @@
-# Contributing to UAV Downloader
+# 貢獻指南
 
-Thank you for improving the project. Bug reports that include a reproducible
-URL and precise application version are especially valuable because supported
-sites and CDNs can change independently of the application.
+本專案主要維護繁體中文 Web 介面與 NAS 擴充，並持續追蹤原作者下載核心。使用者文字及新增文件以臺灣慣用的繁體中文撰寫。
 
-## Development setup
+## 模組邊界
 
-Use Python 3.10 or newer; release builds use Python 3.12.10.
+- 網站解析與下載行為留在 `src/uav_downloader/sites/`，不匯入 Web 或 NAS 模組。
+- `daemon/server.py` 負責 HTTP 資料轉接與驗證結果，不實作 SMB 協定。
+- `daemon/task_manager.py` 負責任務狀態與下載生命週期，只在完成點呼叫 NAS 傳送介面。
+- `daemon/nas.py` 管理 SMB 設定、帳密保存及檔案傳送，不依賴 HTTP handler 或前端欄位。
+- `uav-web/frontend/video-selection.js` 管理選取狀態，透過傳入的下載方法送出任務，不直接依賴網站解析。
+- `uav-web/frontend/nas-settings.js` 管理 NAS 表單；下載器不依賴這個檔案。
+- 新增擴充先使用獨立模組，再透過明確的方法接入既有流程。避免在爬蟲內加入 UI 狀態、表單欄位或 NAS 帳密。
 
-```bash
-git clone https://github.com/Alos21750/UAV-Downloader.git
-cd UAV-Downloader
-python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m pip install -e .
-.venv\Scripts\python -m pytest tests -q
-```
+## 開發檢查
 
-On macOS or Linux, activate the virtual environment with
-`source .venv/bin/activate` and install Tk through the operating system when it
-is not bundled with Python.
+安裝與 Web 測試指令以[專案首頁](README.md#開發與檢查)為準。修改核心時，另執行受影響的原有測試；修改 UI 時，檢查窄畫面、按鈕高度、空資料、重複送出與失敗後重試。
 
-## Pull requests
+SMB 測試使用獨立的測試帳號與共享目錄，勿使用正式影片目錄作為測試資料。保留本機檔案、不覆寫遠端既有檔案、錯誤不包含密碼，均為 NAS 擴充的必要行為。
 
-- Keep site-specific parsing in `src/uav_downloader/sites`.
-- Put shared configuration, network, update, and migration behavior in `core`.
-- Add regression tests for crawler changes and user-visible bug fixes.
-- Preserve public CLI options, state migration, and v2 release aliases unless
-  a documented major-version decision explicitly replaces them.
-- Never commit API keys, cookies, proxy credentials, downloaded videos, model
-  packs, or personally identifying logs.
-- Run the full test suite before requesting review.
+## 上游相容性
 
-Windows executable releases are created only by the pinned GitHub Actions
-workflow. Do not attach locally built executables to project releases.
+請將爬蟲修正、Web 操作與 NAS 功能分別放在各自模組，讓上游更新容易比較。公開 CLI、既有設定遷移及下載器方法須保持相容；確實需要修改時，連同呼叫端與回歸測試一起調整。
+
+上游同步規則見[上游更新維護](docs/upstream-sync.md)。不提交帳密、Cookies、下載影片、模型或個人日誌。原作者與第三方授權聲明須保留。
