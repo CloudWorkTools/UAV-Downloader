@@ -40,7 +40,7 @@ stack = root / 'firecrawl'
 if bundle:
     stack.mkdir(parents=True, exist_ok=True, mode=0o700)
     for filename, content in json.loads(base64.b64decode(bundle)).items():
-        if filename not in ('docker-compose.web.yml', 'docker-compose.firecrawl.yml'):
+        if filename != 'docker-compose.yml':
             raise ValueError('Invalid bundled compose file')
         (stack / filename).write_text(content)
     env_file = stack / '.env'
@@ -48,8 +48,10 @@ if bundle:
         with open(env_file, 'x', opener=lambda path, flags: __import__('os').open(path, flags, 0o600)) as output:
             output.write('FIRECRAWL_POSTGRES_PASSWORD=' + secrets.token_urlsafe(40) + '\n')
     docker('compose', '-p', 'uav-firecrawl', '--env-file', str(env_file),
-           '-f', str(stack / 'docker-compose.web.yml'), '-f', str(stack / 'docker-compose.firecrawl.yml'),
-           '--profile', 'firecrawl', 'up', '-d', '--no-build', '--wait', '--wait-timeout', '180', 'uav-firecrawl-api')
+           '-f', str(stack / 'docker-compose.yml'),
+           'up', '-d', '--no-build', '--wait', '--wait-timeout', '180', 'uav-firecrawl-api')
+    for obsolete in ('docker-compose.web.yml', 'docker-compose.firecrawl.yml'):
+        (stack / obsolete).unlink(missing_ok=True)
 network_args = []
 if (stack / '.env').exists() and subprocess.run(
         ['docker', 'network', 'inspect', 'uav-firecrawl'], stdout=subprocess.DEVNULL,
@@ -122,7 +124,7 @@ def main():
             images += ['uav-firecrawl-api:2.11.162', 'uav-firecrawl-browser:2.11.162',
                        'uav-firecrawl-postgres:2.11.162', 'redis:7.4-alpine', 'rabbitmq:3.13-management']
             files = {filename: (ROOT / filename).read_text() for filename in
-                     ('docker-compose.web.yml', 'docker-compose.firecrawl.yml')}
+                     ('docker-compose.yml',)}
             bundle = base64.b64encode(json.dumps(files).encode()).decode()
         archive = Path(temporary) / 'image.tar'
         subprocess.run(['docker', 'save', '-o', str(archive), *images], check=True)

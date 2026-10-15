@@ -21,6 +21,7 @@ Docker 版的「獨立 Firecrawl 擷取服務」預設啟用，使用者保存�
 測試失敗會顯示無法使用；成功狀態只適用該站與該次測試，其他站需個別測試。
 關閉並儲存後，應用程式不再呼叫 Firecrawl；Docker 服務的啟停由部署管理。
 
+唯一的 [docker-compose.yml](../docker-compose.yml) 包含 Web 與獨立 Firecrawl 的全部常駐服務，啟動方式見[專案首頁](../README.md#本機啟動)。
 此模組使用應用程式專屬的 Docker 服務，不讀取本機 MCP 的 Firecrawl 位址或資料。
 `python3 scripts/deploy_remote.py` 預設在本機建置，並把獨立 Firecrawl 一起部署到設定的遠端機。
 `--with-firecrawl` 保留相同預設行為；自行管理服務時可用 `--without-firecrawl` 略過附加服務安裝。

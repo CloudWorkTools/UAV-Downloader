@@ -136,7 +136,7 @@ Python binding 的[查詢文件](https://tantivy-py.readthedocs.io/en/latest/ref
 
 工作區的 [Firecrawl 模組](../src/uav_downloader/core/firecrawl.py)可由設定頁開關，Docker 版預設啟用並於啟動時背景測試 JableTV。
 它只讀取本應用程式的 `UAV_FIRECRAWL_URL` 與 `UAV_FIRECRAWL_API_KEY`，不讀取本機 MCP 設定。
-[Docker 附加設定](../docker-compose.firecrawl.yml)建立專用 API、瀏覽器、Redis、RabbitMQ 與 PostgreSQL，使用專屬網路及資料卷，不公開服務連接埠。
+[完整 Docker 設定](../docker-compose.yml)建立專用 API、瀏覽器、Redis、RabbitMQ 與 PostgreSQL，使用專屬網路及資料卷，不公開服務連接埠。
 
 一般 HTTP 鏡像全部連線失敗後，才嘗試 Firecrawl 的 `POST /v2/scrape`。
 程式要求完整 `rawHtml`、成功狀態與原站 URL，再沿用站台解析器；既有空清單不觸發額外擷取。

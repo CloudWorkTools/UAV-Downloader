@@ -4,20 +4,22 @@
 
 ## 本機啟動
 
-需要可執行的 Docker。第一次建置會下載 Rust、Python 與 FFmpeg 的依賴。
+需要 Docker Compose 與 Buildx。唯一的啟動檔是 [docker-compose.yml](docker-compose.yml)，包含 Web、獨立 Firecrawl 與其資料服務。第一次建置會下載 Rust、Python、FFmpeg 與 Firecrawl 的依賴。
+
+第一次使用時，在專案目錄建立資料庫密碼；已有 `.env` 時沿用原檔，保留密碼以便連接既有資料卷：
 
 ```bash
-docker build -f Dockerfile.web -t uav-downloader:local .
-mkdir -p "$HOME/.local/share/uav-downloader-local/downloads" "$HOME/.local/share/uav-downloader-local/config"
-docker run -d --name uav-downloader-local \
-  -p 127.0.0.1:8080:8080 \
-  -e TZ=Asia/Taipei \
-  -v "$HOME/.local/share/uav-downloader-local/downloads:/downloads" \
-  -v "$HOME/.local/share/uav-downloader-local/config:/config" \
-  uav-downloader:local
+(umask 077; test -e .env || python3 -c 'import secrets; print("FIRECRAWL_POSTGRES_PASSWORD=" + secrets.token_urlsafe(40))' > .env)
 ```
 
-開啟 **<http://127.0.0.1:8080>**。已有同名容器時，使用 `docker start uav-downloader-local` 啟動現有容器。
+在服務主機啟動全部功能：
+
+```bash
+docker compose up -d --build --wait
+```
+
+開啟 **<http://127.0.0.1:8080>**。Firecrawl 預設啟用，使用專屬 Docker 網路，不連接本機 MCP。
+下載、設定與模型資料分別保存在專案下的 `downloads/`、`config/`、`appdata/`；Firecrawl 資料保存在 Docker 資料卷。
 
 驗證服務：
 
@@ -25,9 +27,11 @@ docker run -d --name uav-downloader-local \
 curl --fail http://127.0.0.1:8080/api/status
 ```
 
-回應中的 `status` 應為 `ok`。停止服務使用 `docker stop uav-downloader-local`。下載與設定存放在上方掛載的本機目錄，停止或重建容器時仍會保留。
+回應中的 `status` 應為 `ok`。在設定頁按「儲存並測試目前站台」，確認 Firecrawl 能實際擷取該站。
+停止全部服務使用 `docker compose down`，重啟使用 `docker compose up -d`；資料仍會保留。請勿加上 `down -v`，該選項會刪除 Firecrawl 資料卷。
 
-Web 介面目前沒有登入驗證，因此範例只開放本機連線。遠端使用前，請先在外層配置 HTTPS 與存取驗證。
+Web 介面目前沒有登入驗證，因此預設只開放本機連線。遠端使用前，請先在外層配置 HTTPS 與存取驗證。
+遠端部署使用 `python3 scripts/deploy_remote.py`，本機僅建置映像；該流程會沿用遠端既有設定與資料卷。
 
 ## 瀏覽與批次下載
 

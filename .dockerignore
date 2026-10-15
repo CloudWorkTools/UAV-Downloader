@@ -19,3 +19,9 @@ download
 *.md
 
 .deploy.local*
+
+# Compose secrets and persistent application data
+.env
+config/
+appdata/
+downloads/

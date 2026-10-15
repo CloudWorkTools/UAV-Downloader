@@ -1,18 +1,144 @@
-# NAS-friendly compose. Put URLs (one per line) in ./downloads/urls.txt, then:
-#   docker compose run --rm uav               # downloads everything in urls.txt
-#   docker compose run --rm uav <URL> [<URL>] # or pass URL(s) directly
-# Videos land in ./downloads on the host.
+# Complete Web UI and private Firecrawl stack. See README.md for setup.
+# https://docs.firecrawl.dev/contributing/self-host
+x-firecrawl-env: &firecrawl-env
+  HOST: 0.0.0.0
+  PORT: 3002
+  ENV: local
+  USE_DB_AUTHENTICATION: "false"
+  REDIS_URL: redis://uav-firecrawl-redis:6379
+  REDIS_RATE_LIMIT_URL: redis://uav-firecrawl-redis:6379
+  PLAYWRIGHT_MICROSERVICE_URL: http://uav-firecrawl-browser:3000/scrape
+  POSTGRES_HOST: uav-firecrawl-postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_USER: postgres
+  POSTGRES_DB: postgres
+  POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD:?Set a private database password}
+  NUQ_RABBITMQ_URL: amqp://uav-firecrawl-rabbitmq:5672
+  NUM_WORKERS_PER_QUEUE: 2
+  CRAWL_CONCURRENT_REQUESTS: 4
+  MAX_CONCURRENT_JOBS: 2
+  BROWSER_POOL_SIZE: 2
+
 services:
+  uav-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: uav-downloader:web
+    container_name: uav-web
+    restart: unless-stopped
+    ports:
+      - "${UAV_BIND_ADDRESS:-127.0.0.1}:${UAV_PORT:-8080}:8080"
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Asia/Taipei
+      UAV_PORT: 8080
+      DOWNLOAD_DIR: /downloads
+      CONFIG_DIR: /config
+      APPDATA: /appdata
+      RESOLUTION: highest
+      UAV_FIRECRAWL_ENABLED: "1"
+      UAV_FIRECRAWL_URL: http://uav-firecrawl-api:3002
+    volumes:
+      - ./downloads:/downloads
+      - ./config:/config
+      - ./appdata:/appdata
+    networks: [firecrawl]
+    depends_on:
+      uav-firecrawl-api:
+        condition: service_healthy
+
+  # Optional one-shot CLI: docker compose run --rm uav <URL>
   uav:
+    profiles: [cli]
     image: ghcr.io/alos21750/uav-downloader:latest
-    # To build locally instead of pulling, comment out `image:` and uncomment:
-    # build: .
-    container_name: uav-downloader
     volumes:
       - ./downloads:/downloads
     environment:
-      - RESOLUTION=highest        # highest | 1080 | 720 | 480
-      - MAX_WORKERS_PER_VIDEO=8   # max 1..16; lower to reduce proxy load
-      - URLS_FILE=/downloads/urls.txt
-    # This is a run-to-completion job, not a long-running service:
+      RESOLUTION: highest
+      MAX_WORKERS_PER_VIDEO: 8
+      URLS_FILE: /downloads/urls.txt
     restart: "no"
+
+  uav-firecrawl-api:
+    image: uav-firecrawl-api:2.11.162
+    build:
+      context: https://github.com/firecrawl/firecrawl.git#v2.11.162:apps/api
+    restart: unless-stopped
+    environment: *firecrawl-env
+    command: node dist/src/harness.js --start-docker
+    networks: [firecrawl]
+    depends_on:
+      uav-firecrawl-redis:
+        condition: service_started
+      uav-firecrawl-browser:
+        condition: service_started
+      uav-firecrawl-postgres:
+        condition: service_healthy
+      uav-firecrawl-rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3002/v0/health/readiness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: 8g
+
+  uav-firecrawl-browser:
+    image: uav-firecrawl-browser:2.11.162
+    build:
+      context: https://github.com/firecrawl/firecrawl.git#v2.11.162:apps/playwright-service-ts
+    restart: unless-stopped
+    networks: [firecrawl]
+    environment:
+      PORT: 3000
+      MAX_CONCURRENT_PAGES: 4
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: 4g
+    tmpfs: ["/tmp/.cache:noexec,nosuid,size=1g"]
+
+  uav-firecrawl-redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    networks: [firecrawl]
+    command: redis-server --appendonly yes
+    volumes: [firecrawl-redis:/data]
+
+  uav-firecrawl-rabbitmq:
+    image: rabbitmq:3.13-management
+    restart: unless-stopped
+    networks: [firecrawl]
+    volumes: [firecrawl-rabbitmq:/var/lib/rabbitmq]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, check_running]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  uav-firecrawl-postgres:
+    image: uav-firecrawl-postgres:2.11.162
+    build:
+      context: https://github.com/firecrawl/firecrawl.git#v2.11.162:apps/nuq-postgres
+    restart: unless-stopped
+    networks: [firecrawl]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD:?Set a private database password}
+      POSTGRES_DB: postgres
+    volumes: [firecrawl-postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d postgres]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+networks:
+  firecrawl:
+    name: uav-firecrawl
+
+volumes:
+  firecrawl-redis:
+  firecrawl-rabbitmq:
+  firecrawl-postgres:
