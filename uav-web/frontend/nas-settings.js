@@ -5,7 +5,7 @@ window.NasSettings = (() => {
       updateMode();
       ['host', 'share', 'directory', 'username'].forEach(key => document.getElementById('nas-' + key).value = settings[key] || '');
       document.getElementById('nas-password').value = '';
-      document.getElementById('nas-status').textContent = settings.password_saved ? '密碼已保存；留空可沿用。變更 IP 或帳號時請重新輸入密碼。' : '尚未保存 NAS 密碼';
+      document.getElementById('nas-status').textContent = settings.password_saved ? '密碼已保存；留空可沿用。變更 NAS 位址或帳號時請重新輸入密碼。' : '尚未保存 NAS 密碼';
     }
     function payload() {
       const mode = document.getElementById('nas-storage-mode').value;
@@ -18,6 +18,7 @@ window.NasSettings = (() => {
       const mode = document.getElementById('nas-storage-mode').value;
       document.getElementById('nas-direct-fields').classList.toggle('hidden', mode !== 'direct');
       document.getElementById('nas-upload-fields').classList.toggle('hidden', mode !== 'upload');
+      document.getElementById('nas-address-help').classList.toggle('hidden', mode !== 'upload');
       document.getElementById('nas-test-button').disabled = mode === 'local';
       document.getElementById('setting-download-dir').disabled = mode === 'direct';
     }
@@ -28,7 +29,11 @@ window.NasSettings = (() => {
       button.disabled = true;
       status.textContent = '連線與寫入測試中…';
       try {
-        const response = await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({test_nas: true, nas: payload()})});
+        const settings = payload();
+        if (settings.mode === 'direct' && /^smb:/i.test(settings.direct_path.trim())) {
+          throw new Error('此欄位需要已掛載路徑，例如 /nas。SMB 網址與帳密請使用 SMB 傳送模式；直接儲存則需先完成系統掛載。');
+        }
+        const response = await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({test_nas: true, nas: settings})});
         const result = await response.json();
         if (!response.ok || !result.success) throw new Error(result.error || '測試失敗');
         status.textContent = '連線與寫入成功；請按下方儲存設定以永久保存';

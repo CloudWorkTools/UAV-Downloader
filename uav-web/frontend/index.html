@@ -257,17 +257,18 @@
               <option value="upload">先下載到本機，再以 SMB 傳送至 NAS</option>
             </select>
             <div id="nas-direct-fields" class="hidden space-y-2">
-              <label for="nas-direct-path" class="block">NAS 掛載路徑</label>
-              <input id="nas-direct-path" type="text" placeholder="/nas 或 Windows 網路路徑" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
-              <p class="text-xs text-gray-400">影片分段、合成檔與字幕直接寫入此 NAS 目錄。請先將 NAS 掛載到系統；Docker 請填容器內路徑。未掛載時會停止，不會改存本機。</p>
+              <label for="nas-direct-path" class="block">NAS 已掛載路徑（不是 SMB 網址）</label>
+              <input id="nas-direct-path" type="text" placeholder="例如 /nas；請勿填入 smb:// 網址" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
+              <p class="text-xs text-gray-400">影片分段、合成檔與字幕直接寫入此 NAS 目錄。請先將 NAS 掛載到系統；Docker 請填容器內路徑，例如 /nas。此模式的帳密由系統掛載時設定；未掛載時會停止，不會改存本機。</p>
             </div>
             <div id="nas-upload-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-3 hidden">
-              <div><label for="nas-host" class="block mb-1">NAS IP</label><input id="nas-host" type="text" placeholder="192.168.1.100" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
-              <div><label for="nas-share" class="block mb-1">共享資料夾名稱</label><input id="nas-share" type="text" placeholder="video" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-host" class="block mb-1">NAS 位址（IP、主機名稱或 SMB 網址）</label><input id="nas-host" type="text" placeholder="smb://nas.local/download 或 nas.local/download" autocomplete="off" aria-describedby="nas-address-help" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-share" class="block mb-1">共享資料夾（網址已包含時可留空）</label><input id="nas-share" type="text" placeholder="video" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
               <div><label for="nas-directory" class="block mb-1">子目錄（可留空，須已存在）</label><input id="nas-directory" type="text" placeholder="UAV" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
-              <div><label for="nas-username" class="block mb-1">帳號</label><input id="nas-username" type="text" placeholder="" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-username" class="block mb-1">NAS 帳號</label><input id="nas-username" type="text" placeholder="" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
               <div><label for="nas-password" class="block mb-1">密碼（留空保留已保存密碼）</label><input id="nas-password" type="password" placeholder="" autocomplete="new-password" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
             </div>
+            <p id="nas-address-help" class="hidden text-xs text-gray-400">SMB 網址可省略 smb://。例如 smb://nas.local/download 與 nas.local/download 都可使用；網址中的共享資料夾及子目錄會優先套用。帳號、密碼請分開填寫，不要放在網址中。也可只填 IP／主機名稱，再填共享資料夾。</p>
             <div class="flex flex-wrap items-center gap-3"><button type="button" id="nas-test-button" onclick="NasSettings.testConnection()" class="h-10 min-w-20 px-3 rounded-lg border border-[#3e3e4e] bg-[#282832] whitespace-nowrap disabled:opacity-50">測試連線</button><span id="nas-status" role="status" class="text-xs text-gray-400">設定隨下方儲存按鈕永久保存</span></div>
           </fieldset>
 

@@ -34,7 +34,7 @@ def test_persistence_encryption_and_blank_password(profile):
         nas.save_settings({**profile, 'password': '', 'host': '192.168.1.11'})
 
 
-@pytest.mark.parametrize('changes', [dict(host='//evil/share'), dict(share='../video'),
+@pytest.mark.parametrize('changes', [dict(host='//evil/../share'), dict(share='../video'),
     dict(directory='../outside'), dict(directory='x/../../y'), dict(enabled='true'),
     dict(username='user\nsecret'), dict(password=123)])
 def test_invalid_settings_do_not_replace_saved_profile(profile, changes):
@@ -276,3 +276,35 @@ def test_upload_respects_direct_mode_reservation(profile, remote, tmp_path):
         nas.upload_video(profile, video, threading.Event())
     assert remote.files == {lock: b'direct download active'}
     assert video.read_bytes() == b'local video'
+
+
+@pytest.mark.parametrize('address,share,directory', [
+    ('nas.local', 'video', 'UAV'),
+    ('smb://nas.local/download/', 'download', ''),
+    ('nas.local/download/films', 'download', 'films'),
+    ('//nas.local/download/films', 'download', 'films'),
+    (r'\\nas.local\download\films', 'download', 'films'),
+])
+def test_nas_address_accepts_hostname_and_smb_url(profile, address, share, directory):
+    settings = nas.prepare_settings({**profile, 'host': address})
+    assert settings['host'] == 'nas.local'
+    assert settings['share'] == share
+    assert settings['directory'] == directory
+
+
+@pytest.mark.parametrize('address', [
+    'https://nas.local/download', 'smb://user:example-password@nas.local/download',
+    'smb://nas.local/download/../outside', 'smb://nas.local:8080/download',
+    'bad host.local', 'smb://nas.local/download?query=1',
+    'smb://nas.local/download/%0a', 'smb://nas.local/%00share',
+])
+def test_nas_address_rejects_invalid_urls_without_exposing_credentials(profile, address):
+    with pytest.raises(nas.NasError) as error:
+        nas.prepare_settings({**profile, 'host': address})
+    assert 'example-password' not in str(error.value)
+
+
+def test_url_and_hostname_reuse_same_saved_password(profile):
+    nas.save_settings({**profile, 'host': 'smb://nas.local/video/UAV'})
+    result = nas.prepare_settings({**profile, 'host': 'nas.local', 'password': ''})
+    assert result['password'] == profile['password']

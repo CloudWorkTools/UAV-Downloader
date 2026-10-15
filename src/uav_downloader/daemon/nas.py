@@ -13,6 +13,7 @@ from pathlib import Path
 import tempfile
 import threading
 import uuid
+from urllib.parse import unquote, urlsplit
 
 from Crypto.Cipher import AES
 from uav_downloader.core.paths import product_data_dir
@@ -70,6 +71,43 @@ def load_settings(*, secret=False):
         return result
 
 
+
+def _normalize_address(settings):
+    address = settings['host'].replace('\\', '/')
+    if '/' in address or ':' in address:
+        try:
+            parsed = urlsplit(address if '://' in address else 'smb://' + address.lstrip('/'))
+            if parsed.scheme.lower() != 'smb' or parsed.query or parsed.fragment or parsed.port not in (None, 445):
+                raise ValueError()
+            if parsed.username is not None or parsed.password is not None:
+                raise NasError('請將帳號與密碼填入各自欄位，不要放在 NAS 網址中')
+            host = parsed.hostname or ''
+            path = unquote(parsed.path)
+            if any(ord(c) < 32 for c in path):
+                raise ValueError()
+            parts = path.strip('/').split('/')
+            if parts[0]:
+                settings['share'] = parts[0]
+                settings['directory'] = '/'.join(parts[1:])
+        except NasError:
+            raise
+        except (ValueError, TypeError):
+            raise NasError('NAS 網址格式錯誤，請使用 smb://主機/共享資料夾 或 主機/共享資料夾；帳密請分開填寫') from None
+    else:
+        host = address
+    host = host.lower().rstrip('.')
+    if host:
+        try:
+            if ipaddress.ip_address(host).version != 4:
+                raise ValueError()
+        except ValueError:
+            if (len(host) > 253 or re.fullmatch(r'[0-9.]+', host) or
+                    not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+                            for label in host.split('.'))):
+                raise NasError('請輸入有效的 NAS IP 或主機名稱') from None
+    settings['host'] = host
+
+
 def prepare_settings(body):
     if not isinstance(body, dict) or not isinstance(body.get('enabled', False), bool):
         raise NasError('NAS 設定格式錯誤')
@@ -82,17 +120,12 @@ def prepare_settings(body):
         if not isinstance(value, str) or len(value) > (4096 if key == 'direct_path' else 255) or any(ord(c) < 32 for c in value):
             raise NasError('NAS 欄位格式錯誤')
         result[key] = value.strip()
+    _normalize_address(result)
     password = body.get('password', '')
     if not isinstance(password, str) or len(password) > 1024:
         raise NasError('NAS 密碼格式錯誤')
     same_account = all(result[k] == old[k] for k in ('host', 'username'))
     result['password'] = password or (load_settings(secret=True)['password'] if result['mode'] == 'upload' and same_account and old['password_saved'] else '')
-    if result['host']:
-        try:
-            if ipaddress.ip_address(result['host']).version != 4:
-                raise ValueError()
-        except ValueError:
-            raise NasError('請輸入有效的 NAS IPv4 位址') from None
     if any(c in result['share'] for c in '\\/:*?"<>|') or result['share'] in ('.', '..'):
         raise NasError('共享資料夾名稱不可包含路徑或特殊符號')
     parts = result['directory'].replace('\\', '/').split('/')
@@ -102,7 +135,7 @@ def prepare_settings(body):
     if result['enabled'] and result['mode'] == 'direct':
         result['direct_path'] = direct_destination(result, probe=True)
     if result['enabled'] and result['mode'] == 'upload' and not all(result[k] for k in ('host', 'share', 'username', 'password')):
-        raise NasError('請填寫 NAS IP、共享資料夾、帳號及密碼')
+        raise NasError('請填寫 NAS 位址、共享資料夾、帳號及密碼')
     return result
 
 
@@ -144,7 +177,7 @@ def _connection(settings):
         root = ntpath.join('\\\\' + settings['host'], settings['share'], settings['directory'])
         yield smbclient, root, {'connection_cache': cache}
     except Exception:
-        raise NasError('NAS 連線或傳送失敗，請檢查帳密、共享目錄與寫入權限；本機檔案已保留') from None
+        raise NasError('NAS 連線或傳送失敗，請檢查位址或名稱解析、帳密、共享目錄與寫入權限；本機檔案已保留') from None
     finally:
         smbclient.reset_connection_cache(fail_on_error=False, connection_cache=cache)
 
@@ -227,6 +260,8 @@ def _is_network_path(path):
 
 def direct_destination(settings, *, probe=False):
     value = settings.get('direct_path', '')
+    if isinstance(value, str) and value.lower().startswith('smb:'):
+        raise NasError('這是 SMB 連線網址，不是已掛載的絕對路徑。直接儲存請先將 NAS 掛載到系統，再填寫容器內路徑，例如 /nas；帳密連線請選 SMB 傳送模式')
     if not isinstance(value, str) or not os.path.isabs(value):
         raise NasError('請填寫已掛載的 NAS 絕對路徑，例如 /nas 或 Windows 網路路徑')
     try:

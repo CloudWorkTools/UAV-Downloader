@@ -58,6 +58,13 @@ async function run() {
   const nas = context.window.NasSettings;
   nas.load({host: '192.168.1.10', username: 'user', enabled: true, password_saved: true});
   assert.equal(nas.payload().host, '192.168.1.10');
+  element('nas-host').value = 'smb://nas.local/download';
+  element('nas-username').value = 'nas-user';
+  element('nas-password').value = 'test-password';
+  assert.equal(nas.payload().host, 'smb://nas.local/download');
+  assert.equal(nas.payload().username, 'nas-user');
+  assert.equal(nas.payload().password, 'test-password');
+  element('nas-password').value = '';
   assert.equal(nas.payload().password, '');
   assert.ok(element('nas-status').textContent.includes('密碼已保存'));
   nas.load({enabled: true, mode: 'direct', direct_path: '/nas/videos'});
