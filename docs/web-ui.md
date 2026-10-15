@@ -15,12 +15,12 @@
 Web 下載完成後可呼叫同機 Speaches 辨識日文，再以本機翻譯模型產生英文或繁體中文字幕。
 在設定頁啟用「AI 自動生成字幕」並選擇字幕語言；輸出為影片旁的 `.ja.srt`、`.en.srt` 或 `.zh-TW.srt`，不修改 MP4。
 
-預設辨識網址為 `http://uav-speaches:8000/v1`，模型為 `Systran/faster-whisper-base`。
-[docker-compose.yml](../docker-compose.yml) 啟動 CPU INT8 Speaches，不對主機公開服務連接埠，並限制容器記憶體為 1 GB。
+預設辨識網址為 `http://uav-speaches:8000/v1`，模型為 `Systran/faster-whisper-small`。
+[docker-compose.yml](../docker-compose.yml) 啟動 CPU INT8 Speaches，不對主機公開服務連接埠，並限制容器記憶體為 2 GB。
 首次辨識時服務下載所選模型，快取保存在 `speaches-models` Docker 資料卷；本機翻譯模型也在首次需要時下載。
 辨識每次送出有限長度的音訊片段，合併時保留影片時間。
 
-base 模型可控制資源用量，但實際速度與日文辨識品質取決於 CPU、音訊及其他服務負載。
+small 模型使用 CPU INT8 辨識，但實際速度與日文辨識品質取決於 CPU、音訊及其他服務負載。
 改用較大的模型時，須同時確認 Speaches 的記憶體限制與主機可用資源；預設限制不保證能執行所有模型。
 
 外接服務在同一區塊設定「語音辨識 API 網址」、「辨識模型」及選填的「API 金鑰」。

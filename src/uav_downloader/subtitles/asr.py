@@ -18,7 +18,7 @@ import requests
 from uav_downloader.core import config
 
 DEFAULT_URL = 'http://uav-speaches:8000/v1'
-DEFAULT_MODEL = 'Systran/faster-whisper-base'
+DEFAULT_MODEL = 'Systran/faster-whisper-small'
 CHUNK_SECONDS = 120
 OVERLAP_SECONDS = 2
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -159,9 +159,10 @@ def _segments(payload, duration):
             raise ValueError('辨識 API 片段格式錯誤')
         start, end, text = item.get('start'), item.get('end'), item.get('text')
         if (type(start) not in (int, float) or type(end) not in (int, float)
-                or not 0 <= start < end <= duration + 0.1 or start >= duration or start < previous
+                or not 0 <= start < end <= duration + 1.0 or start >= duration or start < previous
                 or not isinstance(text, str) or len(text) > 16384 or '\x00' in text):
             raise ValueError('辨識 API 片段文字或時間戳無效')
+        # Whisper can place the final timestamp slightly beyond the audio tail.
         previous = start
         text = ' '.join(text.split())
         if text:

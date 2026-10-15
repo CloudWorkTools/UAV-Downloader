@@ -377,14 +377,14 @@
                 <input id="setting-asr-url" type="url" placeholder="http://uav-speaches:8000/v1" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
               </label>
               <label>辨識模型
-                <input id="setting-asr-model" type="text" placeholder="Systran/faster-whisper-base" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+                <input id="setting-asr-model" type="text" placeholder="Systran/faster-whisper-small" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
               </label>
               <label>API 金鑰（選填）
                 <input id="setting-asr-key" type="password" autocomplete="new-password" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
                 <span id="setting-asr-key-status" class="block text-xs text-gray-400"></span>
               </label>
               <label class="sm:col-span-2"><input id="setting-asr-clear-key" type="checkbox"> 清除已儲存的 API 金鑰</label>
-              <p class="text-xs text-gray-400 sm:col-span-2">預設使用同機 Speaches；首次辨識及翻譯會下載模型。可改用提供音訊辨識的 OpenAI 相容 API，音訊將傳至該服務。外部服務建議使用 HTTPS。base 模型適合有限記憶體，較大的模型需要更多資源。</p>
+              <p class="text-xs text-gray-400 sm:col-span-2">預設使用同機 Speaches；首次辨識及翻譯會下載模型。可改用提供音訊辨識的 OpenAI 相容 API，音訊將傳至該服務。外部服務建議使用 HTTPS。預設使用 small CPU INT8 模型，較大的模型需要更多資源。</p>
             </div>
           </div>
 
@@ -1183,7 +1183,7 @@
         document.getElementById('setting-download-cover').checked = data.download_cover !== false;
         document.getElementById('setting-proxy-mode').value = data.proxy_mode || 'direct';
         document.getElementById('setting-asr-url').value = data.asr?.base_url || 'http://uav-speaches:8000/v1';
-        document.getElementById('setting-asr-model').value = data.asr?.model || 'Systran/faster-whisper-base';
+        document.getElementById('setting-asr-model').value = data.asr?.model || 'Systran/faster-whisper-small';
         document.getElementById('setting-asr-key').value = '';
         document.getElementById('setting-asr-clear-key').checked = false;
         document.getElementById('setting-asr-key-status').textContent = data.asr?.api_key_saved ? '已設定金鑰；留空保留。變更網址時請重新輸入。' : '本機 Speaches 不需金鑰';

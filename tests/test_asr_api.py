@@ -49,7 +49,7 @@ def test_invalid_settings_do_not_replace_saved_profile(settings_folder, values):
 @pytest.mark.parametrize('segment', [
     {'start': -1, 'end': 1, 'text': 'bad'},
     {'start': 0, 'end': float('nan'), 'text': 'bad'},
-    {'start': 0, 'end': 11, 'text': 'bad'},
+    {'start': 0, 'end': 12, 'text': 'bad'},
     {'start': True, 'end': 1, 'text': 'bad'},
     {'start': 1, 'end': 0, 'text': 'bad'},
     {'start': 0, 'end': 1, 'text': None},
@@ -186,3 +186,7 @@ def test_same_host_model_is_installed_before_transcription(tmp_path, monkeypatch
     assert asr._request(settings, wav) == {'segments': []}
     assert [item[0] for item in requests] == ['/v1/models/test-model', '/v1/audio/transcriptions']
     assert all(item[1] == 'Bearer test-token' for item in requests)
+
+
+def test_whisper_tail_rounding_is_clipped_to_audio_duration():
+    assert asr._segments({'segments': [segment(11.3, 13.3, '日本語')]}, 13) == [(11.3, 13.0, '日本語')]
