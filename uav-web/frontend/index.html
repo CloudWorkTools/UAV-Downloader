@@ -34,6 +34,8 @@
     }
   </script>
   <style>
+    .backend-summary-content { display: inline-flex; align-items: center; gap: 10px; width: calc(100% - 1.25rem); vertical-align: middle; }
+    .backend-summary-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .backend-work-list { display: flex; gap: 12px; overflow-x: auto; margin-top: 8px; padding-bottom: 4px; min-width: 0; }
     .backend-work-card { flex: 0 0 320px; max-width: 100%; height: 88px; overflow-y: auto; overflow-wrap: anywhere; }
     /* Custom scrollbars */
@@ -396,7 +398,7 @@
 
   <footer class="max-w-7xl w-full min-w-0 mx-auto px-4 sm:px-6 pb-4" aria-label="後端工作狀態">
     <details id="backend-activity-panel" class="bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-3 min-w-0">
-      <summary class="cursor-pointer text-sm font-semibold">後端工作動態 <span id="backend-work-count" class="text-gray-400 font-normal ml-2">等待連線</span></summary>
+      <summary class="cursor-pointer text-sm font-semibold"><span class="backend-summary-content"><span class="shrink-0">後端工作動態</span><span id="backend-work-count" class="shrink-0 text-gray-400 font-normal">等待連線</span><span id="backend-summary-preview" class="backend-summary-preview text-xs text-gray-300 font-normal">等待後端回報</span></span></summary>
       <p id="backend-last-update" class="text-xs text-gray-500 mt-2">等待後端回報，連線後約每秒更新</p>
       <div id="backend-work-list" class="backend-work-list text-xs text-gray-300">等待後端回報工作狀態</div>
     </details>
@@ -466,6 +468,7 @@
             renderBackendActivity(msg.data);
           } else if (msg.type === 'daemon_status' && !msg.connected) {
             document.getElementById('backend-last-update').textContent = '後端重新連線中，畫面保留最後回報狀態';
+            document.getElementById('backend-summary-preview').textContent = '後端重新連線中，保留最後回報狀態';
             document.getElementById('daemon-status-badge').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> 守護進程重新連線中...';
           }
         } catch (e) {}
@@ -473,6 +476,7 @@
 
       ws.onclose = () => {
         document.getElementById('backend-last-update').textContent = '連線中斷，畫面保留最後回報狀態';
+        document.getElementById('backend-summary-preview').textContent = '連線中斷，保留最後回報狀態';
         document.getElementById('daemon-status-badge').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span> 連線中斷，重試中...';
         setTimeout(initWebSocket, 2000);
       };
@@ -707,6 +711,15 @@
       const recent = (data.activities || []).filter(item => item.state !== 'running').slice(0, 3);
       const downloads = latestDownloadTasks.filter(task => ['preparing','downloading','subtitles','publishing','uploading','pausing','cancelling'].includes(task.status));
       document.getElementById('backend-work-count').textContent = `執行中 ${running.length + downloads.length} 項`;
+      const summaries = running.flatMap(item => {
+        const parts = Object.values(item.parts || {});
+        return (parts.length ? parts : [item.message]).map(message => `${item.site || item.title}：${message} · ${item.elapsed_seconds} 秒`);
+      });
+      summaries.push(...downloads.map(task => `下載：${task.phase || task.status}${task.phase_total ? ` ${task.phase_done} / ${task.phase_total}` : ''}`));
+      const preview = document.getElementById('backend-summary-preview');
+      preview.textContent = summaries.length ? summaries[Math.floor((data.observed_at || 0) / 4) % summaries.length] :
+        recent.length ? `${recent[0].state === 'failed' ? '最近失敗' : '最近完成'}：${recent[0].message}` : '目前沒有執行中的工作';
+      preview.title = summaries.join('；') || preview.textContent;
       if (data.observed_at) document.getElementById('backend-last-update').textContent = `後端回報：${new Date(data.observed_at * 1000).toLocaleTimeString('zh-TW')}（約每秒更新）`;
       const rows = [...running, ...recent].map(item => {
         const state = item.state === 'running' ? '執行中' : item.state === 'failed' ? '失敗' : '完成';

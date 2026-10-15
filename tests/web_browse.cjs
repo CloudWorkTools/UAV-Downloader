@@ -118,6 +118,7 @@ async function run() {
   context.renderBackendActivity({observed_at:1700000000, activities:[{title:'搜尋影片',site:'JableTV',query:'MIMK',page:1,state:'running',elapsed_seconds:12,message:'讀取第 4 頁',parts:{MIMK:'已讀取 4 頁'}}]});
   assert.match(element('browse-loading-message').textContent, /讀取第 4 頁.*12 秒/);
   assert.match(element('backend-work-list').innerHTML, /已讀取 4 頁/);
+  assert.match(element('backend-summary-preview').textContent, /已讀取 4 頁.*12 秒/);
   context.renderBackendActivity({activities:[{title:'搜尋影片',site:'MissAV',query:'other',page:1,state:'running',elapsed_seconds:1,message:'wrong query'}]});
   assert.ok(!element('browse-loading-message').textContent.includes('wrong query'));
   context.renderBackendActivity({activities:[{title:'<script>',state:'failed',message:'<img onerror=alert(1)>',elapsed_seconds:1}]});
@@ -127,6 +128,13 @@ async function run() {
   assert.match(html, /<details id="backend-activity-panel" class=/);
   assert.ok(!/<details[^>]*id="backend-activity-panel"[^>]*\bopen\b/.test(html), 'Activity starts collapsed');
   assert.match(element('backend-work-list').innerHTML, /backend-work-card/);
+  const multiple = [{title:'搜尋影片',site:'MissAV',state:'running',message:'核對中',elapsed_seconds:10,parts:{a:'條件一：已讀 6 頁',b:'條件二：已讀 9 頁'}}];
+  context.renderBackendActivity({observed_at:8,activities:multiple});
+  assert.match(element('backend-summary-preview').textContent, /條件一/);
+  context.renderBackendActivity({observed_at:12,activities:multiple});
+  assert.match(element('backend-summary-preview').textContent, /條件二/);
+  context.renderBackendActivity({activities:[]});
+  assert.equal(element('backend-summary-preview').textContent, '目前沒有執行中的工作');
   console.log('Search pagination, page reset, category/site reset, preview and request races: PASS');
 }
 run().catch(e => {console.error(e);process.exitCode=1;});
