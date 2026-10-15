@@ -65,7 +65,7 @@ class _SearchSession:
                 rounds = 0
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     while len(self.pages) < page:
-                        if self.buffer:
+                        if len(self.buffer) >= 24 or (self.complete and self.buffer):
                             self.pages.append(self.buffer[:24])
                             del self.buffer[:24]
                             continue
@@ -80,6 +80,7 @@ class _SearchSession:
                             future.result()
                         rounds += 1
                         common = set.intersection(*(set(state['videos']) for state in self.states))
+                        previous_count = len(self.buffer)
                         for key, video in self.states[0]['videos'].items():
                             if key in common and key not in self.matches:
                                 self.matches[key] = video
@@ -88,11 +89,15 @@ class _SearchSession:
                         if finished:
                             candidates = set.intersection(*(set(state['videos']) for state in finished))
                             self.complete = candidates <= common
+                        if previous_count < len(self.buffer) < 24 and not self.complete:
+                            break
             except Exception:
                 self.failed = True
                 raise
             selected = self.pages[page - 1] if page <= len(self.pages) else []
             pending = page > len(self.pages) and not self.complete
+            if pending and page == len(self.pages) + 1:
+                selected = self.buffer[:24]
             activity.report(f'已確認 {len(self.matches)} 筆交集結果' + ('，繼續比對中' if pending else '，本頁已就緒'))
             return dict(videos=selected[:], count=len(selected), total=len(self.matches) if self.complete else None,
                         complete=self.complete, pending=pending,

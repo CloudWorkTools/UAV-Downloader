@@ -96,8 +96,8 @@ def test_intersection_paginates_after_filtering_and_reuses_cache(monkeypatch):
     count = len(calls)
     second = BrowseService.search_videos('SupJav', 'a b', 2)
     assert second['videos'] == items[24:]
-    assert second['has_more']
-    assert len(calls) == count
+    assert not second['has_more'] and second['complete']
+    assert len(calls) > count
     assert BrowseService.search_videos('SupJav', 'a b', 3)['videos'] == []
     assert not BrowseService.search_videos('SupJav', 'a b', 2)['has_more']
 
@@ -367,18 +367,25 @@ def test_first_page_returns_without_exhausting_sources(monkeypatch):
     assert calls == [1, 1]
 
 
-def test_partial_pages_are_frozen_and_next_page_resumes_sources(monkeypatch):
-    a, b = video('a'), video('b')
-    calls = mock_pages(monkeypatch, {(term, page): [item] for term in ('a', 'b') for page,item in [(1,a),(2,b)]})
-    first = BrowseService.search_videos('SupJav', 'a b')
-    assert first['videos'] == [a]
-    assert calls == [('a',1),('b',1)]
-    second = BrowseService.search_videos('SupJav', 'a b', 2, first['search_id'])
-    assert second['videos'] == [b]
+def test_sparse_source_pages_fill_result_pages_and_preserve_progress(monkeypatch):
+    items = [video(str(i)) for i in range(53)]
+    chunks = [items[:4], items[4:6], items[6:18], items[18:30], items[30:45], items[45:]]
+    calls = mock_pages(monkeypatch, {(term, page): chunk for term in ('a', 'b')
+                                     for page, chunk in enumerate(chunks, 1)})
+    preview = BrowseService.search_videos('SupJav', 'a b')
+    assert preview['videos'] == items[:4] and preview['pending']
+    assert sorted(calls) == [('a', 1), ('b', 1)]
+    first = resolved_page('SupJav', 'a b', search_id=preview['search_id'])
+    assert first['videos'] == items[:24] and not first['pending']
+    assert max(page for _, page in calls) == 4
+    second = resolved_page('SupJav', 'a b', 2, first['search_id'])
+    assert second['videos'] == items[24:48] and not second['pending']
+    last = resolved_page('SupJav', 'a b', 3, first['search_id'])
+    assert last['videos'] == items[48:] and last['complete'] and not last['has_more']
     count = len(calls)
-    assert BrowseService.search_videos('SupJav','a b',1,first['search_id'])['videos'] == [a]
+    assert BrowseService.search_videos('SupJav', 'a b', 1, first['search_id'])['videos'] == items[:24]
     assert len(calls) == count
-    assert resolved_page('SupJav','a b',3,first['search_id'])['total'] == 2
+    assert len(calls) == len(set(calls)), 'Do not refetch previously scanned source pages'
 
 
 def test_pending_response_is_not_a_false_empty_result(monkeypatch):
@@ -393,11 +400,11 @@ def test_pending_response_is_not_a_false_empty_result(monkeypatch):
 def test_cursor_survives_time_bucket_change(monkeypatch):
     clock = [299]
     monkeypatch.setattr('uav_downloader.daemon.browse_service.time.monotonic', lambda: clock[0])
-    a,b = video('a'),video('b')
-    calls = mock_pages(monkeypatch, {(term,page):[item] for term in ('a','b') for page,item in [(1,a),(2,b)]})
+    a,b = [video(str(i)) for i in range(24)], [video('next')]
+    calls = mock_pages(monkeypatch, {(term,page):items for term in ('a','b') for page,items in [(1,a),(2,b)]})
     first=BrowseService.search_videos('SupJav','a b')
     clock[0]=601
-    assert BrowseService.search_videos('SupJav','a b',2,first['search_id'])['videos'] == [b]
+    assert resolved_page('SupJav','a b',2,first['search_id'])['videos'] == b
     assert calls.count(('a',1)) == calls.count(('b',1)) == 1
 
 
@@ -410,17 +417,18 @@ def test_keyword_and_tag_sources_are_interleaved(monkeypatch):
         return {'videos':[video('from-tag' if source==url else str(page))] if page<10 else []}
     monkeypatch.setattr(BrowseService,'fetch_videos',staticmethod(fetch))
     first=BrowseService.search_videos('SupJav','wife')
-    second=BrowseService.search_videos('SupJav','wife',2,first['search_id'])
-    assert second['videos'] == [video('from-tag')]
+    second=BrowseService.search_videos('SupJav','wife',1,first['search_id'])
+    assert second['pending']
+    assert second['videos'] == [video('1'),video('from-tag')]
     assert calls == [(BrowseService.get_search_url('SupJav','wife'),1),(url,1)]
 
 
 def test_next_page_failure_keeps_previously_shown_page(monkeypatch):
-    first = video('first')
+    first = [video(str(i)) for i in range(24)]
     failing = [False]
     def fetch(site,url,page):
         if page==1:
-            return {'videos':[first]}
+            return {'videos':first}
         if failing[0]:
             return {'videos':[], 'error':'temporary error'}
         return {'videos':[video('second')]} if page==2 else {'videos':[]}
@@ -430,7 +438,7 @@ def test_next_page_failure_keeps_previously_shown_page(monkeypatch):
     with pytest.raises(RuntimeError):
         BrowseService.search_videos('SupJav','a b',2,result['search_id'])
     failing[0]=False
-    assert BrowseService.search_videos('SupJav','a b',1,result['search_id'])['videos']==[first]
+    assert BrowseService.search_videos('SupJav','a b',1,result['search_id'])['videos']==first
     assert resolved_page('SupJav','a b',2,result['search_id'])['videos']==[video('second')]
 
 

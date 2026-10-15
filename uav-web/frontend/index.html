@@ -634,7 +634,10 @@
             continue;
           }
           if (res.pending) {
-            document.getElementById('browse-loading-message').textContent = '已保存查詢進度，正在接續比對符合條件的影片…';
+            if (res.videos?.length) renderVideos(res.videos);
+            document.getElementById('page-indicator').textContent = `第 ${currentPage} 頁`;
+            document.getElementById('btn-next-page').disabled = true;
+            document.getElementById('browse-loading-message').textContent = `本頁已找到 ${res.videos?.length || 0} / 24 筆，正在接續補滿本頁…`;
             await new Promise(resolve => setTimeout(resolve, 200));
             continue;
           }

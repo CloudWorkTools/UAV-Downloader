@@ -138,9 +138,12 @@ async function run() {
   vm.runInContext("currentSite='MissAV'; currentSearchQuery='a b'; searchSession=null; currentPage=1", context);
   let pendingIndex = pending.length;
   const incremental = context.fetchBrowse();
-  respond(pending[pendingIndex], {videos:[],pending:true,search_id:'123',has_more:true,complete:false});
+  respond(pending[pendingIndex], {videos:[{url:'partial-confirmed'}],pending:true,search_id:'123',has_more:true,complete:false});
   await new Promise(setImmediate);
   await new Promise(setImmediate);
+  assert.match(cards.at(-1).innerHTML, /partial-confirmed/, 'Render confirmed results while filling the same page');
+  assert.match(element('browse-loading-message').textContent, /1 \/ 24/);
+  assert.equal(element('btn-next-page').disabled, true);
   assert.equal(JSON.parse(pending[pendingIndex+1].options.body).search_id, '123');
   assert.equal(JSON.parse(pending[pendingIndex+1].options.body).page, 1);
   respond(pending[pendingIndex+1], {videos:[{url:'first-confirmed'}],search_id:'123',has_more:true,complete:false});
