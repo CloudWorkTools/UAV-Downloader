@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import base64
 from contextlib import contextmanager
+import hashlib
 import ipaddress
 import json
 import ntpath
 import os
+import re
 from pathlib import Path
 import tempfile
 import threading
@@ -16,7 +18,7 @@ from Crypto.Cipher import AES
 from uav_downloader.core.paths import product_data_dir
 
 _lock = threading.RLock()
-_FIELDS = ('enabled', 'host', 'share', 'directory', 'username')
+_FIELDS = ('enabled', 'mode', 'host', 'share', 'directory', 'username', 'direct_path')
 
 
 class NasError(ValueError):
@@ -54,7 +56,7 @@ def _key():
 def load_settings(*, secret=False):
     with _lock:
         raw = _read()
-        result = {k: raw.get(k, False if k == 'enabled' else '') for k in _FIELDS}
+        result = {k: raw.get(k, False if k == 'enabled' else 'upload' if k == 'mode' else '') for k in _FIELDS}
         result['password_saved'] = bool(raw.get('password_encrypted'))
         if secret:
             result['password'] = ''
@@ -72,17 +74,19 @@ def prepare_settings(body):
     if not isinstance(body, dict) or not isinstance(body.get('enabled', False), bool):
         raise NasError('NAS 設定格式錯誤')
     old = load_settings()
-    result = {'enabled': body.get('enabled', False)}
-    for key in _FIELDS[1:]:
+    result = {'enabled': body.get('enabled', False), 'mode': body.get('mode', 'upload')}
+    if result['mode'] not in ('upload', 'direct'):
+        raise NasError('不支援的 NAS 儲存模式')
+    for key in ('host', 'share', 'directory', 'username', 'direct_path'):
         value = body.get(key, '')
-        if not isinstance(value, str) or len(value) > 255 or any(ord(c) < 32 for c in value):
+        if not isinstance(value, str) or len(value) > (4096 if key == 'direct_path' else 255) or any(ord(c) < 32 for c in value):
             raise NasError('NAS 欄位格式錯誤')
         result[key] = value.strip()
     password = body.get('password', '')
     if not isinstance(password, str) or len(password) > 1024:
         raise NasError('NAS 密碼格式錯誤')
     same_account = all(result[k] == old[k] for k in ('host', 'username'))
-    result['password'] = password or (load_settings(secret=True)['password'] if same_account and old['password_saved'] else '')
+    result['password'] = password or (load_settings(secret=True)['password'] if result['mode'] == 'upload' and same_account and old['password_saved'] else '')
     if result['host']:
         try:
             if ipaddress.ip_address(result['host']).version != 4:
@@ -95,7 +99,9 @@ def prepare_settings(body):
     if any(p in ('.', '..') or any(c in p for c in ':*?"<>|') for p in parts):
         raise NasError('NAS 子目錄格式錯誤')
     result['directory'] = '\\'.join(p for p in parts if p)
-    if result['enabled'] and not all(result[k] for k in ('host', 'share', 'username', 'password')):
+    if result['enabled'] and result['mode'] == 'direct':
+        result['direct_path'] = direct_destination(result, probe=True)
+    if result['enabled'] and result['mode'] == 'upload' and not all(result[k] for k in ('host', 'share', 'username', 'password')):
         raise NasError('請填寫 NAS IP、共享資料夾、帳號及密碼')
     return result
 
@@ -110,6 +116,10 @@ def save_settings(body):
             cipher = AES.new(_key(), AES.MODE_GCM)
             encrypted, tag = cipher.encrypt_and_digest(values['password'].encode('utf-8'))
             raw['password_encrypted'] = base64.b64encode(cipher.nonce + tag + encrypted).decode('ascii')
+        elif all(values[k] == _read().get(k, '') for k in ('host', 'username')):
+            saved = _read().get('password_encrypted')
+            if saved:
+                raw['password_encrypted'] = saved
         fd, temporary = tempfile.mkstemp(dir=folder, prefix='.nas-')
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -143,6 +153,8 @@ def test_connection(body):
     if not isinstance(body, dict):
         raise NasError('NAS 設定格式錯誤')
     settings = prepare_settings({**body, 'enabled': True})
+    if settings['mode'] == 'direct':
+        return
     with _connection(settings) as (smb, root, options):
         probe = ntpath.join(root, '.uav-test-' + uuid.uuid4().hex)
         with smb.open_file(probe, mode='xb', **options) as stream:
@@ -175,3 +187,68 @@ def upload_video(settings, video_file, cancelled):
             finally:
                 if smb.path.exists(temporary, **options):
                     smb.remove(temporary, **options)
+
+
+def _linux_mount_type(path, mountinfo):
+    best = ('', '')
+    for line in mountinfo.splitlines():
+        fields, filesystem = line.split(' - ', 1)
+        mount = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), fields.split()[4])
+        if path == mount or path.startswith(mount.rstrip('/') + '/'):
+            if len(mount) > len(best[0]):
+                best = (mount, filesystem.split()[0])
+    return best[1]
+
+
+def _is_network_path(path):
+    if os.name == 'nt':
+        import ctypes
+        import ntpath
+        root = ntpath.splitdrive(path)[0] + '\\'
+        get_type = ctypes.windll.kernel32.GetDriveTypeW
+        get_type.argtypes = [ctypes.c_wchar_p]
+        get_type.restype = ctypes.c_uint
+        return get_type(root) == 4
+    try:
+        filesystem = _linux_mount_type(path, Path('/proc/self/mountinfo').read_text())
+    except OSError:
+        raise NasError('此平台無法驗證 NAS 掛載，請使用 Linux Docker 或 Windows 網路磁碟機') from None
+    return filesystem in ('cifs', 'smb3', 'nfs', 'nfs4')
+
+
+def direct_destination(settings, *, probe=False):
+    value = settings.get('direct_path', '')
+    if not isinstance(value, str) or not os.path.isabs(value):
+        raise NasError('請填寫已掛載的 NAS 絕對路徑，例如 /nas 或 Windows 網路路徑')
+    try:
+        path = str(Path(value).resolve(strict=True))
+        if not Path(path).is_dir() or not _is_network_path(path):
+            raise NasError('NAS 路徑未掛載為網路檔案系統，已停止操作，避免誤存至本機')
+        if probe:
+            with tempfile.TemporaryFile(dir=path) as stream:
+                stream.write(b'UAV NAS write test')
+                stream.flush()
+                os.fsync(stream.fileno())
+    except OSError:
+        raise NasError('NAS 路徑不存在或無法寫入，請確認掛載與權限') from None
+    return path
+
+
+@contextmanager
+def reserve_direct_target(settings, filename):
+    folder = Path(direct_destination(settings))
+    target = folder / filename
+    lock = folder / ('.uav-' + hashlib.sha256(filename.casefold().encode()).hexdigest() + '.lock')
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise NasError('此 NAS 檔案已有下載任務使用中，請勿重複下載；若服務曾異常中止，請確認後清除 .uav-*.lock') from None
+    except OSError:
+        raise NasError('NAS 無法保留下載位置，請確認連線與寫入權限') from None
+    try:
+        if target.exists() or target.is_symlink():
+            raise NasError('NAS 已存在同名影片，已停止下載以避免覆寫')
+        yield
+    finally:
+        os.close(fd)
+        lock.unlink(missing_ok=True)

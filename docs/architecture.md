@@ -61,7 +61,7 @@ Canonical v3 assets and legacy aliases are both generated from that one build.
 
 Web 服務位於 `uav-web/`，透過 JSON API 呼叫 Python daemon。Rust 不接觸 NAS 密碼的永久儲存，也不直接呼叫爬蟲。
 
-`daemon/nas.py` 提供設定讀寫、連線測試及影片傳送。HTTP handler 呼叫設定介面；任務管理器在加入任務時保存目的地快照，在影片與字幕完成後呼叫傳送介面。NAS 模組不回呼任務管理器，傳送取消透過事件傳入。
+`daemon/nas.py` 提供設定讀寫、連線測試及影片傳送。HTTP handler 呼叫設定介面；任務管理器在加入任務時保存目的地快照，直接模式在下載前驗證 NAS 掛載並保留目的檔案，傳送模式在影片與字幕完成後呼叫傳送介面。NAS 模組不回呼任務管理器，傳送取消透過事件傳入。
 
 `uav-web/frontend/video-selection.js` 只管理批次選取與送出，由頁面傳入下載方法與完成回呼。
 

@@ -6,6 +6,7 @@ import os
 import threading
 import time
 import uuid
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -114,7 +115,12 @@ class TaskManager:
 
         nas_settings = nas.load_settings()
         if nas_settings.get("enabled"):
-            nas_settings = nas.load_settings(secret=True)
+            if nas_settings.get("mode") == "direct":
+                target_dest = nas.direct_destination(nas_settings, probe=True)
+                if dest and os.path.abspath(dest) != target_dest:
+                    raise nas.NasError("直接 NAS 模式不接受其他下載目錄，請先修改 NAS 儲存設定")
+            else:
+                nas_settings = nas.load_settings(secret=True)
 
         task_id = f"task_{uuid.uuid4().hex[:10]}"
         task = DownloadTask(
@@ -200,7 +206,11 @@ class TaskManager:
             self._finish_task(task, "cancelled")
             return
 
+        storage = ExitStack()
         try:
+            if task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "direct":
+                nas.direct_destination(task.nas_settings)
+
             # Temporarily configure resolution if set
             if task.resolution:
                 try:
@@ -237,6 +247,10 @@ class TaskManager:
                 return
 
             task.name = job.target_name() or "video"
+            if task.nas_settings.get("enabled") and task.nas_settings.get("mode") == "direct":
+                if os.path.normcase(os.path.abspath(job.dest_folder())) != os.path.normcase(task.dest):
+                    raise nas.NasError("下載器未使用指定的 NAS 目錄，已停止下載")
+                storage.enter_context(nas.reserve_direct_target(task.nas_settings, f"{task.name}.mp4"))
             task.status = "downloading"
             task.updated_at = datetime.now(timezone.utc).isoformat()
 
@@ -269,7 +283,7 @@ class TaskManager:
                 task.updated_at = datetime.now(timezone.utc).isoformat()
                 self._run_subtitles(task, job)
 
-            if task.nas_settings.get("enabled"):
+            if task.nas_settings.get("enabled") and task.nas_settings.get("mode", "upload") == "upload":
                 task.status = "uploading"
                 task.updated_at = datetime.now(timezone.utc).isoformat()
                 nas.upload_video(task.nas_settings,
@@ -308,6 +322,13 @@ class TaskManager:
             else:
                 task.error = str(exc)
                 self._finish_task(task, "failed")
+
+        finally:
+            try:
+                storage.close()
+            except OSError:
+                warning = "NAS 暫存鎖無法清除，請確認連線後清除 .uav-*.lock"
+                task.error = f"{task.error}；{warning}" if task.error else warning
 
     def _run_subtitles(self, task: DownloadTask, job: Any) -> None:
         try:

@@ -1,6 +1,7 @@
 import io
 import json
 import threading
+from pathlib import Path
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
@@ -159,3 +160,104 @@ def test_queue_only_completes_after_upload(profile, monkeypatch, tmp_path):
     assert task.status == 'failed'
     assert 'local retained' in task.error
     assert (tmp_path / 'movie.mp4').exists()
+
+
+@pytest.fixture
+def direct_profile(profile, monkeypatch, tmp_path):
+    folder = tmp_path / 'nas'
+    folder.mkdir()
+    monkeypatch.setattr(nas, '_is_network_path', lambda path: path == str(folder))
+    return {**profile, 'mode': 'direct', 'direct_path': str(folder), 'host': '',
+            'share': '', 'directory': '', 'username': '', 'password': ''}
+
+
+def test_direct_destination_requires_network_mount(profile, tmp_path):
+    with pytest.raises(nas.NasError, match='網路檔案系統'):
+        nas.direct_destination({'direct_path': str(tmp_path)}, probe=True)
+    with pytest.raises(nas.NasError, match='絕對路徑'):
+        nas.direct_destination({'direct_path': 'smb://192.168.1.10/video'})
+    with pytest.raises(nas.NasError, match='不存在'):
+        nas.direct_destination({'direct_path': str(tmp_path / 'missing')})
+    assert not (tmp_path / 'missing').exists()
+
+
+def test_mount_detection_uses_deepest_mount_and_decodes_spaces():
+    mounts = ('1 0 0:1 / / rw - overlay overlay rw\n'
+              '2 1 0:2 / /nas\\040videos rw - cifs //server/video rw\n'
+              '3 2 0:3 / /nas\\040videos/local rw - ext4 /dev/sda rw\n')
+    assert nas._linux_mount_type('/nas videos/movie', mounts) == 'cifs'
+    assert nas._linux_mount_type('/nas videos/local/movie', mounts) == 'ext4'
+    assert nas._linux_mount_type('/nas videos-other', mounts) == 'overlay'
+
+
+def test_direct_mode_persistence_keeps_existing_smb_password(profile, direct_profile):
+    nas.save_settings(profile)
+    direct = {**direct_profile, 'host': profile['host'], 'share': profile['share'],
+              'username': profile['username']}
+    nas.save_settings(direct)
+    saved = nas.load_settings()
+    assert saved['mode'] == 'direct'
+    assert saved['direct_path'] == direct['direct_path']
+    assert nas.load_settings(secret=True)['password'] == profile['password']
+    assert 'password' not in saved
+    assert not list(Path(direct['direct_path']).iterdir())
+
+
+def test_direct_queue_overrides_local_default_and_skips_upload(direct_profile, monkeypatch, tmp_path):
+    from uav_downloader.daemon import task_manager
+    nas.save_settings(direct_profile)
+    local = tmp_path / 'local'
+    monkeypatch.setenv('DOWNLOAD_DIR', str(local))
+    manager = TaskManager()
+    monkeypatch.setattr(manager, 'start_dispatcher', lambda: None)
+    task = manager.add_task('https://jable.tv/videos/test/')
+    assert task.dest == direct_profile['direct_path']
+    assert 'password' not in task.nas_settings
+    with pytest.raises(nas.NasError, match='其他下載目錄'):
+        manager.add_task(task.url, dest=str(local))
+    job = MagicMock()
+    job._cancel_job = False
+    job.target_name.return_value = 'movie'
+    job.dest_folder.return_value = task.dest
+    def download():
+        Path(task.dest, 'movie.mp4').write_bytes(b'video directly on NAS')
+        return True
+    job.start_download.side_effect = download
+    def create_site(url, savepath, max_workers):
+        assert savepath == direct_profile['direct_path']
+        return job
+    monkeypatch.setattr(task_manager.M3U8Sites, 'CreateSite', create_site)
+    monkeypatch.setattr(task_manager, 'get_history_manager', MagicMock())
+    monkeypatch.setattr(nas, 'upload_video', lambda *args: pytest.fail('direct mode must not upload'))
+    manager._run_task(task)
+    assert task.status == 'completed'
+    assert Path(task.dest, 'movie.mp4').read_bytes() == b'video directly on NAS'
+    assert not local.exists()
+    assert not list(Path(task.dest).glob('.uav-*.lock'))
+
+
+def test_unmounted_direct_destination_fails_before_downloader(direct_profile, monkeypatch):
+    from uav_downloader.daemon import task_manager
+    nas.save_settings(direct_profile)
+    manager = TaskManager()
+    monkeypatch.setattr(manager, 'start_dispatcher', lambda: None)
+    task = manager.add_task('https://jable.tv/videos/test/')
+    monkeypatch.setattr(nas, '_is_network_path', lambda path: False)
+    monkeypatch.setattr(task_manager.M3U8Sites, 'CreateSite', lambda *a, **kw: pytest.fail('must stop before crawler'))
+    manager._run_task(task)
+    assert task.status == 'failed'
+    assert '避免誤存至本機' in task.error
+
+
+def test_direct_reservation_preserves_existing_file_and_blocks_duplicates(direct_profile):
+    target = Path(direct_profile['direct_path'], 'movie.mp4')
+    with nas.reserve_direct_target(direct_profile, 'movie.mp4'):
+        with pytest.raises(nas.NasError, match='已有下載任務'):
+            with nas.reserve_direct_target(direct_profile, 'movie.mp4'):
+                pytest.fail('duplicate reserved')
+    target.write_bytes(b'existing video')
+    with pytest.raises(nas.NasError, match='避免覆寫'):
+        with nas.reserve_direct_target(direct_profile, 'movie.mp4'):
+            pytest.fail('must not replace existing video')
+    assert target.read_bytes() == b'existing video'
+    assert not list(target.parent.glob('.uav-*.lock'))

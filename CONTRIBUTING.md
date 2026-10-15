@@ -6,7 +6,7 @@
 
 - 網站解析與下載行為留在 `src/uav_downloader/sites/`，不匯入 Web 或 NAS 模組。
 - `daemon/server.py` 負責 HTTP 資料轉接與驗證結果，不實作 SMB 協定。
-- `daemon/task_manager.py` 負責任務狀態與下載生命週期，只在完成點呼叫 NAS 傳送介面。
+- `daemon/task_manager.py` 負責任務狀態與下載生命週期，在下載前驗證 NAS 路徑，或在完成點呼叫 NAS 傳送介面。
 - `daemon/nas.py` 管理 SMB 設定、帳密保存及檔案傳送，不依賴 HTTP handler 或前端欄位。
 - `uav-web/frontend/video-selection.js` 管理選取狀態，透過傳入的下載方法送出任務，不直接依賴網站解析。
 - `uav-web/frontend/nas-settings.js` 管理 NAS 表單；下載器不依賴這個檔案。

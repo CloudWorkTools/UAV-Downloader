@@ -8,7 +8,7 @@ const elements = new Map();
 let boxes = [];
 const element = id => {
   if (!elements.has(id)) elements.set(id, {value: '', checked: false, disabled: false,
-    textContent: '', innerHTML: '', classList: {add() {}, remove() {}}, appendChild() {}});
+    textContent: '', innerHTML: '', classList: {add() {}, remove() {}, toggle() {}}, appendChild() {}});
   return elements.get(id);
 };
 const requests = [];
@@ -60,6 +60,13 @@ async function run() {
   assert.equal(nas.payload().host, '192.168.1.10');
   assert.equal(nas.payload().password, '');
   assert.ok(element('nas-status').textContent.includes('密碼已保存'));
+  nas.load({enabled: true, mode: 'direct', direct_path: '/nas/videos'});
+  assert.equal(nas.payload().mode, 'direct');
+  assert.equal(nas.payload().direct_path, '/nas/videos');
+  assert.equal(element('setting-download-dir').disabled, true);
+  nas.load({enabled: false});
+  assert.equal(nas.payload().enabled, false);
+  assert.equal(element('setting-download-dir').disabled, false);
   console.log('Selection, duplicate submission, failed-item retention and NAS password UI: PASS');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

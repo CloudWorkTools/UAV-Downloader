@@ -222,15 +222,24 @@
 
         <div class="space-y-4 text-sm">
           <div>
-            <label class="block text-gray-300 font-medium mb-1">本機下載目錄（NAS 傳送前暫存）</label>
+            <label class="block text-gray-300 font-medium mb-1">本機下載目錄（僅供本機／下載後傳送模式使用）</label>
             <input type="text" id="setting-download-dir" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
           </div>
 
           <fieldset class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-3">
             <legend class="font-medium text-white">NAS / SMB 連線</legend>
-            <label class="flex items-center gap-2"><input type="checkbox" id="nas-enabled" class="w-4 h-4 accent-brand-600">下載完成後傳送到 NAS</label>
-            <p class="text-xs text-gray-400">影片與字幕會先下載至本機，再傳送至共享目錄。本機檔案保留，NAS 同名檔案不覆寫。</p>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label for="nas-storage-mode" class="block">下載儲存位置</label>
+            <select id="nas-storage-mode" onchange="NasSettings.updateMode()" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
+              <option value="local">本機目錄</option>
+              <option value="direct">直接儲存至 NAS（已掛載路徑）</option>
+              <option value="upload">先下載到本機，再以 SMB 傳送至 NAS</option>
+            </select>
+            <div id="nas-direct-fields" class="hidden space-y-2">
+              <label for="nas-direct-path" class="block">NAS 掛載路徑</label>
+              <input id="nas-direct-path" type="text" placeholder="/nas 或 Windows 網路路徑" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
+              <p class="text-xs text-gray-400">影片分段、合成檔與字幕直接寫入此 NAS 目錄。請先將 NAS 掛載到系統；Docker 請填容器內路徑。未掛載時會停止，不會改存本機。</p>
+            </div>
+            <div id="nas-upload-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-3 hidden">
               <div><label for="nas-host" class="block mb-1">NAS IP</label><input id="nas-host" type="text" placeholder="192.168.1.100" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
               <div><label for="nas-share" class="block mb-1">共享資料夾名稱</label><input id="nas-share" type="text" placeholder="video" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
               <div><label for="nas-directory" class="block mb-1">子目錄（可留空，須已存在）</label><input id="nas-directory" type="text" placeholder="UAV" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
