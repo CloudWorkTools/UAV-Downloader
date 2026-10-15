@@ -11,6 +11,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / '.deploy.local.json'
+SPEACHES_IMAGE = 'ghcr.io/speaches-ai/speaches@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8'
 
 
 def load_config(path=CONFIG):
@@ -29,7 +30,8 @@ def load_config(path=CONFIG):
 
 REMOTE_INSTALL = r'''
 import base64, json, pathlib, secrets, subprocess, sys, time, urllib.request
-root, image, host, port, bundle = sys.argv[1:]
+root, image, host, port, bundle = sys.argv[1:6]
+install_firecrawl = len(sys.argv) < 7 or sys.argv[6] == '1'
 root = pathlib.Path(root)
 name = 'uav-downloader'
 def docker(*args, **kwargs):
@@ -49,7 +51,8 @@ if bundle:
             output.write('FIRECRAWL_POSTGRES_PASSWORD=' + secrets.token_urlsafe(40) + '\n')
     docker('compose', '-p', 'uav-firecrawl', '--env-file', str(env_file),
            '-f', str(stack / 'docker-compose.yml'),
-           'up', '-d', '--no-build', '--wait', '--wait-timeout', '180', 'uav-firecrawl-api')
+           'up', '-d', '--no-build', '--wait', '--wait-timeout', '180',
+           'uav-speaches', *(['uav-firecrawl-api'] if install_firecrawl else []))
     for obsolete in ('docker-compose.web.yml', 'docker-compose.firecrawl.yml'):
         (stack / obsolete).unlink(missing_ok=True)
 network_args = []
@@ -88,7 +91,7 @@ except Exception:
         docker('start', name)
     raise
 print(f'Deployed and healthy: http://{host}:{port}')
-if bundle:
+if bundle and install_firecrawl:
     smoke = subprocess.run(['docker', 'exec', name, 'python', '-c',
         "from uav_downloader.core.firecrawl import scrape; scrape('https://example.com')"])
     print('Private Firecrawl functional scrape: ' + ('OK; test each target site in settings' if smoke.returncode == 0 else 'FAILED; keep disabled and inspect the stack'))
@@ -107,11 +110,14 @@ def main():
     ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', target]
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     image = 'uav-downloader:' + commit
-    images = [image]
-    bundle = ''
+    images = [image, SPEACHES_IMAGE]
+    bundle = base64.b64encode(json.dumps({
+        'docker-compose.yml': (ROOT / 'docker-compose.yml').read_text(),
+    }).encode()).decode()
     subprocess.run([*ssh, 'docker info >/dev/null'], check=True)
     if options.with_firecrawl:
         subprocess.run(['docker', 'buildx', 'version'], check=True)
+    subprocess.run(['docker', 'pull', SPEACHES_IMAGE], check=True)
     subprocess.run(['docker', 'build', '-f', 'Dockerfile.web', '-t', image, '.'], cwd=ROOT, check=True)
     with tempfile.TemporaryDirectory(prefix='uav-deploy-') as temporary:
         if options.with_firecrawl:
@@ -130,7 +136,7 @@ def main():
         subprocess.run(['docker', 'save', '-o', str(archive), *images], check=True)
         with archive.open('rb') as source:
             subprocess.run([*ssh, 'docker load'], stdin=source, check=True)
-    args = [config['remote_dir'], image, config['host'], str(config['port']), bundle]
+    args = [config['remote_dir'], image, config['host'], str(config['port']), bundle, '1' if options.with_firecrawl else '0']
     subprocess.run([*ssh, 'python3 - ' + ' '.join(map(shlex.quote, args))], input=REMOTE_INSTALL, text=True, check=True)
 
 

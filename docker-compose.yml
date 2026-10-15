@@ -46,8 +46,33 @@ services:
       - ./appdata:/appdata
     networks: [firecrawl]
     depends_on:
+      uav-speaches:
+        condition: service_healthy
       uav-firecrawl-api:
         condition: service_healthy
+
+  # Private CPU ASR, reached by the Web container without a host port.
+  uav-speaches:
+    image: ghcr.io/speaches-ai/speaches@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8
+    restart: unless-stopped
+    environment:
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE: int8
+      WHISPER__CPU_THREADS: 2
+      WHISPER__NUM_WORKERS: 1
+      WHISPER__TTL: 0
+      ENABLE_UI: "false"
+      LOG_LEVEL: warning
+    volumes:
+      - speaches-models:/home/ubuntu/.cache/huggingface/hub
+    networks: [firecrawl]
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   # Optional one-shot CLI: docker compose run --rm uav <URL>
   uav:
@@ -139,6 +164,7 @@ networks:
     name: uav-firecrawl
 
 volumes:
+  speaches-models:
   firecrawl-redis:
   firecrawl-rabbitmq:
   firecrawl-postgres:

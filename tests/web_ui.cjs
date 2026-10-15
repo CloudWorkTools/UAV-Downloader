@@ -258,6 +258,26 @@ async function run() {
   assert.deepEqual(loneRequests, ['/api/download/action','/api/download/tasks']);
   assert.match(element('queue-action-status').textContent, /已移除 1/);
   assert.equal(element('remove-duplicate-tasks-button').disabled, true);
+  context.NasSettings = {load() {}, refreshSpace() {}, payload: () => ({enabled:false})};
+  const settingsPayloads = [];
+  context.fetch = async (path, options) => {
+    assert.equal(path, '/api/settings');
+    if (options) settingsPayloads.push(JSON.parse(options.body));
+    return {ok:true, json:async()=>options ? {success:true} : {
+      asr:{base_url:'https://asr.example/v1', model:'custom-whisper', api_key_saved:true}, subtitle_pref:'zh'
+    }};
+  };
+  await context.loadSettings();
+  assert.equal(element('setting-asr-url').value, 'https://asr.example/v1');
+  assert.equal(element('setting-asr-model').value, 'custom-whisper');
+  assert.equal(element('setting-asr-key').value, '');
+  assert.match(element('setting-asr-key-status').textContent, /已設定金鑰/);
+  element('setting-asr-key').value = 'new-key';
+  await context.saveSettings();
+  assert.deepEqual(settingsPayloads[0].asr, {
+    base_url:'https://asr.example/v1', model:'custom-whisper', api_key:'new-key', clear_api_key:false
+  });
+  assert.equal(element('setting-asr-key').value, '', 'Clear the key input after saving');
   console.log('Video/task selection, batch cancellation, failure retention and NAS password UI: PASS');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

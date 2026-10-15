@@ -25,6 +25,7 @@ from uav_downloader.core import firecrawl, activity
 from uav_downloader.core.history import get_history_manager
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.daemon import nas
+from uav_downloader.subtitles import asr
 from uav_downloader.daemon.browse_service import BrowseService
 from uav_downloader.daemon.category_catalog import category_groups
 from uav_downloader.daemon.task_manager import TaskManager
@@ -168,7 +169,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     "subtitle_pref": config.get_subtitle_pref(),
                     "download_cover": config.get_download_cover(),
                     "recognition_quality": config.get_recognition_quality(),
-                    "subtitle_runtime_supported": os.name == "nt",
+                    "subtitle_runtime_supported": True,
+                    "asr": asr.load_settings(),
                     "filename_mode": config.get_filename_mode(),
                     "download_concurrency": config.get_download_concurrency(),
                     "max_workers_per_video": config.get_max_workers_per_video(),
@@ -313,6 +315,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 })
 
             elif path == "/api/settings":
+                if "asr" in body:
+                    asr.save_settings(body["asr"])
                 if body.get("test_firecrawl"):
                     return self._send_json(firecrawl.probe(body.get('site', 'JableTV')))
                 if "firecrawl" in body:

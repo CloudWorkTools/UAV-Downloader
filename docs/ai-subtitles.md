@@ -18,6 +18,14 @@ Settings. These local entries are never treated as downloads: they are not
 saved to the persisted queue, and their retry action simply reruns subtitle
 generation on the same file rather than re-downloading anything.
 
+## Docker and Web subtitles
+
+The Web daemon uses a same-host Speaches service by default, with configurable
+external OpenAI-compatible speech recognition. Its audio is sent to the chosen
+ASR service; the desktop pipeline described below keeps recognition local.
+See [Docker subtitle settings](web-ui.md#docker-ai-字幕) for configuration and
+storage details.
+
 ## Speech recognition
 
 The recommended automatic profile uses a pinned ReazonSpeech K2 v2 model with

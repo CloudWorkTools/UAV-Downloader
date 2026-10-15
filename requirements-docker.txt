@@ -8,3 +8,8 @@ cloudscraper>=1.2.68
 curl_cffi>=0.7.0
 certifi
 smbprotocol>=1.15,<2
+
+# CPU subtitle translation; speech recognition runs in the Speaches service.
+ctranslate2==4.8.1
+sentencepiece==0.2.2
+opencc-python-reimplemented==0.1.7

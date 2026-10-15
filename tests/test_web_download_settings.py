@@ -97,14 +97,37 @@ def test_cover_switch_controls_image_download(enabled):
     assert crawler.download_image.call_count == int(enabled)
 
 
-def test_linux_subtitle_failure_is_explicit_without_downloading_windows_runtime():
-    import os
+def test_daemon_uses_saved_asr_and_keeps_video_on_failure(tmp_path, monkeypatch):
     from uav_downloader.daemon.task_manager import DownloadTask
-    if os.name == 'nt':
-        pytest.skip('Linux-only runtime limitation')
-    task = DownloadTask(task_id='test', url='https://example.com/video', dest='/unused')
-    TaskManager()._run_subtitles(task, None)
-    assert 'Linux／Docker' in task.error
+    from uav_downloader.subtitles import asr, engine
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    asr.save_settings({'base_url': 'https://asr.example/v1', 'model': 'model', 'api_key': 'private-key'})
+    task = DownloadTask(task_id='test', url='https://example.com/video', dest=str(tmp_path))
+    task.name = 'video'
+    video = tmp_path / 'video.mp4'
+    video.write_bytes(b'keep this video')
+    job = MagicMock()
+    job.dest_folder.return_value = str(tmp_path)
+    generate = MagicMock(side_effect=engine.SubtitleError('HTTP 401'))
+    monkeypatch.setattr(engine, 'generate_subtitles', generate)
+    TaskManager()._run_subtitles(task, job)
+    assert generate.call_args.kwargs['asr_settings']['api_key'] == 'private-key'
+    assert 'HTTP 401' in task.error
+    assert video.read_bytes() == b'keep this video'
+
+
+def test_asr_api_settings_round_trip_without_exposing_key(web_settings):
+    request, _, root = web_settings
+    status, settings = request('/api/settings')
+    assert status == 200 and settings['asr']['base_url'] == 'http://uav-speaches:8000/v1'
+    assert settings['subtitle_runtime_supported'] is True
+    assert request('/api/settings', {'asr': {'base_url': 'https://external.example/v1',
+                                         'model': 'whisper', 'api_key': 'private-key'}})[0] == 200
+    _, settings = request('/api/settings')
+    assert settings['asr']['api_key_saved']
+    assert 'private-key' not in json.dumps(settings)
+    assert settings['asr']['base_url'] == 'https://external.example/v1'
+    assert request('/api/settings', {'asr': {'base_url': 'https://user:pass@host/v1'}})[0] == 400
 
 
 def test_saved_download_directory_overrides_environment_default(web_settings):

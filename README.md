@@ -13,6 +13,7 @@
 | 保留檔案的清單整理 | 「清除已完成項目」只移除已完成紀錄；「移除重複番號」清除已略過的重複紀錄與同番號的多餘紀錄，保留執行中與可續傳任務。兩者都保留影片與下載歷史。 |
 | 後端工作動態 | 底部面板預設收起，摘要仍定時更新；展開可橫向查看各條件及下載階段的進度。 |
 | 獨立 Firecrawl | Docker 專屬擷取服務預設啟用，站台連線失敗時使用；可開關並測試目前站台，不連接本機 MCP。 |
+| Docker AI 字幕 | 同機 Speaches 辨識日文，本機翻譯為英文／繁中；可設定外部音訊辨識 API，詳見 [字幕設定](docs/web-ui.md#docker-ai-字幕)。 |
 | NAS / SMB | 支援直接寫入 NAS、系統掛載目錄，以及先下載到本機再傳送；NAS 有回報容量時，顯示總容量、剩餘空間與使用比例。 |
 
 來源重複分頁或接續載入中斷時，會保留已確認的結果並顯示原因；部分來源停止時不宣稱已找到全部影片。
@@ -56,7 +57,7 @@
 
 ## 本機啟動
 
-需要 Docker Compose 與 Buildx。唯一的啟動檔是 [docker-compose.yml](docker-compose.yml)，包含 Web、獨立 Firecrawl 與其資料服務。第一次建置會下載 Rust、Python、FFmpeg 與 Firecrawl 的依賴。
+需要 Docker Compose 與 Buildx。唯一的啟動檔是 [docker-compose.yml](docker-compose.yml)，包含 Web、Speaches、獨立 Firecrawl 與其資料服務。第一次建置會下載 Rust、Python、FFmpeg 與 Firecrawl 的依賴。
 
 第一次使用時，在專案目錄建立資料庫密碼；已有 `.env` 時沿用原檔，保留密碼以便連接既有資料卷：
 
@@ -71,7 +72,7 @@ docker compose up -d --build --wait
 ```
 
 開啟 **<http://127.0.0.1:8080>**。Firecrawl 預設啟用，使用專屬 Docker 網路，不連接本機 MCP。
-下載、設定與模型資料分別保存在專案下的 `downloads/`、`config/`、`appdata/`；Firecrawl 資料保存在 Docker 資料卷。
+下載、設定與模型資料分別保存在專案下的 `downloads/`、`config/`、`appdata/`；Speaches 模型與 Firecrawl 資料保存在 Docker 資料卷。
 
 驗證服務：
 

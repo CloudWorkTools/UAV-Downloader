@@ -46,6 +46,7 @@ def test_remote_private_stack_keeps_its_own_secrets_and_network(monkeypatch, tmp
     assert len(secret.read_text().split('=', 1)[1].strip()) >= 32
     compose = next(args for args in calls if args[:2] == ['docker', 'compose'])
     assert '--no-build' in compose and '--wait' in compose
+    assert 'uav-speaches' in compose
     assert compose.count('-f') == 1 and '--profile' not in compose
     assert Path(compose[compose.index('-f') + 1]).name == 'docker-compose.yml'
     assert sorted(p.name for p in secret.parent.iterdir()) == ['.env', 'docker-compose.yml']
@@ -72,3 +73,8 @@ def test_deployment_bundles_private_firecrawl_by_default(monkeypatch, tmp_path, 
     monkeypatch.setattr(deploy.subprocess, 'run', run)
     deploy.main()
     assert any('uav-firecrawl-api:2.11.162' in args for args in calls) is expected
+    save = next(args for args in calls if args[:2] == ['docker', 'save'])
+    assert deploy.SPEACHES_IMAGE in save
+    assert deploy.SPEACHES_IMAGE in (deploy.ROOT / 'docker-compose.yml').read_text()
+    remote = calls[-1][-1]
+    assert remote.endswith('1' if expected else '0')

@@ -722,15 +722,15 @@ class TaskManager:
 
     def _run_subtitles(self, task: DownloadTask, job: Any) -> None:
         try:
-            if os.name != "nt":
-                raise RuntimeError("目前內建字幕引擎僅支援 Windows，Linux／Docker 尚不支援產生字幕")
             from uav_downloader.subtitles.engine import generate_subtitles
+            from uav_downloader.subtitles.asr import load_settings
             target_file = os.path.join(job.dest_folder() or task.dest, f"{task.name}.mp4")
             if storage_fs(target_file).isfile(target_file):
                 generate_subtitles(
                     target_file,
                     mode=task.subtitle_mode,
                     cancel_check=task.cancelled_event.is_set,
+                    asr_settings=load_settings(secret=True),
                 )
         except Exception as exc:
             # Subtitle error does not fail the whole download if MP4 succeeded

@@ -20,6 +20,7 @@ CloudWorkTools 版本以繁體中文 Web 操作與 NAS 擴充為主：
 其他參考文件：
 
 - [AI subtitles](./ai-subtitles.md)
+- [Docker 字幕與外接 ASR API 研究](./docker-subtitles-research.md)：現有限制、Linux 引擎與外接模型方案。
 - [Architecture and source layout](./architecture.md)
 - [Migrating to UAV Downloader](./migration-to-uav.md)
 - [Windows download verification](../WINDOWS_SECURITY.md)

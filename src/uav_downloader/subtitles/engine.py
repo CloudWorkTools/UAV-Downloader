@@ -5087,7 +5087,8 @@ def _generation_slot(cancel_check: Optional[CancelCheck]):
 def generate_subtitles(video_path: str, mode,
                        progress_callback: Optional[ProgressCallback] = None,
                        cancel_check: Optional[CancelCheck] = None,
-                       source_subtitle_evidence=()) -> SubtitleResult:
+                       source_subtitle_evidence=(),
+                       asr_settings=None) -> SubtitleResult:
     """Generate requested sidecar SRT files next to ``video_path``.
 
     Output names are ``.ja.srt``, ``.en.srt``, and ``.zh-TW.srt`` so media
@@ -5125,7 +5126,16 @@ def generate_subtitles(video_path: str, mode,
             satisfied_by_source=satisfied_by_source)
 
     profile = recognition_profile()
-    asr_signature = _asr_signature(profile)
+    if asr_settings is not None:
+        from uav_downloader.subtitles.asr import CHUNK_SECONDS, OVERLAP_SECONDS
+        asr_signature = _stable_signature({
+            'pipeline': 'openai-asr-chunks-v1',
+            'endpoint': asr_settings['base_url'], 'model': asr_settings['model'],
+            'language': 'ja', 'chunk_seconds': CHUNK_SECONDS,
+            'overlap_seconds': OVERLAP_SECONDS,
+        })
+    else:
+        asr_signature = _asr_signature(profile)
     media_identity = _media_identity(video_path)
     provenance_path = _subtitle_provenance_path(video_path)
     generated: list[str] = []
@@ -5225,7 +5235,7 @@ def generate_subtitles(video_path: str, mode,
         need_whisper = bool(
             need_japanese_source and not existing_japanese)
         exe = model = vad_model = None
-        if need_whisper:
+        if need_whisper and asr_settings is None:
             with _recognition_profile_scope(profile):
                 exe, model, vad_model = _prepare_runtime(
                     progress_callback, cancel_check)
@@ -5242,10 +5252,16 @@ def generate_subtitles(video_path: str, mode,
                 ja_expected_identity if existing_japanese else None)
             if need_japanese_source and not japanese_source:
                 _notify(progress_callback, 'transcribe_ja', None)
-                japanese_source = _run_recognition(
-                    profile, exe, model, vad_model, wav,
-                    os.path.join(temp_dir, 'japanese'), log, cancel_check,
-                    progress_callback=progress_callback)
+                if asr_settings is not None:
+                    from uav_downloader.subtitles.asr import transcribe
+                    japanese_source = transcribe(
+                        asr_settings, wav, os.path.join(temp_dir, 'japanese'),
+                        log, cancel_check, progress_callback)
+                else:
+                    japanese_source = _run_recognition(
+                        profile, exe, model, vad_model, wav,
+                        os.path.join(temp_dir, 'japanese'), log, cancel_check,
+                        progress_callback=progress_callback)
                 if not japanese_source:
                     stale_languages = {
                         language for language in requested
