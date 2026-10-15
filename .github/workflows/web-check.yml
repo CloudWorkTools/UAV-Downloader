@@ -42,7 +42,7 @@ jobs:
       - name: 安裝無介面測試依賴
         run: python -m pip install -r requirements-docker.txt pytest PySocks customtkinter Pillow
       - name: 測試 NAS、設定、下載佇列與核心儲存行為
-        run: python -m pytest -q tests/test_nas.py tests/test_daemon.py tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py
+        run: python -m pytest -q tests/test_nas.py tests/test_daemon.py tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py tests/test_compare_upstream.py
       - name: 測試全選與批次下載
         run: node tests/web_ui.cjs
       - name: 建置並啟動 Web 容器
@@ -63,7 +63,7 @@ jobs:
     permissions:
       checks: write
     steps:
-      - name: 將結果標示於同步 PR 的提交
+      - name: 將結果標示於候選提交
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
