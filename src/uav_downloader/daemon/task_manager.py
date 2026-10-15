@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from uav_downloader import sites as M3U8Sites
 from uav_downloader.core import config
+from uav_downloader.daemon import nas
 from uav_downloader.core.history import get_history_manager
 from uav_downloader.core.storage import StorageWriteError
 from uav_downloader.core.video_identity import site_from_url
@@ -27,6 +28,7 @@ class DownloadTask:
     max_workers: Optional[int] = None
     enable_subtitles: bool = False
     subtitle_mode: str = "none"
+    nas_settings: dict = field(default_factory=dict, repr=False)
     name: str = ""
     status: str = "pending"  # pending, preparing, downloading, subtitles, completed, failed, cancelled
     progress: float = 0.0
@@ -106,12 +108,17 @@ class TaskManager:
         enable_subtitles: bool = False,
         subtitle_mode: str = "none",
     ) -> DownloadTask:
-        target_dest = dest or config.get_download_dir()
+        target_dest = dest or os.environ.get("DOWNLOAD_DIR") or config._load_prefs().get("download_dir")
         if not target_dest:
             target_dest = os.path.join(os.getcwd(), "download")
 
+        nas_settings = nas.load_settings()
+        if nas_settings.get("enabled"):
+            nas_settings = nas.load_settings(secret=True)
+
         task_id = f"task_{uuid.uuid4().hex[:10]}"
         task = DownloadTask(
+            nas_settings=nas_settings,
             task_id=task_id,
             url=url.strip(),
             dest=os.path.abspath(target_dest),
@@ -261,6 +268,16 @@ class TaskManager:
                 task.status = "subtitles"
                 task.updated_at = datetime.now(timezone.utc).isoformat()
                 self._run_subtitles(task, job)
+
+            if task.nas_settings.get("enabled"):
+                task.status = "uploading"
+                task.updated_at = datetime.now(timezone.utc).isoformat()
+                nas.upload_video(task.nas_settings,
+                                 os.path.join(job.dest_folder() or task.dest, f"{task.name}.mp4"),
+                                 task.cancelled_event)
+                if task.cancelled_event.is_set():
+                    self._finish_task(task, "cancelled")
+                    return
 
             task.progress = 100.0
             self._finish_task(task, "completed")

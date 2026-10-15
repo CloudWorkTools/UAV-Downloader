@@ -41,7 +41,7 @@
 
   <!-- Header -->
   <header class="bg-[#1a1a22] border-b border-[#2e2e3a] sticky top-0 z-40">
-    <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+    <div class="max-w-7xl mx-auto px-4 min-h-16 py-3 flex flex-wrap lg:flex-nowrap gap-3 items-center justify-between">
       <div class="flex items-center space-x-3">
         <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-brand-600 to-rose-400 flex items-center justify-center font-bold text-white shadow-lg shadow-brand-600/30">
           U
@@ -53,21 +53,21 @@
       </div>
 
       <!-- Navigation Tabs -->
-      <nav class="flex items-center space-x-1 sm:space-x-2">
-        <button onclick="switchTab('browse')" id="tab-btn-browse" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition bg-brand-600 text-white shadow-sm shadow-brand-600/30">
+      <nav class="order-last lg:order-none w-full lg:w-auto min-w-0 overflow-x-auto whitespace-nowrap flex items-center space-x-1 sm:space-x-2">
+        <button onclick="switchTab('browse')" id="tab-btn-browse" class="tab-btn h-10 shrink-0 px-3.5 rounded-lg text-sm font-medium transition bg-brand-600 text-white shadow-sm shadow-brand-600/30">
           🔍 瀏覽
         </button>
-        <button onclick="switchTab('queue')" id="tab-btn-queue" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832] relative">
+        <button onclick="switchTab('queue')" id="tab-btn-queue" class="tab-btn h-10 shrink-0 px-3.5 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832] relative">
           ⬇️ 下載佇列
           <span id="queue-badge" class="hidden ml-1 px-1.5 py-0.2 text-[10px] bg-brand-600 text-white rounded-full">0</span>
         </button>
-        <button onclick="switchTab('watcher')" id="tab-btn-watcher" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
+        <button onclick="switchTab('watcher')" id="tab-btn-watcher" class="tab-btn h-10 shrink-0 px-3.5 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
           ⏱️ 追新監控
         </button>
-        <button onclick="switchTab('history')" id="tab-btn-history" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
+        <button onclick="switchTab('history')" id="tab-btn-history" class="tab-btn h-10 shrink-0 px-3.5 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
           📜 歷史記錄
         </button>
-        <button onclick="switchTab('settings')" id="tab-btn-settings" class="tab-btn px-3.5 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
+        <button onclick="switchTab('settings')" id="tab-btn-settings" class="tab-btn h-10 shrink-0 px-3.5 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">
           ⚙️ 設定
         </button>
       </nav>
@@ -85,24 +85,24 @@
     <!-- TAB 1: BROWSE -->
     <section id="tab-browse" class="tab-content space-y-6">
       <!-- Site Switcher & Search Bar -->
-      <div class="bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] flex flex-col md:flex-row gap-4 justify-between items-center shadow-lg">
+      <div class="bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] flex flex-col xl:flex-row gap-4 justify-between items-center shadow-lg">
         <!-- Site Buttons -->
-        <div class="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-1 md:pb-0">
-          <button onclick="selectSite('JableTV')" class="site-btn px-4 py-1.5 rounded-lg text-sm font-medium bg-brand-600 text-white" data-site="JableTV">JableTV</button>
-          <button onclick="selectSite('MissAV')" class="site-btn px-4 py-1.5 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="MissAV">MissAV</button>
-          <button onclick="selectSite('SupJav')" class="site-btn px-4 py-1.5 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="SupJav">SupJav</button>
-          <button onclick="selectSite('Hanime1')" class="site-btn px-4 py-1.5 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="Hanime1">Hanime1</button>
+        <div class="flex items-center gap-2 overflow-x-auto w-full xl:w-auto pb-1 xl:pb-0">
+          <button onclick="selectSite('JableTV')" class="site-btn h-10 shrink-0 whitespace-nowrap px-4 rounded-lg text-sm font-medium bg-brand-600 text-white" data-site="JableTV">JableTV</button>
+          <button onclick="selectSite('MissAV')" class="site-btn h-10 shrink-0 whitespace-nowrap px-4 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="MissAV">MissAV</button>
+          <button onclick="selectSite('SupJav')" class="site-btn h-10 shrink-0 whitespace-nowrap px-4 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="SupJav">SupJav</button>
+          <button onclick="selectSite('Hanime1')" class="site-btn h-10 shrink-0 whitespace-nowrap px-4 rounded-lg text-sm font-medium bg-[#282832] text-gray-300 hover:text-white" data-site="Hanime1">Hanime1</button>
         </div>
 
         <!-- Category Dropdown & Search -->
-        <div class="flex items-center gap-3 w-full md:w-auto">
-          <select id="category-select" onchange="onCategoryChange()" class="bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 py-2 outline-none focus:border-brand-500 max-w-[180px]">
+        <div class="flex flex-wrap items-center gap-2 w-full xl:w-auto">
+          <select id="category-select" aria-label="影片分類" onchange="onCategoryChange()" class="h-10 shrink-0 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500 max-w-[180px]">
             <option value="">載入分類中...</option>
           </select>
-          <div class="flex items-center gap-1 flex-1 md:w-64">
-            <input type="text" id="search-input" placeholder="搜尋番號或演員..." onkeydown="if(event.key==='Enter') executeSearch()" class="w-full bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 py-2 outline-none focus:border-brand-500">
-            <button onclick="executeSearch()" class="px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium">搜尋</button>
-          </div>
+          <input type="text" id="search-input" aria-label="搜尋番號或演員" placeholder="搜尋番號或演員..." onkeydown="if(event.key==='Enter') executeSearch()" class="h-10 min-w-[12rem] flex-1 w-44 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500">
+          <button onclick="executeSearch()" class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium">搜尋</button>
+          <button id="select-page-button" onclick="selection.togglePage()" disabled class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-[#282832] border border-[#3e3e4e] hover:bg-[#3e3e4e] text-white text-sm rounded-lg transition font-medium disabled:opacity-50">全選</button>
+          <button id="download-selected-button" onclick="selection.download()" disabled class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium disabled:opacity-50">下載已選 (0)</button>
         </div>
       </div>
 
@@ -222,9 +222,23 @@
 
         <div class="space-y-4 text-sm">
           <div>
-            <label class="block text-gray-300 font-medium mb-1">NAS 下載目錄 (DOWNLOAD_DIR)</label>
+            <label class="block text-gray-300 font-medium mb-1">本機下載目錄（NAS 傳送前暫存）</label>
             <input type="text" id="setting-download-dir" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
           </div>
+
+          <fieldset class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-3">
+            <legend class="font-medium text-white">NAS / SMB 連線</legend>
+            <label class="flex items-center gap-2"><input type="checkbox" id="nas-enabled" class="w-4 h-4 accent-brand-600">下載完成後傳送到 NAS</label>
+            <p class="text-xs text-gray-400">影片與字幕會先下載至本機，再傳送至共享目錄。本機檔案保留，NAS 同名檔案不覆寫。</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label for="nas-host" class="block mb-1">NAS IP</label><input id="nas-host" type="text" placeholder="192.168.1.100" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-share" class="block mb-1">共享資料夾名稱</label><input id="nas-share" type="text" placeholder="video" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-directory" class="block mb-1">子目錄（可留空，須已存在）</label><input id="nas-directory" type="text" placeholder="UAV" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-username" class="block mb-1">帳號</label><input id="nas-username" type="text" placeholder="" autocomplete="off" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+              <div><label for="nas-password" class="block mb-1">密碼（留空保留已保存密碼）</label><input id="nas-password" type="password" placeholder="" autocomplete="new-password" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
+            </div>
+            <div class="flex flex-wrap items-center gap-3"><button type="button" id="nas-test-button" onclick="NasSettings.testConnection()" class="h-10 min-w-20 px-3 rounded-lg border border-[#3e3e4e] bg-[#282832] whitespace-nowrap disabled:opacity-50">測試連線</button><span id="nas-status" role="status" class="text-xs text-gray-400">設定隨下方儲存按鈕永久保存</span></div>
+          </fieldset>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -307,16 +321,19 @@
   <!-- Bottom Floating Selection Bar -->
   <div id="selection-bar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a22] border border-[#3e3e4e] px-6 py-3 rounded-full shadow-2xl flex items-center gap-4 z-40">
     <span class="text-sm font-medium text-white">已選取 <span id="selected-count" class="text-brand-500 font-bold">0</span> 部影片</span>
-    <button onclick="downloadSelectedVideos()" class="px-4 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-full shadow transition">加入佇列下載</button>
-    <button onclick="clearSelection()" class="text-xs text-gray-400 hover:text-white">取消全選</button>
+    <button onclick="selection.download()" class="px-4 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-full shadow transition">加入佇列下載</button>
+    <button onclick="selection.clear()" class="text-xs text-gray-400 hover:text-white">取消全選</button>
   </div>
+
+  <script src="/nas-settings.js"></script>
+  <script src="/video-selection.js"></script>
 
   <!-- Client-side Logic -->
   <script>
     let currentSite = 'JableTV';
     let currentPage = 1;
     let currentCategoryUrl = '';
-    let selectedUrls = new Set();
+    const selection = createVideoSelection({startDownload: url => startSingleDownload(url, false), onComplete: () => switchTab('queue')});
     let watcherTargetsData = {};
 
     // WebSocket connection
@@ -415,6 +432,7 @@
       const grid = document.getElementById('video-grid');
       const loader = document.getElementById('browse-loading');
       grid.innerHTML = '';
+      selection.setVisible([]);
       loader.classList.remove('hidden');
 
       try {
@@ -441,6 +459,7 @@
     function renderVideos(videos) {
       const grid = document.getElementById('video-grid');
       grid.innerHTML = '';
+      selection.setVisible(videos.map(v => v.url));
       if (!videos.length) {
         grid.innerHTML = '<div class="col-span-full py-12 text-center text-gray-400">沒有找到影片</div>';
         return;
@@ -450,13 +469,13 @@
         const card = document.createElement('div');
         card.className = 'group relative bg-[#1a1a22] rounded-xl overflow-hidden border border-[#2e2e3a] hover:border-brand-600/50 transition shadow-md flex flex-col';
 
-        const isChecked = selectedUrls.has(v.url) ? 'checked' : '';
+        const isChecked = selection.has(v.url) ? 'checked' : '';
 
         card.innerHTML = `
           <div class="relative aspect-video bg-[#282832] overflow-hidden">
             <img src="${v.thumbnail || ''}" alt="" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
             ${v.duration ? `<span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[11px] bg-black/80 font-medium rounded text-white">${v.duration}</span>` : ''}
-            <input type="checkbox" onchange="toggleSelectVideo('${v.url}', this.checked)" ${isChecked} class="absolute top-2 left-2 w-4 h-4 accent-brand-600 rounded cursor-pointer z-10">
+            <input type="checkbox" onchange="selection.toggle('${v.url}', this.checked)" ${isChecked} class="absolute top-2 left-2 w-4 h-4 accent-brand-600 rounded cursor-pointer z-10">
           </div>
           <div class="p-3 flex-1 flex flex-col justify-between">
             <h4 class="text-xs font-semibold text-gray-200 line-clamp-2 leading-snug group-hover:text-brand-500 transition" title="${v.title}">
@@ -474,35 +493,6 @@
       });
     }
 
-    function toggleSelectVideo(url, checked) {
-      if (checked) selectedUrls.add(url);
-      else selectedUrls.delete(url);
-      updateSelectionBar();
-    }
-
-    function updateSelectionBar() {
-      const bar = document.getElementById('selection-bar');
-      const countEl = document.getElementById('selected-count');
-      countEl.textContent = selectedUrls.size;
-      if (selectedUrls.size > 0) bar.classList.remove('hidden');
-      else bar.classList.add('hidden');
-    }
-
-    function clearSelection() {
-      selectedUrls.clear();
-      updateSelectionBar();
-      document.querySelectorAll('#video-grid input[type="checkbox"]').forEach(c => c.checked = false);
-    }
-
-    async function downloadSelectedVideos() {
-      const urls = Array.from(selectedUrls);
-      for (const url of urls) {
-        await startSingleDownload(url, false);
-      }
-      clearSelection();
-      switchTab('queue');
-    }
-
     async function startSingleDownload(url, navigate = true) {
       try {
         const resp = await fetch('/api/download/start', {
@@ -511,7 +501,9 @@
           body: JSON.stringify({ url })
         });
         const res = await resp.json();
-        if (res.success && navigate) switchTab('queue');
+        if (!resp.ok || !res.success) throw new Error(res.error || '加入下載失敗');
+        if (navigate) switchTab('queue');
+        return true;
       } catch (e) {
         alert('加入下載佇列失敗: ' + e);
       }
@@ -529,6 +521,7 @@
       const grid = document.getElementById('video-grid');
       const loader = document.getElementById('browse-loading');
       grid.innerHTML = '';
+      selection.setVisible([]);
       loader.classList.remove('hidden');
 
       try {
@@ -550,7 +543,7 @@
     function renderTasks(tasks) {
       const container = document.getElementById('tasks-container');
       const badge = document.getElementById('queue-badge');
-      const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'preparing').length;
+      const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'preparing' || t.status === 'uploading').length;
 
       if (activeCount > 0) {
         badge.textContent = activeCount;
@@ -568,6 +561,8 @@
         let statusBadge = '';
         if (t.status === 'downloading') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded font-medium">下載中 (${t.speed_formatted})</span>`;
+        } else if (t.status === 'uploading') {
+          statusBadge = '<span class="text-sm text-sky-400">傳送到 NAS 中</span>';
         } else if (t.status === 'completed') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-medium">已完成</span>`;
         } else if (t.status === 'cancelled') {
@@ -587,7 +582,7 @@
               </div>
               <div class="flex items-center gap-2">
                 ${statusBadge}
-                ${(t.status === 'downloading' || t.status === 'pending' || t.status === 'preparing') ?
+                ${(t.status === 'downloading' || t.status === 'pending' || t.status === 'preparing' || t.status === 'uploading') ?
                   `<button onclick="cancelTask('${t.task_id}')" class="px-2.5 py-1 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
               </div>
             </div>
@@ -695,6 +690,8 @@
       try {
         const resp = await fetch('/api/settings');
         const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || '設定載入失敗');
+        NasSettings.load(data.nas || {});
         document.getElementById('setting-download-dir').value = data.download_dir || '';
         document.getElementById('setting-resolution').value = data.resolution || 'highest';
         document.getElementById('setting-filename-mode').value = data.filename_mode || 'full-title';
@@ -702,11 +699,12 @@
         document.getElementById('setting-workers').value = data.max_workers_per_video || 4;
         document.getElementById('setting-proxy-url').value = data.proxy_url || '';
         document.getElementById('setting-subtitles').checked = data.subtitle_pref && data.subtitle_pref !== 'none';
-      } catch (e) {}
+      } catch (e) { alert('設定載入失敗: ' + e.message); }
     }
 
     async function saveSettings() {
       const payload = {
+        nas: NasSettings.payload(),
         download_dir: document.getElementById('setting-download-dir').value,
         resolution: document.getElementById('setting-resolution').value,
         filename_mode: document.getElementById('setting-filename-mode').value,
@@ -723,7 +721,9 @@
           body: JSON.stringify(payload)
         });
         const res = await resp.json();
-        if (res.success) alert('設定已成功儲存！');
+        if (!resp.ok || !res.success) throw new Error(res.error || '儲存失敗');
+        await loadSettings();
+        alert('設定已成功儲存！');
       } catch (e) {
         alert('儲存失敗: ' + e);
       }

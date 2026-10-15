@@ -1,13 +1,13 @@
 # ── Multi-stage Dockerfile for UAV Downloader Web on NAS ───────────────────
 # Stage 1: Build the Rust Web server with embedded UI
-FROM rust:1.80-slim AS rust-builder
+FROM rust:1.99-slim AS rust-builder
 
 WORKDIR /build
-COPY uav-web/Cargo.toml /build/Cargo.toml
+COPY uav-web/Cargo.toml uav-web/Cargo.lock /build/
 COPY uav-web/src /build/src
 COPY uav-web/frontend /build/frontend
 
-RUN cargo build --release
+RUN cargo build --release --locked
 
 # Stage 2: Final runtime container with Python & FFmpeg
 FROM python:3.11-slim

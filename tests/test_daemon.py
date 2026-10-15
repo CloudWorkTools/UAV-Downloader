@@ -109,6 +109,30 @@ class TestDaemon(unittest.TestCase):
         self.assertEqual(updated.get("resolution"), "720")
         self.assertEqual(updated.get("filename_mode"), "code-only")
 
+    def test_nas_settings_are_persistent_and_secrets_are_not_returned(self):
+        import os
+        import tempfile
+        from uav_downloader.daemon import nas
+
+        profile = dict(enabled=True, host="192.168.1.20", share="video",
+                       directory="", username="user", password="private-nas-password")
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, CONFIG_DIR=folder):
+            status, result = request_json(f"{self.base_url}/api/settings", method="POST", data={"nas": profile})
+            self.assertEqual(status, 200)
+            self.assertTrue(result["success"])
+            self.assertNotIn(profile["password"], json.dumps(result))
+            status, result = request_json(f"{self.base_url}/api/settings")
+            self.assertTrue(result["nas"]["password_saved"])
+            self.assertNotIn("password", result["nas"])
+            self.assertEqual(nas.load_settings(secret=True)["password"], profile["password"])
+            status, result = request_json(f"{self.base_url}/api/settings", method="POST", data={"nas": {**profile, "share": "../bad"}})
+            self.assertEqual(status, 400)
+            self.assertFalse(result["success"])
+            with patch.object(nas, "test_connection") as test:
+                status, result = request_json(f"{self.base_url}/api/settings", method="POST", data={"test_nas": True, "nas": profile})
+                self.assertTrue(result["success"])
+                test.assert_called_once_with(profile)
+
     @patch("uav_downloader.sites.jabletv.JableTVBrowser.fetch_page")
     def test_browse_mocked(self, mock_fetch):
         mock_fetch.return_value = [

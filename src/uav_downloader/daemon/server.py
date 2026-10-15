@@ -22,6 +22,7 @@ from uav_downloader.apps.watch_categories import (
 from uav_downloader.core import config
 from uav_downloader.core.history import get_history_manager
 from uav_downloader.core.video_identity import site_from_url
+from uav_downloader.daemon import nas
 from uav_downloader.daemon.browse_service import BrowseService
 from uav_downloader.daemon.task_manager import TaskManager
 from uav_downloader.metadata import APP_DISPLAY_NAMES, VERSION
@@ -155,6 +156,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/settings":
                 prefs = config._load_prefs()
                 return self._send_json({
+                    "nas": nas.load_settings(),
                     "download_dir": os.environ.get("DOWNLOAD_DIR") or prefs.get("download_dir") or os.path.abspath("download"),
                     "resolution": config.get_resolution_pref(),
                     "subtitle_pref": config.get_subtitle_pref(),
@@ -168,6 +170,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             else:
                 return self._send_error(f"路徑不存在: {path}", 404)
 
+        except nas.NasError as exc:
+            return self._send_error(str(exc), 400)
         except Exception as exc:
             return self._send_error(str(exc), 500)
 
@@ -254,6 +258,11 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 })
 
             elif path == "/api/settings":
+                if body.get("test_nas"):
+                    nas.test_connection(body.get("nas", {}))
+                    return self._send_json({"success": True})
+                if "nas" in body:
+                    nas.save_settings(body["nas"])
                 if "download_dir" in body:
                     prefs = config._load_prefs()
                     prefs["download_dir"] = os.path.abspath(body["download_dir"])
@@ -279,6 +288,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             else:
                 return self._send_error(f"路徑不存在: {path}", 404)
 
+        except nas.NasError as exc:
+            return self._send_error(str(exc), 400)
         except Exception as exc:
             return self._send_error(str(exc), 500)
 
