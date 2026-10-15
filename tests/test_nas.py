@@ -345,3 +345,34 @@ def test_cancelling_upload_removes_already_published_video(profile, remote, tmp_
     assert not remote.files
     assert not published
     assert video.exists()
+
+
+def test_interrupted_upload_cleanup_can_retry_after_nas_reconnect(profile, remote, tmp_path, monkeypatch):
+    video = tmp_path / 'movie.mp4'
+    video.write_bytes(b'video')
+    cancelled = threading.Event()
+    open_file, remove = remote.open_file, remote.remove
+    @contextmanager
+    def cancelling_open(path, mode, **options):
+        with open_file(path, mode, **options) as stream:
+            write = stream.write
+            def cancel_on_write(data):
+                result = write(data)
+                cancelled.set()
+                return result
+            stream.write = cancel_on_write
+            yield stream
+    def offline_remove(path, **options):
+        if path.endswith('.part'):
+            raise OSError('NAS offline')
+        remove(path, **options)
+    monkeypatch.setattr('smbclient.open_file', cancelling_open)
+    monkeypatch.setattr('smbclient.remove', offline_remove)
+    owned = []
+    with pytest.raises(nas.NasError):
+        nas.upload_video(profile, video, cancelled, owned)
+    assert owned and all(path.endswith('.part') for path in owned)
+    monkeypatch.setattr('smbclient.remove', remove)
+    nas.cleanup_upload(profile, owned)
+    assert not remote.files
+    assert not owned

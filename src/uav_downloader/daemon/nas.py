@@ -224,6 +224,7 @@ def upload_video(settings, video_file, cancelled, published=None):
                     temporary = ntpath.join(root, '.uav-' + uuid.uuid4().hex + '.part')
                     try:
                         with source.open('rb') as local, smb.open_file(temporary, mode='xb', **options) as remote:
+                            published.append(temporary)
                             while chunk := local.read(1024 * 1024):
                                 if cancelled.is_set():
                                     return
@@ -233,9 +234,12 @@ def upload_video(settings, video_file, cancelled, published=None):
                         # rename refuses existing targets, preserving files already on the NAS.
                         smb.rename(temporary, target, **options)
                         published.append(target)
+                        published.remove(temporary)
                     finally:
                         if smb.path.exists(temporary, **options):
                             smb.remove(temporary, **options)
+                        if temporary in published:
+                            published.remove(temporary)
         finally:
             try:
                 if cancelled.is_set():
