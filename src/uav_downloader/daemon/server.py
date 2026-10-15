@@ -20,6 +20,7 @@ from uav_downloader.apps.watch_categories import (
     SUPJAV_GROUPS,
 )
 from uav_downloader.core import config
+from uav_downloader.core import firecrawl
 from uav_downloader.core.history import get_history_manager
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.daemon import nas
@@ -159,6 +160,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 prefs = config._load_prefs()
                 return self._send_json({
                     "nas": nas.load_settings(),
+                    "firecrawl": firecrawl.settings(),
                     "download_dir": prefs.get("download_dir") or os.environ.get("DOWNLOAD_DIR") or os.path.abspath("download"),
                     "resolution": config.get_resolution_pref(),
                     "subtitle_pref": config.get_subtitle_pref(),
@@ -267,6 +269,12 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 })
 
             elif path == "/api/settings":
+                if body.get("test_firecrawl"):
+                    return self._send_json(firecrawl.probe(body.get('site', 'JableTV')))
+                if "firecrawl" in body:
+                    firecrawl.save_settings(body['firecrawl'])
+                    BrowseService._search_term.cache_clear()
+                    BrowseService._search_tags.cache_clear()
                 if body.get("test_nas"):
                     nas.test_connection(body.get("nas", {}))
                     return self._send_json({"success": True})

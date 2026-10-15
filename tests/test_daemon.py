@@ -167,7 +167,7 @@ class TestDaemon(unittest.TestCase):
 
     @patch("uav_downloader.sites.missav.MissAVBrowser.fetch_page")
     def test_search_mocked(self, mock_fetch):
-        mock_fetch.return_value = [
+        mock_fetch.side_effect = lambda url: [] if 'page=' in url else [
             {"url": "https://missav.ai/test-002", "title": "MissAV Test", "thumbnail": "https://img/2.jpg"}
         ]
         status, data = request_json(

@@ -107,7 +107,7 @@ impl DaemonClient {
         });
         let resp = self
             .apply_auth(self.client.post(&endpoint))
-            .timeout(Duration::from_secs(300))
+            .timeout(Duration::from_secs(900))
             .json(&payload)
             .send()
             .await?;
@@ -185,6 +185,7 @@ impl DaemonClient {
         let endpoint = format!("{}/api/settings", self.base_url);
         let resp = self
             .apply_auth(self.client.post(&endpoint))
+            .timeout(Duration::from_secs(80))
             .json(&settings)
             .send()
             .await?;

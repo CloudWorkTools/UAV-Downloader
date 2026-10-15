@@ -344,7 +344,7 @@ class JableTVBrowser:
         def _validate(resp):
             s = BeautifulSoup(resp.content, 'html.parser')
             dl = s.find('div', id=lambda x: x and x.startswith('list_videos'))
-            return bool(dl and dl.select('div.video-img-box'))
+            return getattr(resp, 'status_code', 200) == 200 and dl is not None
         scr = cls._get_scraper()
         _apply_jable_lang(scr)
         resp, host, reason = fetch_with_mirrors(scr, url, 'jable', _validate)

@@ -133,15 +133,25 @@ def _blocked_response(response) -> bool:
 
 
 def _request(session, url, *, timeout=30):
-    response = session.get(
-        url,
-        headers={'Referer': HANIME1_HOME},
-        timeout=timeout,
-        allow_redirects=True,
-        **config.proxy_request_kwargs(),
-    )
-    if _blocked_response(response):
-        raise MirrorsBlockedError(url)
+    from uav_downloader.core.firecrawl import fallback
+    try:
+        response = session.get(
+            url,
+            headers={'Referer': HANIME1_HOME},
+            timeout=timeout,
+            allow_redirects=True,
+            **config.proxy_request_kwargs(),
+        )
+        if _blocked_response(response):
+            raise MirrorsBlockedError(url)
+        if int(getattr(response, 'status_code', 0) or 0) >= 500:
+            raise RuntimeError('Hanime1 站台暫時無法回應')
+    except Exception:
+        response = fallback(url)
+        if response is None:
+            raise
+        if _blocked_response(response):
+            raise MirrorsBlockedError(url)
     return response
 
 

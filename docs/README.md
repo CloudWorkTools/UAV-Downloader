@@ -6,6 +6,7 @@ CloudWorkTools 版本以繁體中文 Web 操作與 NAS 擴充為主：
 - [Web 與 NAS 使用說明](web-ui.md)
 - [上游更新維護](upstream-sync.md)
 - [架構與模組邊界](architecture.md)
+- [四站精準搜尋與套件評估](search-optimization-research.md)
 - [貢獻指南](../CONTRIBUTING.md)
 
 ## 原有桌面與核心文件

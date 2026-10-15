@@ -217,6 +217,8 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             final_host = host
         if final_host and final_host not in mirrors:  # redirected off the allowlist -> distrust
             continue
+        if resp.status_code >= 500:
+            continue
         saw_real = True
         try:
             ok = validate(resp)
@@ -226,6 +228,15 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             with _active_host_lock:
                 _active_host[site_key] = host
             return resp, host, 'ok'
+    if saw_real:
+        return None, None, 'empty'
+    from uav_downloader.core.firecrawl import fallback
+    response = fallback(url)
+    if response is not None:
+        host = urlsplit(response.url).netloc
+        if host in mirrors and not _is_cf_interstitial(response) and validate(response):
+            return response, host, 'ok'
+        raise RuntimeError('Firecrawl 未取得有效的站台頁面')
     return None, None, ('empty' if saw_real else 'blocked')
 
 # ── Global speed limiter (token bucket) ──────────────────────────

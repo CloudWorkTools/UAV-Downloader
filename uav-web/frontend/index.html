@@ -111,14 +111,14 @@
           <select id="category-select" aria-label="影片分類" onchange="onCategoryChange()" class="h-10 shrink-0 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500 max-w-[180px]">
             <option value="">載入分類中...</option>
           </select>
-          <input type="text" id="search-input" aria-label="搜尋番號或演員" aria-describedby="search-hint" placeholder="關鍵字1 關鍵字2 ..." onkeydown="if(event.key==='Enter') executeSearch()" class="h-10 min-w-[12rem] flex-1 w-44 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500">
+          <input type="text" id="search-input" aria-label="搜尋番號、演員或標籤" aria-describedby="search-hint" placeholder="關鍵字1 關鍵字2 ..." onkeydown="if(event.key==='Enter') executeSearch()" class="h-10 min-w-[12rem] flex-1 w-44 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500">
           <button onclick="executeSearch()" class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium">搜尋</button>
           <button id="select-page-button" onclick="selection.togglePage()" disabled class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-[#282832] border border-[#3e3e4e] hover:bg-[#3e3e4e] text-white text-sm rounded-lg transition font-medium disabled:opacity-50">全選</button>
           <button id="download-selected-button" onclick="selection.download()" disabled class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium disabled:opacity-50">下載已選 (0)</button>
         </div>
       </div>
 
-      <p id="search-hint" class="text-xs text-gray-400 mb-3">多個關鍵字以空格分隔，只顯示所有關鍵字的共同結果；完整詞組請加雙引號，例如：演員 "中文 字幕"。最多 8 個關鍵字，每個比對原站前 20 頁。</p>
+      <p id="search-hint" class="text-xs text-gray-400 mb-3">多個關鍵字以空格分隔，只顯示共同結果，最多 8 個；完整詞組請加雙引號。Jable 使用原站標題與標籤交集；其他站逐頁核對共同結果，不限前 20 頁。</p>
 
       <div class="browse-layout">
         <aside class="category-sidebar" aria-label="分類側欄">
@@ -252,6 +252,14 @@
             <label class="block text-gray-300 font-medium mb-1">本機下載目錄（僅供本機／下載後傳送模式使用）</label>
             <input type="text" id="setting-download-dir" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
           </div>
+
+          <fieldset class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-3">
+            <legend class="font-medium text-white">獨立 Firecrawl 擷取服務</legend>
+            <label class="flex items-center gap-2"><input type="checkbox" id="firecrawl-enabled" onchange="updateFirecrawlStatus()">站台連線失敗時使用 Firecrawl</label>
+            <p class="text-xs text-gray-400">使用此 Docker 部署專屬的服務，不連接本機 MCP。開關控制是否使用；服務隨 Docker 部署啟停。</p>
+            <button type="button" id="firecrawl-test-button" onclick="testFirecrawl()" class="h-10 px-3 rounded-lg border border-[#3e3e4e] bg-[#282832] disabled:opacity-50">儲存並測試目前站台</button>
+            <p id="firecrawl-status" role="status" class="text-xs text-gray-400">尚未測試</p>
+          </fieldset>
 
           <fieldset class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-3">
             <legend class="font-medium text-white">NAS / SMB 連線</legend>
@@ -816,6 +824,34 @@
     }
 
     // Settings
+    function updateFirecrawlStatus() {
+      const enabled = document.getElementById('firecrawl-enabled').checked;
+      document.getElementById('firecrawl-test-button').disabled = !enabled;
+      document.getElementById('firecrawl-status').textContent = enabled ? '尚未測試；開啟不代表此站可用' : '已關閉使用（儲存後生效）';
+    }
+
+    async function testFirecrawl() {
+      const button = document.getElementById('firecrawl-test-button');
+      const status = document.getElementById('firecrawl-status');
+      button.disabled = true;
+      document.getElementById('firecrawl-enabled').disabled = true;
+      status.textContent = `正在透過獨立 Firecrawl 擷取 ${currentSite} 實際影片清單…`;
+      try {
+        const saved = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({firecrawl:{enabled:document.getElementById('firecrawl-enabled').checked}})});
+        const result = await saved.json();
+        if (!saved.ok || !result.success) throw new Error(result.error || '設定儲存失敗');
+        const response = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({test_firecrawl:true, site:currentSite})});
+        const probe = await response.json();
+        if (!response.ok || probe.state !== 'ready') throw new Error(probe.error || 'Firecrawl 尚未啟用');
+        status.textContent = `${probe.site} 實際擷取成功；其他站台仍需個別測試`;
+      } catch (error) {
+        status.textContent = '目前無法使用：' + error.message;
+      } finally {
+        document.getElementById('firecrawl-enabled').disabled = false;
+        button.disabled = !document.getElementById('firecrawl-enabled').checked;
+      }
+    }
+
     function updateSubtitleOptions() {
       document.getElementById('subtitles-options').classList.toggle('hidden', !document.getElementById('setting-subtitles').checked);
     }
@@ -826,6 +862,14 @@
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || '設定載入失敗');
         NasSettings.load(data.nas || {});
+        document.getElementById('firecrawl-enabled').checked = data.firecrawl?.enabled === true;
+        updateFirecrawlStatus();
+        const fcStatus = data.firecrawl?.status;
+        if (data.firecrawl?.enabled && fcStatus?.state === 'ready') {
+          document.getElementById('firecrawl-status').textContent = `${fcStatus.site} 上次實際擷取成功；服務重啟或站台變更後請重新測試`;
+        } else if (data.firecrawl?.enabled && fcStatus?.state === 'unavailable') {
+          document.getElementById('firecrawl-status').textContent = fcStatus.error || 'Firecrawl 無法使用';
+        }
         document.getElementById('setting-download-dir').value = data.download_dir || '';
         document.getElementById('setting-resolution').value = data.resolution || 'highest';
         document.getElementById('setting-filename-mode').value = data.filename_mode || 'full-title';
@@ -845,6 +889,7 @@
     async function saveSettings() {
       const payload = {
         nas: NasSettings.payload(),
+        firecrawl: {enabled: document.getElementById('firecrawl-enabled').checked},
         download_dir: document.getElementById('setting-download-dir').value,
         resolution: document.getElementById('setting-resolution').value,
         filename_mode: document.getElementById('setting-filename-mode').value,
