@@ -1,74 +1,64 @@
-name: Sync with Upstream
+name: 追蹤上游更新
 
 on:
   schedule:
-    # Run every 12 hours (00:00 and 12:00 UTC)
-    - cron: '0 0,12 * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+    - cron: '17 1,13 * * *'
+  workflow_dispatch:
 
-permissions:
-  contents: write
-  issues: write
+permissions: {}
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
 
 jobs:
-  sync-upstream:
+  propose:
+    if: github.repository == 'CloudWorkTools/UAV-Downloader'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-
-      - name: Setup Git user
+          persist-credentials: false
+      - name: 建立上游同步 PR 並啟動相容性檢查
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Sync upstream
-        id: sync
-        run: |
-          UPSTREAM_URL="https://github.com/Alos21750/UAV-Downloader.git"
-          UPSTREAM_BRANCH="master"
-
-          echo "Adding upstream remote: $UPSTREAM_URL"
-          git remote add upstream "$UPSTREAM_URL" || git remote set-url upstream "$UPSTREAM_URL"
-          git fetch upstream "$UPSTREAM_BRANCH"
-
-          # Check if upstream is already an ancestor of HEAD
-          if git merge-base --is-ancestor upstream/$UPSTREAM_BRANCH HEAD; then
-            echo "Already up to date with upstream."
+          set -euo pipefail
+          git config core.hooksPath /dev/null
+          git fetch --no-tags https://github.com/Alos21750/UAV-Downloader.git master
+          upstream_sha=$(git rev-parse FETCH_HEAD)
+          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            echo '上游版本已包含在目前分支。' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-
-          echo "Upstream has new updates. Merging upstream/$UPSTREAM_BRANCH..."
-          if git merge upstream/$UPSTREAM_BRANCH --no-edit -m "chore(sync): merge upstream changes from Alos21750/UAV-Downloader"; then
-            echo "Merge succeeded. Pushing changes to origin/master..."
-            git push origin master
-          else
-            echo "Merge conflict detected! Aborting merge."
-            git merge --abort
-            exit 1
+          branch="sync/upstream-${upstream_sha:0:12}"
+          gh auth setup-git
+          git push origin "$upstream_sha:refs/heads/$branch"
+          pr_url=$(gh pr list --head "$branch" --base "$BASE_BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -z "$pr_url" ]; then
+            {
+              echo '## 上游更新評估'
+              echo
+              echo '來源：Alos21750/UAV-Downloader 的 master 分支。'
+              echo
+              echo '此 PR 保留上游提交；不會直接更新本專案主分支。'
+              echo 'Web / UI compatibility 會先嘗試合併目前主分支，再執行 NAS、佇列、選取操作與容器啟動測試。'
+              echo '請確認檢查成功，並檢視 Web、NAS 與工作流程的差異後，再由維護者決定是否合併。'
+              echo '測試通過僅代表已覆蓋情境通過，實際站點與個別 NAS 仍需抽查。'
+              echo
+              echo '提交：'
+              git log -15 --format='%h %s' "HEAD..$upstream_sha"
+            } > "$RUNNER_TEMP/upstream-pr.md"
+            pr_url=$(gh pr create --base "$BASE_BRANCH" --head "$branch" --title 'chore: 評估上游更新' --body-file "$RUNNER_TEMP/upstream-pr.md")
           fi
-
-      - name: Create issue on conflict
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issueTitle = "⚠️ Upstream Sync Merge Conflict";
-            const issueBody = `自動同步上游倉庫 \`Alos21750/UAV-Downloader\` 時發生衝突，請手動合併：\n\n\`\`\`bash\ngit fetch upstream\ngit merge upstream/master\n# 解決衝突後\ngit commit -m "chore: merge upstream conflicts"\ngit push origin master\n\`\`\``;
-            
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open'
-            });
-            const exists = issues.data.some(i => i.title === issueTitle);
-            if (!exists) {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: issueTitle,
-                body: issueBody
-              });
-            }
+          gh workflow run web-check.yml --ref "$BASE_BRANCH" -f candidate_sha="$upstream_sha"
+          echo "同步 PR：$pr_url；已啟動相容性檢查，等待維護者判斷。" >> "$GITHUB_STEP_SUMMARY"

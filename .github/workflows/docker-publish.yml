@@ -17,6 +17,7 @@ on:
 
 jobs:
   build-and-push:
+    if: github.repository == 'Alos21750/UAV-Downloader' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
