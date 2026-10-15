@@ -2,6 +2,47 @@
 
 影匣是以繁體中文使用者為主的影片搜尋與下載工具，[專案原始碼](https://github.com/CloudWorkTools/UAV-Downloader)包含 Web 介面與 NAS 儲存擴充。專案沿用 [Alos21750/UAV-Downloader](https://github.com/Alos21750/UAV-Downloader) 的下載核心，將瀏覽、複選下載、下載佇列及 SMB 儲存整合到瀏覽器。
 
+## 主要功能
+
+| 功能 | 操作與行為 |
+| --- | --- |
+| 四站瀏覽與搜尋 | 支援 JableTV、MissAV、SupJav、Hanime1，搜尋條件包含標題與標籤。 |
+| 多關鍵字交集 | Jable 沿用原站分頁；其他站先顯示已確認結果，再接續補滿每頁 24 筆，按下一頁才繼續。任一條件確認完全沒有結果就結束交集查詢。 |
+| 取消查詢 | 搜尋中可取消，後端移除該查詢的工作與進度；切換網站、分類或重新搜尋也會取消舊查詢。 |
+| 下載管理 | 跨頁複選、批次加入、暫停、繼續、失敗重試及取消後重新開始；目前下載中的項目排在前面，加入下載後仍留在瀏覽頁。 |
+| 保留檔案的清單整理 | 「清除已完成項目」只移除已完成紀錄，保留影片與下載歷史；單筆也可移除紀錄。 |
+| 後端工作動態 | 底部面板預設收起，摘要仍定時更新；展開可橫向查看各條件及下載階段的進度。 |
+| 獨立 Firecrawl | Docker 專屬擷取服務預設啟用，站台連線失敗時使用；可開關並測試目前站台，不連接本機 MCP。 |
+| NAS / SMB | 支援直接寫入 NAS、系統掛載目錄，以及先下載到本機再傳送。 |
+
+搜尋取消與來源限制、下載操作及儲存設定詳見 [Web 與 NAS 使用說明](docs/web-ui.md)。
+
+## 介面預覽
+
+以下為實際部署的 Web 介面。截圖已隱去影片縮圖、名稱及下載任務細節。
+
+搜尋先顯示確認的交集結果，接續補滿同一頁；搜尋列提供「取消查詢」，底部保留工作動態摘要。
+
+![影匣搜尋：已找到 12 / 24 筆，接續補滿本頁並提供取消查詢](docs/assets/web-search.png)
+
+<details>
+<summary>查看取消查詢後的畫面</summary>
+
+取消成功後顯示「後端工作已移除」，不再接續載入；已顯示的影片仍可瀏覽。
+
+![取消查詢後保留已顯示結果，並確認後端工作已移除](docs/assets/web-search-cancelled.png)
+
+</details>
+
+<details>
+<summary>查看下載清單與管理按鈕</summary>
+
+下載清單提供批次暫停、繼續、重試、取消、目的地測試，以及保留影片的「清除已完成項目」。
+
+![影匣下載清單：批次管理、目的地測試與清除已完成項目](docs/assets/web-download-queue.png)
+
+</details>
+
 ## 本機啟動
 
 需要 Docker Compose 與 Buildx。唯一的啟動檔是 [docker-compose.yml](docker-compose.yml)，包含 Web、獨立 Firecrawl 與其資料服務。第一次建置會下載 Rust、Python、FFmpeg 與 Firecrawl 的依賴。
@@ -38,7 +79,7 @@ Web 介面目前沒有登入驗證，因此預設只開放本機連線。遠端�
 1. 選擇網站與分類，或輸入關鍵字搜尋。
 2. 使用搜尋列旁的「全選」選取目前頁面的影片，也可逐片勾選。
 3. 按「下載已選」加入下載佇列。
-4. 在「下載佇列」查看進度或取消任務。
+4. 在「下載佇列」查看進度、暫停、繼續、重試或取消任務。
 
 「取消全選」只取消目前頁面的選取。跨頁已選影片仍會保留；加入佇列失敗的影片會維持選取，方便重試。
 
@@ -85,6 +126,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-docker.txt pytest PySocks customtkinter Pillow
 .venv/bin/python -m pytest -q tests/test_nas.py tests/test_daemon.py tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py
 node tests/web_ui.cjs
+node tests/web_browse.cjs
 bash scripts/check_web_container.sh uav-downloader:local
 ```
 
