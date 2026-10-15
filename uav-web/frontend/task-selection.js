@@ -101,6 +101,9 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     document.getElementById('task-edit-count').textContent = editingIds.length;
     document.getElementById('task-edit-storage').value = '';
     document.getElementById('task-edit-dest').value = '';
+    document.getElementById('task-edit-change-staging').checked = false;
+    document.getElementById('task-edit-staging').value = '';
+    document.getElementById('task-edit-staging').disabled = true;
     for (const key of ['host', 'share', 'directory', 'username', 'password', 'direct-path']) document.getElementById('task-edit-' + key).value = '';
     savedNas = {};
     busy = true;
@@ -114,6 +117,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
       for (const key of ['host', 'share', 'directory', 'username']) document.getElementById('task-edit-' + key).value = savedNas[key] || '';
       document.getElementById('task-edit-direct-path').value = savedNas.direct_path || '';
       document.getElementById('task-edit-dest').value = settings.download_dir || '';
+      document.getElementById('task-edit-staging').value = settings.staging_dir || '';
       message = '已帶入設定區已儲存的內容，可在此單獨修改。';
     } catch (error) { message = `無法讀取預設設定：${error.message}；仍可自行填寫。`; }
     finally { busy = false; update(); }
@@ -128,8 +132,10 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     const storage = document.getElementById('task-edit-storage').value;
     const subtitles = document.getElementById('task-edit-subtitles').value;
     const status = document.getElementById('task-edit-status');
-    if (!storage && !subtitles) { status.textContent = '請至少選擇一項修改'; return; }
+    const changeStaging = document.getElementById('task-edit-change-staging').checked;
+    if (!storage && !subtitles && !changeStaging) { status.textContent = '請至少選擇一項修改'; return; }
     const payload = {action: 'update_settings', task_ids: editingIds};
+    if (changeStaging) payload.staging_dir = document.getElementById('task-edit-staging').value.trim();
     if (storage) payload.storage = storage;
     if (['local', 'upload'].includes(storage)) {
       payload.dest = document.getElementById('task-edit-dest').value.trim();

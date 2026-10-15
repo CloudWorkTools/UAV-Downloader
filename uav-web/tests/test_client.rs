@@ -16,6 +16,7 @@ fn test_download_request_serialization() {
     let req = StartDownloadRequest {
         url: "https://jable.tv/videos/test/".to_string(),
         dest: Some("/downloads".to_string()),
+        staging_dir: Some("/downloads/.staging".to_string()),
         resolution: Some("1080".to_string()),
         max_workers: Some(4),
         enable_subtitles: Some(false),
@@ -26,4 +27,5 @@ fn test_download_request_serialization() {
     let serialized = serde_json::to_string(&req).expect("Failed to serialize");
     assert!(serialized.contains("https://jable.tv/videos/test/"));
     assert!(serialized.contains("1080"));
+    assert!(serialized.contains("/downloads/.staging"));
 }

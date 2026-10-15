@@ -11,7 +11,7 @@ let sent;
 let fail = false;
 const context = vm.createContext({window: {}, document: {getElementById: element, querySelectorAll: () => []},
   fetch: async (path, options) => {
-    if (path === '/api/settings') return {ok: true, json: async () => ({download_dir: '/downloads/default', nas: {host: 'saved.local', share: 'saved-videos', directory: 'saved-dir', username: 'saved-user', direct_path: '/nas/default', password_saved: true}})};
+    if (path === '/api/settings') return {ok: true, json: async () => ({download_dir: '/downloads/default', staging_dir: '/downloads/.staging', nas: {host: 'saved.local', share: 'saved-videos', directory: 'saved-dir', username: 'saved-user', direct_path: '/nas/default', password_saved: true}})};
     assert.equal(path, '/api/download/action');
     sent = JSON.parse(options.body);
     return {ok: !fail, json: async () => fail ? {error: 'NAS 離線'} : {success: true, updated: sent.task_ids, skipped: []}};
@@ -95,5 +95,15 @@ selection.toggle('c', false);
   assert.equal(sent.nas.host, 'saved.local');
   assert.equal(sent.nas.use_saved_password, true);
   assert.equal(sent.nas.password, '');
+  await selection.edit('c');
+  assert.equal(element('task-edit-staging').value, '/downloads/.staging');
+  assert.equal(element('task-edit-change-staging').checked, false);
+  element('task-edit-change-staging').checked = true;
+  element('task-edit-staging').value = '/downloads/new-staging';
+  await selection.saveEdit({preventDefault() {}});
+  assert.equal(sent.staging_dir, '/downloads/new-staging');
+  assert.equal(sent.storage, undefined);
+  assert.equal(sent.dest, undefined);
+  assert.equal(sent.nas, undefined);
   console.log('Batch task settings, partial selection and failure retention: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -659,3 +659,54 @@ def test_remove_duplicates_clears_all_skips_but_waits_for_live_worker(manager):
     manager._active.clear()
     assert manager.remove_duplicates() == {'removed': 1, 'protected': 0}
     assert not manager._tasks
+
+
+def test_staging_finishes_video_and_subtitles_before_publishing(manager, monkeypatch, tmp_path):
+    staging = tmp_path / 'staging'
+    task = manager.add_task('https://missav.ai/mimk-290', staging_dir=str(staging), enable_subtitles=True, subtitle_mode='zh')
+    final = Path(task.dest)
+    def download(job):
+        assert Path(job.dest_folder()).parent == staging
+        assert not (final / 'MIMK-290.mp4').exists()
+        (Path(job.dest_folder()) / 'MIMK-290.mp4').write_bytes(b'complete-video')
+        return True
+    def subtitles(current, job):
+        assert not (final / 'MIMK-290.mp4').exists()
+        (Path(job.dest_folder()) / 'MIMK-290.zh.srt').write_text('subtitle')
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    monkeypatch.setattr(manager, '_run_subtitles', subtitles)
+    manager._run_task(task)
+    assert task.status == 'completed', task.error
+    assert (final / 'MIMK-290.mp4').read_bytes() == b'complete-video'
+    assert (final / 'MIMK-290.zh.srt').read_text() == 'subtitle'
+    assert not list(staging.iterdir())
+
+
+def test_staging_keeps_sources_after_publish_failure_and_retries_owned_outputs(manager, monkeypatch, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    staging = str(tmp_path / 'staging')
+    task = manager.add_task('https://missav.ai/mimk-290', staging_dir=staging)
+    def download(job):
+        (Path(job.dest_folder()) / 'MIMK-290.mp4').write_bytes(b'complete-video')
+        (Path(job.dest_folder()) / 'MIMK-290.zh.srt').write_bytes(b'subtitle')
+        return True
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    fs = tm.storage_fs(task.dest)
+    publish = fs.publish
+    def fail_subtitle(source, target):
+        if target.endswith('.srt'):
+            raise OSError('destination disconnected')
+        return publish(source, target)
+    monkeypatch.setattr(fs, 'publish', fail_subtitle)
+    manager._run_task(task)
+    assert task.status == 'failed'
+    assert (Path(task.files.workdir) / 'MIMK-290.mp4').read_bytes() == b'complete-video'
+    assert not list(Path(task.dest).glob('*.part'))
+    monkeypatch.setattr(fs, 'publish', publish)
+    restored = tm.TaskManager(state_path=manager._state_path)
+    task = restored.get_task(task.task_id)
+    assert restored.restart_task(task.task_id)
+    restored._run_task(task)
+    assert task.status == 'completed', task.error
+    assert (Path(task.dest) / 'MIMK-290.zh.srt').read_bytes() == b'subtitle'
+    assert not list(Path(staging).iterdir())

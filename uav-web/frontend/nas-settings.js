@@ -65,15 +65,17 @@ window.NasSettings = (() => {
       document.getElementById('nas-direct-fields').classList.toggle('hidden', mode !== 'direct');
       document.getElementById('nas-upload-fields').classList.toggle('hidden', !['upload', 'smb'].includes(mode));
       document.getElementById('nas-address-help').classList.toggle('hidden', !['upload', 'smb'].includes(mode));
+      document.getElementById('nas-credentials').classList.toggle('hidden', !['upload', 'smb'].includes(mode));
       document.getElementById('nas-credentials-help').textContent = mode === 'direct'
-        ? '此進階模式使用系統已掛載路徑。若要使用這裡的帳密直接連線，請改選「透過 SMB 直接儲存至 NAS」。'
-        : mode === 'smb' ? '以帳密直接連線 SMB，影片分段、合成檔與字幕寫入 NAS，不需事先掛載。請先測試連線，再儲存設定；啟用 AI 字幕時僅在本機暫存辨識音訊與處理檔，完成後清除。'
-        : mode === 'local' ? '可先填寫 NAS 帳號與密碼；選擇「透過 SMB 直接儲存至 NAS」後使用。'
-        : '填寫 NAS 帳號與密碼，按測試連線後儲存設定；密碼會加密保存。';
+        ? '使用系統已掛載的資料夾，不需在此填寫帳密。'
+        : mode === 'local' ? '完成檔存到本機資料夾；可另外指定上方暫存區。'
+        : '填寫 NAS 位置與帳密後測試連線。設定暫存區後，分段與合成只在暫存區處理；密碼留空沿用。';
       document.getElementById('nas-test-button').disabled = mode === 'local';
       document.getElementById('setting-download-dir').disabled = ['direct', 'smb'].includes(mode);
       const pathFields = document.getElementById('setting-local-path-fields');
       if (pathFields) pathFields.hidden = ['direct', 'smb'].includes(mode);
+      const pathLabel = document.getElementById('setting-download-dir-label');
+      if (pathLabel) pathLabel.textContent = mode === 'upload' ? '本機副本資料夾' : '本機存放資料夾';
     }
 
     async function testConnection() {

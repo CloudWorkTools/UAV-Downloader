@@ -283,23 +283,28 @@
           </fieldset>
 
           <fieldset class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-3">
-            <legend class="font-medium text-white">NAS / SMB 連線</legend>
-            <label for="nas-storage-mode" class="block">下載儲存位置</label>
+            <legend class="font-medium text-white">下載存放</legend>
+            <div>
+              <label for="setting-staging-dir" class="block mb-1">1. 暫存區（選填）</label>
+              <input id="setting-staging-dir" type="text" placeholder="例如 /downloads/.staging" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+              <p class="text-xs text-gray-400 mt-1">分段、合成與字幕先在這裡處理，完成後才移到下方位置。成功後清除暫存，失敗則保留；留空維持原方式。</p>
+            </div>
+            <label for="nas-storage-mode" class="block">2. 完成後存放位置</label>
             <select id="nas-storage-mode" onchange="NasSettings.updateMode()" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
-              <option value="local">本機（指定 path）</option>
-              <option value="smb">透過 SMB 直接儲存至 NAS（帳密登入，不需掛載）</option>
-              <option value="upload">先下載到本機，再以 SMB 傳送至 NAS</option>
-              <option value="direct">使用系統已掛載的 NAS 路徑（進階）</option>
+              <option value="local">本機資料夾</option>
+              <option value="smb">NAS（帳密連線）</option>
+              <option value="upload">NAS，並保留本機副本</option>
+              <option value="direct">已掛載 NAS（進階）</option>
             </select>
             <div id="setting-local-path-fields">
-              <label for="setting-download-dir" class="block mb-1">本機下載／暫存 path（新任務預設值）</label>
+              <label id="setting-download-dir-label" for="setting-download-dir" class="block mb-1">本機存放資料夾</label>
               <input type="text" id="setting-download-dir" placeholder="例如 /downloads/videos" aria-describedby="setting-download-path-help" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
-              <p id="setting-download-path-help" class="text-xs text-gray-400 mt-1">本機或先下載再傳送 NAS 時使用；Docker 請填容器內路徑，例如 /downloads/videos。下載清單可另外設定，不受此預設值變更影響。</p>
+              <p id="setting-download-path-help" class="text-xs text-gray-400 mt-1">Docker 請填容器內路徑，例如 /downloads/videos。這是新任務預設值，已在清單中的任務可另外設定。</p>
             </div>
             <div id="nas-direct-fields" class="hidden space-y-2">
               <label for="nas-direct-path" class="block">NAS 已掛載路徑（不是 SMB 網址）</label>
               <input id="nas-direct-path" type="text" placeholder="例如 /nas；請勿填入 smb:// 網址" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
-              <p class="text-xs text-gray-400">影片分段、合成檔與字幕直接寫入此 NAS 目錄。請先將 NAS 掛載到系統；Docker 請填容器內路徑，例如 /nas。此模式的帳密由系統掛載時設定；未掛載時會停止，不會改存本機。</p>
+              <p class="text-xs text-gray-400">先在系統掛載 NAS，再填容器內路徑（例如 /nas/videos）。帳密由系統掛載時設定。</p>
             </div>
             <div id="nas-upload-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-3 hidden">
               <div><label for="nas-host" class="block mb-1">NAS 位址（IP、主機名稱或 SMB 網址）</label><input id="nas-host" type="text" placeholder="smb://nas.local/download 或 nas.local/download" autocomplete="off" aria-describedby="nas-address-help" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
@@ -312,7 +317,7 @@
               <div><label for="nas-password" class="block mb-1">密碼（留空保留已保存密碼）</label><input id="nas-password" type="password" placeholder="" autocomplete="new-password" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white"></div>
             </div>
             <p id="nas-credentials-help" class="text-xs text-gray-400"></p>
-            <p id="nas-address-help" class="hidden text-xs text-gray-400">SMB 網址可省略 smb://。例如 smb://nas.local/download 與 nas.local/download 都可使用；網址中的共享資料夾及子目錄會優先套用。帳號、密碼請分開填寫，不要放在網址中。也可只填 IP／主機名稱，再填共享資料夾。</p>
+            <details id="nas-address-help" class="hidden text-xs text-gray-400"><summary class="cursor-pointer">NAS 位址填寫範例</summary><p>SMB 網址可省略 smb://。例如 smb://nas.local/download 與 nas.local/download 都可使用；網址中的共享資料夾及子目錄會優先套用。帳號、密碼請分開填寫，不要放在網址中。也可只填 IP／主機名稱，再填共享資料夾。</p></details>
             <div class="flex flex-wrap items-center gap-3"><button type="button" id="nas-test-button" onclick="NasSettings.testConnection()" class="h-10 min-w-20 px-3 rounded-lg border border-[#3e3e4e] bg-[#282832] whitespace-nowrap disabled:opacity-50">測試連線</button><span id="nas-status" role="status" class="text-xs text-gray-400">設定隨下方儲存按鈕永久保存</span></div>
       <div id="nas-space-settings" class="hidden space-y-2 bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-4">
         <h3 id="nas-space-settings-label" class="text-sm font-semibold text-white">已儲存 NAS 的容量</h3>
@@ -456,13 +461,18 @@
     <form onsubmit="taskSelection.saveEdit(event)" class="space-y-4">
       <h2 id="task-edit-title" class="font-bold">修改所選設定（<span id="task-edit-count">0</span> 個任務）</h2>
       <p class="text-sm text-gray-400">適用等待中、已暫停、失敗或已取消的任務。執行中的任務請先暫停，再勾選修改。</p>
-      <label class="block text-sm">儲存位置
+      <div class="text-sm space-y-1">
+        <label class="flex items-center gap-2"><input id="task-edit-change-staging" type="checkbox" onchange="document.getElementById('task-edit-staging').disabled = !this.checked">修改暫存區</label>
+        <input id="task-edit-staging" disabled type="text" placeholder="例如 /downloads/.staging；留空停用" class="w-full bg-[#282832] rounded p-2">
+        <p class="text-xs text-gray-400">可只勾選這項，原本的存放位置與 NAS 設定保持不變。完成後才搬移；失敗保留暫存。</p>
+      </div>
+      <label class="block text-sm">完成後存放位置
         <select id="task-edit-storage" onchange="taskSelection.updateEditStorage()" class="block w-full mt-1 bg-[#282832] rounded p-2">
-          <option value="">保持各任務原設定</option><option value="local">本機（指定 path）</option><option value="upload">本機下載後傳送 NAS</option><option value="smb">直接儲存至 NAS（SMB）</option><option value="direct">已掛載 NAS（指定 path）</option>
+          <option value="">保持原位置</option><option value="local">本機資料夾</option><option value="upload">NAS，並保留本機副本</option><option value="smb">NAS（帳密連線）</option><option value="direct">已掛載 NAS（指定 path）</option>
         </select>
       </label>
       <div id="task-edit-local-fields" hidden>
-        <label class="block text-sm">本機下載 path<input id="task-edit-dest" type="text" disabled aria-describedby="task-edit-path-help" placeholder="例如 /downloads/videos" class="block w-full mt-1 bg-[#282832] rounded p-2"></label>
+        <label class="block text-sm">本機存放資料夾<input id="task-edit-dest" type="text" disabled aria-describedby="task-edit-path-help" placeholder="例如 /downloads/videos" class="block w-full mt-1 bg-[#282832] rounded p-2"></label>
         <p id="task-edit-path-help" class="text-xs text-gray-400 mt-1">請填寫下載服務可存取的目錄。Docker 部署請使用容器內路徑，例如 /downloads/videos。</p>
       </div>
       <div id="task-edit-nas-fields" hidden>
@@ -476,7 +486,7 @@
       </div>
       <div id="task-edit-direct-fields" hidden><label class="block text-sm">NAS 已掛載 path<input id="task-edit-direct-path" disabled placeholder="例如 /nas/videos" class="block w-full bg-[#282832] rounded p-2"></label></div>
       <p class="text-sm text-gray-400">欄位先帶入設定區已儲存的內容，修改後僅套用所選任務。相同 NAS 主機與帳號可留空沿用密碼；更換主機或帳號請重新輸入。密碼會加密保存；本機下載後傳送 NAS 會保留本機檔案。</p>
-      <p class="text-sm text-amber-400">更換儲存位置後會重新下載，原位置的片段與檔案會保留，不會自動搬移。</p>
+      <p class="text-sm text-amber-400">更換暫存區或存放位置會重新下載；舊位置已有的片段與檔案會保留。</p>
       <label class="block text-sm">生成字幕
         <select id="task-edit-subtitles" class="block w-full mt-1 bg-[#282832] rounded p-2">
           <option value="">保持各任務原設定</option><option value="none">不生成字幕</option><option value="ja">日文原文</option><option value="en">英文翻譯</option><option value="zh">繁體中文翻譯</option><option value="all">全部語言</option>
@@ -905,7 +915,7 @@
       }
 
       container.innerHTML = tasks.map(t => {
-        const downloadInfo = `影片：${t.name || t.url}\n網址：${t.url}\n下載 path：${t.dest || ''}\n最終位置：${t.final_dest || t.dest || ''}\n畫質：${t.resolution || '自動'}\n下載執行緒：${t.max_workers || '預設'}\n字幕：${t.subtitle_mode || 'none'}\n封面：${t.download_cover ? '下載' : '不下載'}\n進度：${t.progress || 0}%（${t.downloaded_segments || 0}/${t.total_segments || 0}）\n速度：${t.speed_formatted || '0 B/s'}\n階段：${t.phase || t.status}\n建立：${t.created_at || ''}\n更新：${t.updated_at || ''}`;
+        const downloadInfo = `影片：${t.name || t.url}\n網址：${t.url}\n暫存區：${t.staging_dir || '未另設'}\n下載 path：${t.dest || ''}\n最終位置：${t.final_dest || t.dest || ''}\n畫質：${t.resolution || '自動'}\n下載執行緒：${t.max_workers || '預設'}\n字幕：${t.subtitle_mode || 'none'}\n封面：${t.download_cover ? '下載' : '不下載'}\n進度：${t.progress || 0}%（${t.downloaded_segments || 0}/${t.total_segments || 0}）\n速度：${t.speed_formatted || '0 B/s'}\n階段：${t.phase || t.status}\n建立：${t.created_at || ''}\n更新：${t.updated_at || ''}`;
         let statusBadge = '';
         if (t.status === 'downloading') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded font-medium">${t.progress >= 100 ? '合併影片中' : `下載中 (${t.speed_formatted})`}</span>`;
@@ -1219,6 +1229,7 @@
           document.getElementById('firecrawl-status').textContent = fcStatus.error || 'Firecrawl 無法使用';
         }
         document.getElementById('setting-download-dir').value = data.download_dir || '';
+        document.getElementById('setting-staging-dir').value = data.staging_dir || '';
         document.getElementById('setting-resolution').value = data.resolution || 'highest';
         document.getElementById('setting-filename-mode').value = data.filename_mode || 'full-title';
         document.getElementById('setting-concurrency').value = data.download_concurrency || 2;
@@ -1250,6 +1261,7 @@
         nas: NasSettings.payload(),
         firecrawl: {enabled: document.getElementById('firecrawl-enabled').checked},
         download_dir: document.getElementById('setting-download-dir').value,
+        staging_dir: document.getElementById('setting-staging-dir').value,
         resolution: document.getElementById('setting-resolution').value,
         filename_mode: document.getElementById('setting-filename-mode').value,
         download_concurrency: parseInt(document.getElementById('setting-concurrency').value),

@@ -380,3 +380,31 @@ def test_queue_cannot_reuse_saved_password_for_another_nas(web_settings, monkeyp
     code, _ = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'], 'storage': 'custom',
         'nas': dict(enabled=True, mode='smb', host='another.local', share='videos', username='user', password='', use_saved_password=True)})
     assert code == 400
+
+
+def test_staging_preference_does_not_change_existing_destination_or_nas(web_settings):
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root = web_settings
+    destination = str(root / 'final')
+    staging = str(root / 'staging')
+    assert request('/api/settings', {'download_dir': destination})[0] == 200
+    assert request('/api/settings', {'staging_dir': staging})[0] == 200
+    _, settings = request('/api/settings')
+    assert settings['download_dir'] == destination and settings['staging_dir'] == staging
+    _, result = request('/api/download/start', {'url': 'https://missav.ai/staging'})
+    assert result['task']['dest'] == destination and result['task']['staging_dir'] == staging
+    task = DownloadTask('existing', 'https://missav.ai/existing', destination, status='paused', nas_settings={'enabled': True, 'mode': 'smb', 'host': 'original.local', 'share': 'video'})
+    server.task_manager._tasks[task.task_id] = task
+    original = dict(task.nas_settings)
+    code, result = request('/api/download/action', {'action': 'update_settings', 'task_ids': ['existing'], 'staging_dir': staging})
+    assert code == 200 and result['updated'] == ['existing']
+    assert task.dest == destination and task.nas_settings == original
+    restored = TaskManager(state_path=server.task_manager._state_path).get_task('existing')
+    assert restored.staging_dir == staging and restored.nas_settings == original
+
+
+@pytest.mark.parametrize('value', [12, [], 'smb://nas/video', '/tmp/../__uav_smb__/fake', '/tmp/invalid\npath'])
+def test_invalid_staging_directory_is_rejected_without_changing_destination(web_settings, value):
+    request, _, _ = web_settings
+    assert request('/api/settings', {'staging_dir': value})[0] == 400
+    assert request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'], 'staging_dir': value})[0] == 400

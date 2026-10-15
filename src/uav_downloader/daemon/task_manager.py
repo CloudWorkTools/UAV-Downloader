@@ -19,7 +19,7 @@ from uav_downloader.core import config
 from uav_downloader.daemon import nas
 from uav_downloader.daemon.download_files import DownloadFiles, existing_video, video_key
 from uav_downloader.core.history import get_history_manager
-from uav_downloader.core.storage import StorageWriteError, storage_fs, probe_destination
+from uav_downloader.core.storage import SMB_PATH_ROOT, StorageWriteError, storage_fs, probe_destination
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.sites.base import MirrorsBlockedError
 
@@ -55,6 +55,7 @@ class DownloadTask:
     thread: Optional[threading.Thread] = None
     cancelled_event: threading.Event = field(default_factory=threading.Event)
     paused_event: threading.Event = field(default_factory=threading.Event)
+    staging_dir: str = ''
 
     def set_phase(self, message, done=0, total=0):
         self.phase, self.phase_done, self.phase_total = message, done, total
@@ -68,6 +69,7 @@ class DownloadTask:
             "task_id": self.task_id,
             "url": self.url,
             "dest": destination,
+            "staging_dir": self.staging_dir,
             "final_dest": nas.public_destination(self.nas_settings) if self.nas_settings.get('enabled') and self.nas_settings.get('mode') == 'upload' else destination,
             "name": self.name,
             "status": self.status,
@@ -128,7 +130,7 @@ class TaskManager:
                         task.dest = nas.smb_destination()
                         task.nas_settings = dict(current, _smb_path=task.dest)
                 if files:
-                    task.files = DownloadFiles.restore(task.dest, task.task_id, files)
+                    task.files = DownloadFiles.restore(task.dest, task.task_id, files, task.staging_dir)
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
                 task.cleanup_unverified = not task.subtitles_only and not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused")
                 if task.status == 'pausing':
@@ -197,6 +199,7 @@ class TaskManager:
         enable_subtitles: Optional[bool] = None,
         subtitle_mode: Optional[str] = None,
         download_cover: Optional[bool] = None,
+        staging_dir: Optional[str] = None,
     ) -> DownloadTask:
         subtitle_mode = config.get_subtitle_pref() if subtitle_mode is None else subtitle_mode
         if subtitle_mode not in config.VALID_SUBTITLE_PREFS:
@@ -207,6 +210,7 @@ class TaskManager:
             raise ValueError("下載封面必須為開啟或關閉")
         enable_subtitles = subtitle_mode != "none" if enable_subtitles is None else enable_subtitles
         download_cover = config.get_download_cover() if download_cover is None else download_cover
+        staging_dir = self._staging_directory(config._load_prefs().get('staging_dir', '') if staging_dir is None else staging_dir)
         target_dest = dest or config._load_prefs().get("download_dir") or os.environ.get("DOWNLOAD_DIR")
         if not target_dest:
             target_dest = os.path.join(os.getcwd(), "download")
@@ -232,6 +236,7 @@ class TaskManager:
             task_id=task_id,
             url=url.strip(),
             dest=os.path.abspath(target_dest),
+            staging_dir=staging_dir,
             resolution=config.get_resolution_pref() if resolution is None else resolution,
             max_workers=config.get_max_workers_per_video() if max_workers is None else max_workers,
             enable_subtitles=enable_subtitles,
@@ -255,15 +260,28 @@ class TaskManager:
         with self._lock:
             return self._tasks.get(task_id)
 
-    def update_tasks(self, task_ids, *, storage=None, dest=None, subtitle_mode=None, nas_settings=None):
+    @staticmethod
+    def _staging_directory(value):
+        if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 32 for c in value) or value.strip().lower().startswith('smb:'):
+            raise ValueError('暫存區必須是有效的本機目錄')
+        path = os.path.abspath(value.strip()) if value.strip() else ''
+        if path == SMB_PATH_ROOT or path.startswith(SMB_PATH_ROOT + os.path.sep):
+            raise ValueError('暫存區必須是有效的本機目錄')
+        return path
+
+    def update_tasks(self, task_ids, *, storage=None, dest=None, subtitle_mode=None, nas_settings=None, staging_dir=None):
         if not isinstance(task_ids, list) or not task_ids or any(not isinstance(tid, str) or not tid for tid in task_ids):
             raise ValueError('請提供要修改的任務')
         if storage not in (None, 'local', 'settings', 'custom'):
             raise ValueError('不支援的儲存方式')
         if subtitle_mode is not None and (not isinstance(subtitle_mode, str) or subtitle_mode not in config.VALID_SUBTITLE_PREFS):
             raise ValueError('不支援的字幕模式')
-        if storage is None and subtitle_mode is None:
+        if storage is None and subtitle_mode is None and staging_dir is None:
             raise ValueError('請至少選擇一項修改')
+        if staging_dir is not None:
+            staging_dir = self._staging_directory(staging_dir)
+            if staging_dir:
+                probe_destination(staging_dir)
         target = None
         settings = {}
         if storage is not None:
@@ -311,6 +329,12 @@ class TaskManager:
                         task.name, task.progress = '', 0.0
                         task.downloaded_segments = task.total_segments = 0
                     task.dest, task.nas_settings = target, dict(settings)
+                if staging_dir is not None and staging_dir != task.staging_dir:
+                    task.staging_dir = staging_dir
+                    task.files, task.remote_files, task.job = None, [], None
+                    task.cleanup_unverified = False
+                    task.name, task.progress = '', 0.0
+                    task.downloaded_segments = task.total_segments = 0
                 if subtitle_mode is not None:
                     task.subtitle_mode = subtitle_mode
                     task.enable_subtitles = subtitle_mode != 'none'
@@ -456,6 +480,8 @@ class TaskManager:
                 raise ValueError('NAS 設定已變更，請恢復原任務的設定後測試')
             settings['password'] = current['password']
         with ExitStack() as storage:
+            if task and task.staging_dir:
+                probe_destination(task.staging_dir)
             if settings.get('enabled') and settings.get('mode') == 'direct':
                 nas.direct_destination(settings)
             if settings.get('enabled') and settings.get('mode') == 'smb':
@@ -498,7 +524,7 @@ class TaskManager:
                 with ExitStack() as storage:
                     if task.files and task.nas_settings.get("mode") == "smb":
                         storage.enter_context(nas.open_smb_storage(task.nas_settings, task.dest))
-                        task.files.filesystem = storage_fs(task.dest)
+                        task.files.filesystem = storage_fs(task.staging_dir or task.dest)
                     self._cleanup_cancelled(task)
             except (OSError, nas.NasError) as exc:
                 task.error = f"取消後檔案清除失敗，請恢復儲存連線後重試取消：{exc}"
@@ -513,7 +539,7 @@ class TaskManager:
             if task.remote_files:
                 nas.cleanup_upload(task.nas_settings, task.remote_files)
             if task.files:
-                task.files.filesystem = storage_fs(task.dest)
+                task.files.filesystem = storage_fs(task.staging_dir or task.dest)
                 task.files.cleanup(cancelled=True)
             task.error = None
             task.status = "cancelled"
@@ -596,8 +622,10 @@ class TaskManager:
 
             task.set_phase('測試實際下載目的地')
             probe_destination(task.dest)
+            if task.staging_dir:
+                probe_destination(task.staging_dir)
 
-            if existing_video(task.dest, task.url):
+            if not (task.files and task.files.published) and existing_video(task.dest, task.url):
                 task.error = "儲存目錄已有相同番號的影片，已略過"
                 self._finish_task(task, "skipped")
                 return
@@ -610,23 +638,24 @@ class TaskManager:
                 except Exception:
                     pass
 
-            filesystem = storage_fs(task.dest)
+            workspace = task.staging_dir or task.dest
+            filesystem = storage_fs(workspace)
             if not task.files and task.cleanup_unverified:
-                candidates = [name for name in filesystem.listdir(task.dest)
+                candidates = [name for name in filesystem.listdir(workspace)
                               if name.startswith(f'.uav-{task.task_id}-')
-                              and filesystem.isdir(os.path.join(task.dest, name))
-                              and not filesystem.islink(os.path.join(task.dest, name))]
+                              and filesystem.isdir(os.path.join(workspace, name))
+                              and not filesystem.islink(os.path.join(workspace, name))]
                 if len(candidates) > 1:
                     raise ValueError('此任務有多份暫存目錄，請先檢查下載目的地')
                 if candidates:
-                    task.files = DownloadFiles.restore(task.dest, task.task_id, {'workdir': os.path.join(task.dest, candidates[0])})
+                    task.files = DownloadFiles.restore(task.dest, task.task_id, {'workdir': os.path.join(workspace, candidates[0])}, task.staging_dir)
                     task.cleanup_unverified = False
             if task.files:
                 task.files.filesystem = filesystem
                 if filesystem.islink(task.files.workdir):
                     raise ValueError('任務暫存目錄不可使用符號連結')
             if not task.files or not task.files.filesystem.isdir(task.files.workdir):
-                task.files = DownloadFiles(task.dest, task.task_id)
+                task.files = DownloadFiles(task.dest, task.task_id, task.staging_dir)
                 task.cleanup_unverified = False
                 task.progress = 0
                 task.downloaded_segments = 0
@@ -665,7 +694,7 @@ class TaskManager:
             with self._lock:
                 task.name = job.target_name() or "video"
                 reason = self._duplicate_reason(task)
-            if reason or existing_video(task.dest, task.url, task.name):
+            if reason or (not task.files.published and existing_video(task.dest, task.url, task.name)):
                 task.error = reason or "儲存目錄已有相同番號的影片，已略過"
                 self._finish_task(task, "skipped")
                 return
@@ -679,7 +708,7 @@ class TaskManager:
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode") in ("direct", "smb"):
                 if os.path.normcase(os.path.abspath(job.dest_folder())) != os.path.normcase(task.files.workdir):
                     raise nas.NasError("下載器未使用指定的 NAS 目錄，已停止下載")
-                storage.enter_context(nas.reserve_direct_target(task.nas_settings, f"{task.name}.mp4"))
+                storage.enter_context(nas.reserve_direct_target(task.nas_settings, f"{task.name}.mp4", owned_paths=task.files.published if task.staging_dir else ()))
             with self._lock:
                 if task.paused_event.is_set() or task.cancelled_event.is_set():
                     self._finish_task(task, 'cancelled')
@@ -731,7 +760,7 @@ class TaskManager:
             video_file = os.path.join(task.files.workdir, f"{task.name}.mp4")
             if not storage_fs(video_file).isfile(video_file):
                 raise OSError("下載器未產生完成的影片，已保留暫存檔")
-            task.set_phase('發布完成檔案至下載目的地')
+            task.set_phase('移動完成檔案至存放位置' if task.staging_dir else '發布完成檔案至下載目的地')
             task.files.publish(task.cancelled_event)
             if task.cancelled_event.is_set():
                 self._finish_task(task, "cancelled")

@@ -376,3 +376,64 @@ def test_smb_sharing_violation_is_reported_as_busy(monkeypatch):
         smb_lock('private-host-path')
     assert error.value.errno == errno.EBUSY
     assert 'private-host-path' not in str(error.value)
+
+
+def test_local_staging_publishes_complete_files_to_smb_and_cleans_both_on_cancel(smb, tmp_path):
+    import threading
+    from uav_downloader.daemon.download_files import DownloadFiles
+    staging = tmp_path / 'staging'
+    files = DownloadFiles(smb.root, 'staged', str(staging))
+    source = Path(files.workdir) / 'video.mp4'
+    source.write_bytes(b'complete-video')
+    (Path(files.workdir) / 'video.zh.srt').write_bytes(b'subtitle')
+    assert not (smb.folder / 'video.mp4').exists()
+    files.publish(threading.Event())
+    assert (smb.folder / 'video.mp4').read_bytes() == b'complete-video'
+    assert (smb.folder / 'video.zh.srt').read_bytes() == b'subtitle'
+    assert source.exists(), 'Retain all sources until the entire operation succeeds'
+    restored = DownloadFiles.restore(smb.root, 'staged', files.snapshot(), str(staging))
+    restored.filesystem = storage_fs(str(staging))
+    restored.cleanup(cancelled=True)
+    assert not list(staging.iterdir()) and not list(smb.folder.iterdir())
+
+
+def test_staging_smb_copy_failure_keeps_sources_and_existing_videos(smb, tmp_path, monkeypatch):
+    import threading
+    from uav_downloader.daemon.download_files import DownloadFiles
+    files = DownloadFiles(smb.root, 'staged', str(tmp_path / 'staging'))
+    source = Path(files.workdir) / 'video.mp4'
+    source.write_bytes(b'complete-video')
+    (smb.folder / 'video.mp4').write_bytes(b'original')
+    with pytest.raises(FileExistsError):
+        files.publish(threading.Event())
+    assert source.read_bytes() == b'complete-video'
+    assert (smb.folder / 'video.mp4').read_bytes() == b'original'
+    assert not list(smb.folder.glob('*.part'))
+
+
+def test_staged_worker_downloads_locally_then_moves_to_original_nas(smb, tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from uav_downloader.daemon import task_manager as tm
+    monkeypatch.setattr(nas, 'load_settings', lambda **kw: {'enabled': False})
+    monkeypatch.setattr(nas, 'open_smb_storage', lambda *args: nullcontext())
+    history = MagicMock()
+    history.find_downloaded.return_value = None
+    monkeypatch.setattr(tm, 'get_history_manager', lambda: history)
+    staging = str(tmp_path / 'staging')
+    manager = TaskManager()
+    task = manager.add_task('https://missav.ai/mimk-290', dest=str(tmp_path / 'unused'), staging_dir=staging)
+    task.dest, task.nas_settings = smb.root, dict(smb.settings)
+    def create(url, savepath, **kwargs):
+        assert Path(savepath).parent == Path(staging)
+        def download():
+            assert not (smb.folder / 'MIMK-290.mp4').exists()
+            (Path(savepath) / 'MIMK-290.mp4').write_bytes(b'complete')
+            return True
+        return SimpleNamespace(is_url_vaildate=lambda: True, target_name=lambda: 'MIMK-290',
+                               dest_folder=lambda: savepath, start_download=download, _cancel_job=False)
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', create)
+    manager._run_task(task)
+    assert task.status == 'completed', task.error
+    assert task.dest == smb.root
+    assert (smb.folder / 'MIMK-290.mp4').read_bytes() == b'complete'
+    assert not list(Path(staging).iterdir())

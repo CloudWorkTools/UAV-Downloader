@@ -20,6 +20,7 @@ pub struct PingResponse {
 pub struct StartDownloadRequest {
     pub url: String,
     pub dest: Option<String>,
+    pub staging_dir: Option<String>,
     pub resolution: Option<String>,
     pub max_workers: Option<u32>,
     pub enable_subtitles: Option<bool>,

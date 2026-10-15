@@ -29,6 +29,7 @@ from uav_downloader.subtitles import asr
 from uav_downloader.daemon.browse_service import BrowseService
 from uav_downloader.daemon.category_catalog import category_groups
 from uav_downloader.daemon.task_manager import TaskManager
+from uav_downloader.core.storage import probe_destination
 from uav_downloader.metadata import APP_DISPLAY_NAMES, VERSION
 
 
@@ -165,6 +166,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     "nas": nas.load_settings(),
                     "firecrawl": firecrawl.settings(),
                     "download_dir": prefs.get("download_dir") or os.environ.get("DOWNLOAD_DIR") or os.path.abspath("download"),
+                    "staging_dir": prefs.get("staging_dir", ''),
                     "resolution": config.get_resolution_pref(),
                     "subtitle_pref": config.get_subtitle_pref(),
                     "download_cover": config.get_download_cover(),
@@ -261,6 +263,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     enable_subtitles=enable_subtitles,
                     subtitle_mode=subtitle_mode,
                     download_cover=body.get("download_cover"),
+                    staging_dir=body.get("staging_dir"),
                 )
                 return self._send_json({
                     "success": True,
@@ -272,7 +275,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 if action == 'update_settings':
                     result = self.task_manager.update_tasks(body.get('task_ids'), storage=body.get('storage'),
                                                             dest=body.get('dest'), subtitle_mode=body.get('subtitle_mode'),
-                                                            nas_settings=body.get('nas'))
+                                                            nas_settings=body.get('nas'), staging_dir=body.get('staging_dir'))
                     return self._send_json({'success': True, **result})
                 if action == 'nas_space':
                     return self._send_json({'success': True, **nas.storage_space()})
@@ -322,6 +325,13 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 })
 
             elif path == "/api/settings":
+                if 'staging_dir' in body:
+                    staging = self.task_manager._staging_directory(body['staging_dir'])
+                    if staging:
+                        probe_destination(staging)
+                    prefs = config._load_prefs()
+                    prefs['staging_dir'] = staging
+                    config._save_prefs(prefs)
                 if "translation_quality" in body:
                     config.set_translation_quality(body["translation_quality"])
                 if "asr" in body:

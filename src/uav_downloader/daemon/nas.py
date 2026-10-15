@@ -381,7 +381,7 @@ def open_smb_storage(settings, destination):
 
 
 @contextmanager
-def reserve_direct_target(settings, filename):
+def reserve_direct_target(settings, filename, *, owned_paths=()):
     folder = (settings['_smb_path'] if settings.get('mode') == 'smb'
               else direct_destination(settings))
     target = os.path.join(folder, filename)
@@ -394,7 +394,7 @@ def reserve_direct_target(settings, filename):
             raise NasError('此 NAS 檔案已有下載任務使用中，請等待該任務結束後再試') from None
         raise NasError('NAS 無法取得下載鎖，請確認連線及讀寫、刪除權限') from None
     try:
-        if filesystem.exists(target) or filesystem.islink(target):
+        if filesystem.islink(target) or (filesystem.exists(target) and target not in owned_paths):
             raise NasError('NAS 已存在同名影片，已停止下載以避免覆寫')
         yield
     finally:
