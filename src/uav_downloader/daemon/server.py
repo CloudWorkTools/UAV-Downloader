@@ -211,7 +211,10 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 if not query:
                     return self._send_error("請提供搜尋關鍵字", 400)
 
-                result = BrowseService.search_videos(site, query, page)
+                try:
+                    result = BrowseService.search_videos(site, query, page)
+                except ValueError as exc:
+                    return self._send_error(str(exc), 400)
                 return self._send_json(result)
 
             elif path == "/api/download/start":

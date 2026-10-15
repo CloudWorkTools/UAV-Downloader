@@ -111,12 +111,14 @@
           <select id="category-select" aria-label="影片分類" onchange="onCategoryChange()" class="h-10 shrink-0 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500 max-w-[180px]">
             <option value="">載入分類中...</option>
           </select>
-          <input type="text" id="search-input" aria-label="搜尋番號或演員" placeholder="搜尋番號或演員..." onkeydown="if(event.key==='Enter') executeSearch()" class="h-10 min-w-[12rem] flex-1 w-44 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500">
+          <input type="text" id="search-input" aria-label="搜尋番號或演員" aria-describedby="search-hint" placeholder="關鍵字1 關鍵字2 ..." onkeydown="if(event.key==='Enter') executeSearch()" class="h-10 min-w-[12rem] flex-1 w-44 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500">
           <button onclick="executeSearch()" class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium">搜尋</button>
           <button id="select-page-button" onclick="selection.togglePage()" disabled class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-[#282832] border border-[#3e3e4e] hover:bg-[#3e3e4e] text-white text-sm rounded-lg transition font-medium disabled:opacity-50">全選</button>
           <button id="download-selected-button" onclick="selection.download()" disabled class="h-10 w-28 shrink-0 whitespace-nowrap px-3 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-lg transition font-medium disabled:opacity-50">下載已選 (0)</button>
         </div>
       </div>
+
+      <p id="search-hint" class="text-xs text-gray-400 mb-3">多個關鍵字以空格分隔，只顯示所有關鍵字的共同結果；完整詞組請加雙引號，例如：演員 "中文 字幕"。最多 8 個關鍵字，每個比對原站前 20 頁。</p>
 
       <div class="browse-layout">
         <aside class="category-sidebar" aria-label="分類側欄">
@@ -126,6 +128,7 @@
           </details>
         </aside>
         <div class="browse-content space-y-4">
+      <p id="search-warning" role="status" class="text-sm text-amber-400 mb-3"></p>
       <!-- Video Grid -->
       <div id="video-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         <!-- Cards injected dynamically -->
@@ -526,6 +529,7 @@
       grid.innerHTML = '';
       selection.setVisible([]);
       loader.classList.remove('hidden');
+      document.getElementById('search-warning').textContent = '';
 
       try {
         const resp = await fetch(currentSearchQuery ? '/api/search' : '/api/browse', {
@@ -542,6 +546,8 @@
         if (!resp.ok || res.error || res.blocked) throw new Error(res.error || '站台防護阻擋');
         loader.classList.add('hidden');
         renderVideos(res.videos || []);
+        document.getElementById('search-warning').textContent = res.warning || '';
+        document.getElementById('btn-next-page').disabled = res.has_more === false;
         document.getElementById('page-indicator').textContent = `第 ${currentPage} 頁`;
         document.getElementById('btn-prev-page').disabled = (currentPage <= 1);
       } catch (e) {

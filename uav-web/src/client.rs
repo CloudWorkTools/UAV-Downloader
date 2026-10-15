@@ -106,6 +106,7 @@ impl DaemonClient {
         });
         let resp = self
             .apply_auth(self.client.post(&endpoint))
+            .timeout(Duration::from_secs(300))
             .json(&payload)
             .send()
             .await?;
