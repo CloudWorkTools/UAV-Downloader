@@ -618,3 +618,43 @@ def test_remove_duplicates_does_not_merge_unidentified_titles(manager):
     a.status = b.status = 'cancelled'
     manager._queue.clear()
     assert manager.remove_duplicates() == {'removed': 0, 'protected': 0}
+
+
+@pytest.mark.parametrize('source', ['history', 'removed_completed', 'removed_queue'])
+def test_remove_duplicates_removes_lone_skipped_record(manager, tmp_path, source):
+    manager._state_path = tmp_path / 'tasks.json'
+    if source == 'history':
+        tm.get_history_manager().record_download('https://missav.ai/mimk-290', title='MIMK-290')
+    else:
+        original = manager.add_task('https://missav.ai/mimk-290')
+        if source == 'removed_completed':
+            original.status = 'completed'
+    skipped = manager.add_task('https://jable.tv/videos/mimk-290/')
+    assert skipped.status == 'skipped'
+    if source != 'history':
+        manager._queue.clear()
+        if source == 'removed_completed':
+            manager.clear_completed()
+        else:
+            original.status = 'cancelled'
+            manager.remove_task(original.task_id)
+    assert list(manager._tasks) == [skipped.task_id]
+    history_before = tm.get_history_manager().history_file.read_bytes() if source == 'history' else None
+    assert manager.remove_duplicates() == {'removed': 1, 'protected': 0}
+    assert not manager._tasks
+    if history_before is not None:
+        assert tm.get_history_manager().history_file.read_bytes() == history_before
+    assert not tm.TaskManager(state_path=manager._state_path)._tasks
+
+
+def test_remove_duplicates_clears_all_skips_but_waits_for_live_worker(manager):
+    tm.get_history_manager().record_download('https://missav.ai/mimk-290', title='MIMK-290')
+    first = manager.add_task('https://missav.ai/mimk-290')
+    second = manager.add_task('https://jable.tv/videos/mimk-290/')
+    manager._active[first.task_id] = first
+    assert manager.remove_duplicates() == {'removed': 1, 'protected': 0}
+    assert manager.get_task(first.task_id) is first
+    assert manager.get_task(second.task_id) is None
+    manager._active.clear()
+    assert manager.remove_duplicates() == {'removed': 1, 'protected': 0}
+    assert not manager._tasks

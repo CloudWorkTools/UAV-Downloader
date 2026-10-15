@@ -348,7 +348,8 @@ class TaskManager:
                 protected = [task for task in tasks if task.task_id in self._active or task.task_id in self._queue
                              or task.status not in ('completed', 'skipped', 'cancelled', 'failed')
                              or (task.status == 'failed' and (task.files or task.cleanup_unverified or task.remote_files))]
-                keeper = protected[0] if protected else next((task for task in tasks if task.status == 'completed'), tasks[-1])
+                keeper = protected[0] if protected else next((task for task in tasks if task.status == 'completed'),
+                                                              next((task for task in reversed(tasks) if task.status != 'skipped'), None))
                 protected_ids = {task.task_id for task in protected}
                 removed.extend(task.task_id for task in tasks if task is not keeper and task.task_id not in protected_ids)
                 protected_count += max(0, len(protected) - 1)

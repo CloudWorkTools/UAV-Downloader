@@ -247,6 +247,17 @@ async function run() {
   await context.removeDuplicateTasks();
   assert.equal(element('queue-action-status').textContent, '整理失敗');
   assert.equal(element('remove-duplicate-tasks-button').disabled, false);
+  context.renderTasks([{task_id:'lone-skip',status:'skipped'}]);
+  assert.equal(element('remove-duplicate-tasks-button').disabled, false, 'A lone skipped duplicate must be removable');
+  const loneRequests = [];
+  context.fetch = async (path, options) => {
+    loneRequests.push(path);
+    return {ok:true,json:async()=>options ? {success:true,removed:1,protected:0} : {tasks:[]}};
+  };
+  await context.removeDuplicateTasks();
+  assert.deepEqual(loneRequests, ['/api/download/action','/api/download/tasks']);
+  assert.match(element('queue-action-status').textContent, /已移除 1/);
+  assert.equal(element('remove-duplicate-tasks-button').disabled, true);
   console.log('Video/task selection, batch cancellation, failure retention and NAS password UI: PASS');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });
