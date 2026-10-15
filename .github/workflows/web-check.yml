@@ -42,11 +42,12 @@ jobs:
       - name: 安裝無介面測試依賴
         run: python -m pip install -r requirements-docker.txt pytest PySocks customtkinter Pillow
       - name: 測試 NAS、設定、下載佇列與核心儲存行為
-        run: python -m pytest -q tests/test_nas.py tests/test_daemon.py tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py tests/test_compare_upstream.py
+        run: python -m pytest -q tests/test_nas.py tests/test_daemon.py tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py tests/test_compare_upstream.py tests/test_category_catalog.py
       - name: 測試清單、預覽圖、全選與批次下載
         run: |
           node tests/web_ui.cjs
           node tests/web_browse.cjs
+          node tests/category_browser.cjs
       - name: 建置並啟動 Web 容器
         run: |
           docker build -f Dockerfile.web -t uav-web-check .

@@ -77,6 +77,16 @@ class TestDaemon(unittest.TestCase):
         self.assertIn("url", categories[0])
         self.assertIn("name", categories[0])
 
+    def test_grouped_categories_api(self):
+        with patch.object(BrowseService, 'get_categories', return_value=[
+            {'name': '最近更新', 'url': 'https://jable.tv/latest-updates/'}
+        ]):
+            status, data = request_json(f"{self.base_url}/api/categories?site=JableTV")
+        self.assertEqual(status, 200)
+        self.assertTrue(data['categories'])
+        self.assertTrue(any(group['id'] == 'tags:衣著' for group in data['groups']))
+        self.assertEqual(data['groups'][0]['name'], '動態 / 榜單')
+
     def test_watcher_targets(self):
         status, data = request_json(f"{self.base_url}/api/watcher/targets")
         self.assertEqual(status, 200)

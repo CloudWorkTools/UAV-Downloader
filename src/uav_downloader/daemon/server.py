@@ -24,6 +24,7 @@ from uav_downloader.core.history import get_history_manager
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.daemon import nas
 from uav_downloader.daemon.browse_service import BrowseService
+from uav_downloader.daemon.category_catalog import category_groups
 from uav_downloader.daemon.task_manager import TaskManager
 from uav_downloader.metadata import APP_DISPLAY_NAMES, VERSION
 
@@ -116,6 +117,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json({
                     "site": site,
                     "categories": categories,
+                    "groups": category_groups(site, categories),
                 })
 
             elif path == "/api/watcher/targets":

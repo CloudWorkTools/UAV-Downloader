@@ -106,6 +106,11 @@
         </div>
       </div>
 
+      <details class="bg-[#1a1a22] rounded-xl border border-[#2e2e3a]" open>
+        <summary class="cursor-pointer px-4 py-3 text-sm font-semibold">分類與標籤 <span id="selected-category-label" class="ml-2 text-brand-500"></span></summary>
+        <div id="category-groups" class="grid grid-cols-1 md:grid-cols-2 gap-3 px-4 pb-4 items-start" aria-label="各站分類與標籤"></div>
+      </details>
+
       <!-- Video Grid -->
       <div id="video-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         <!-- Cards injected dynamically -->
@@ -336,6 +341,7 @@
 
   <script src="/nas-settings.js"></script>
   <script src="/video-selection.js"></script>
+  <script src="/category-browser.js"></script>
 
   <!-- Client-side Logic -->
   <script>
@@ -393,6 +399,18 @@
       if (tabId === 'watcher') loadWatcherTargets();
     }
 
+    const categoryBrowser = window.createCategoryBrowser?.(
+      document.getElementById('category-groups'), item => {
+        const select = document.getElementById('category-select');
+        if (![...select.options].some(option => option.value === item.url)) {
+          const option = document.createElement('option');
+          option.value = item.url;
+          option.textContent = item.name;
+          select.appendChild(option);
+        }
+        select.value = item.url;
+        onCategoryChange();
+      });
     let browseRequestId = 0;
 
     function showBrowseError(message) {
@@ -409,6 +427,8 @@
     async function selectSite(site) {
       const requestId = ++browseRequestId;
       currentCategoryUrl = '';
+      categoryBrowser?.render([], '');
+      document.getElementById('selected-category-label').textContent = '';
       currentSite = site;
       currentPage = 1;
       document.querySelectorAll('.site-btn').forEach(btn => {
@@ -435,14 +455,17 @@
         if (requestId !== browseRequestId) return false;
         if (!resp.ok || data.error) throw new Error(data.error || '分類讀取失敗');
         if (!data.categories?.length) throw new Error('站台沒有回傳可用分類');
+        const labels = new Map((data.groups || []).flatMap(group => group.items.map(item => [item.url, item.name])));
         select.innerHTML = '';
         (data.categories || []).forEach((cat, idx) => {
           const opt = document.createElement('option');
           opt.value = cat.url;
-          opt.textContent = cat.name;
+          opt.textContent = labels.get(cat.url) || cat.name;
           if (idx === 0) currentCategoryUrl = cat.url;
           select.appendChild(opt);
         });
+        categoryBrowser?.render(data.groups || [], currentCategoryUrl);
+        document.getElementById('selected-category-label').textContent = labels.get(currentCategoryUrl) || data.categories[0].name;
         return true;
       } catch (e) {
         if (requestId !== browseRequestId) return false;
@@ -454,7 +477,10 @@
     }
 
     function onCategoryChange() {
-      currentCategoryUrl = document.getElementById('category-select').value;
+      const select = document.getElementById('category-select');
+      currentCategoryUrl = select.value;
+      categoryBrowser?.select(currentCategoryUrl);
+      document.getElementById('selected-category-label').textContent = select.selectedOptions[0]?.textContent || '';
       currentPage = 1;
       fetchBrowse();
     }

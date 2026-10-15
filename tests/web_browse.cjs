@@ -5,7 +5,7 @@ const html = fs.readFileSync('uav-web/frontend/index.html', 'utf8');
 const elements = new Map();
 const cards = [];
 const element = id => {
-  if (!elements.has(id)) elements.set(id, {value: '', innerHTML: '', textContent: '', classList: {add() {}, remove() {}, toggle() {}}, appendChild(child) { if (id === 'video-grid') cards.push(child); }});
+  if (!elements.has(id)) elements.set(id, {value: '', innerHTML: '', textContent: '', options: [], get selectedOptions() {return this.options.filter(option => option.value === this.value);}, classList: {add() {}, remove() {}, toggle() {}}, appendChild(child) { if (id === 'video-grid') cards.push(child); if (id === 'category-select') this.options.push(child); }});
   return elements.get(id);
 };
 const pending = [];
@@ -16,6 +16,8 @@ const context = vm.createContext({
 });
 vm.runInContext(fs.readFileSync('uav-web/frontend/video-selection.js', 'utf8'), context);
 context.createVideoSelection = context.window.createVideoSelection;
+let chooseCategory;
+context.window.createCategoryBrowser = (container, onSelect) => {chooseCategory=onSelect;return {render() {}, select() {}};};
 vm.runInContext(html.slice(html.indexOf('    let currentSite'), html.lastIndexOf('  </script>')), context);
 const respond = (request, body, ok=true) => request.resolve({ok, json: async () => body});
 async function run() {
@@ -42,6 +44,14 @@ async function run() {
   respond(pending[5], {videos:[],blocked:true,error:'站台防護阻擋'});
   await failure;
   assert.match(cards.at(-1).textContent, /站台防護阻擋/, 'Backend failures must remain visible');
+  vm.runInContext('currentPage = 5', context);
+  chooseCategory({name:'衣著標籤',url:'https://jable.tv/tags/uniform/'});
+  const chosen = JSON.parse(pending[6].options.body);
+  assert.equal(chosen.url, 'https://jable.tv/tags/uniform/');
+  assert.equal(chosen.page, 1);
+  assert.equal(element('selected-category-label').textContent, '衣著標籤');
+  respond(pending[6], {videos:[]});
+  await new Promise(setImmediate);
   console.log('Preview referrer, site-switch race, stale lists and browse errors: PASS');
 }
 run().catch(e => {console.error(e);process.exitCode=1;});
