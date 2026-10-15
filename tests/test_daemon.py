@@ -248,6 +248,13 @@ class TestDaemon(unittest.TestCase):
             self.assertGreaterEqual(result['removed'], 1)
             self.assertIsNone(self.server.task_manager.get_task(completed.task_id))
 
+    def test_resume_unfinished_api_needs_no_task_ids(self):
+        with patch.object(self.server.task_manager, 'resume_unfinished', return_value={'resumed':2, 'errors':[]}) as operation:
+            status, body = request_json(f'{self.base_url}/api/download/action', method='POST', data={'action':'resume_unfinished'})
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {'success':True, 'resumed':2, 'errors':[]})
+        operation.assert_called_once_with()
+
     def test_progress_is_visible_while_search_response_is_pending(self):
         from uav_downloader.core import activity
         started, release = threading.Event(), threading.Event()

@@ -494,3 +494,56 @@ def test_retry_never_borrows_credentials_for_changed_nas_account(manager, monkey
     with pytest.raises(ValueError, match='NAS 設定已變更'):
         manager.restart_task(task.task_id)
     assert 'password' not in task.nas_settings
+
+
+def test_task_destination_probe_keeps_original_nas_folder_after_settings_change(manager, monkeypatch):
+    from contextlib import nullcontext
+    settings = dict(enabled=True, mode='smb', host='nas', share='share', directory='original', username='user')
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.nas_settings = settings.copy()
+    monkeypatch.setattr(tm.nas, 'load_settings', lambda **kw: dict(settings, directory='new-folder', password='saved-secret'))
+    connections = []
+    def connect(profile, destination):
+        connections.append((profile.copy(), destination))
+        return nullcontext()
+    monkeypatch.setattr(tm.nas, 'open_smb_storage', connect)
+    monkeypatch.setattr(tm, 'probe_destination', lambda destination: None)
+    assert manager.check_destination(task.task_id)['success']
+    assert connections[0][0]['directory'] == 'original'
+    assert connections[0][0]['password'] == 'saved-secret'
+    assert connections[0][1] == task.dest
+
+
+def test_resume_unfinished_requires_no_selection_and_preserves_segments(manager):
+    states = ['failed', 'paused', 'pending', 'downloading', 'completed', 'cancelled']
+    tasks = [manager.add_task(f'https://missav.ai/mimk-{600+i}') for i in range(len(states))]
+    manager._queue.clear()
+    for task, state in zip(tasks, states):
+        task.status = state
+    tasks[0].files = tm.DownloadFiles(tasks[0].dest, tasks[0].task_id)
+    fragment = Path(tasks[0].files.workdir, 'keep.ts')
+    fragment.write_bytes(b'partial video')
+    manager._queue.append(tasks[2].task_id)
+    result = manager.resume_unfinished()
+    assert result == {'resumed': 2, 'errors': []}
+    assert manager._queue == [tasks[2].task_id, tasks[0].task_id, tasks[1].task_id]
+    assert [task.status for task in tasks] == ['pending', 'pending', *states[2:]]
+    assert fragment.read_bytes() == b'partial video'
+    assert manager.resume_unfinished() == {'resumed': 0, 'errors': []}
+
+
+def test_resume_unfinished_reports_one_failure_and_continues_others(manager, monkeypatch):
+    bad = manager.add_task('https://missav.ai/mimk-600')
+    good = manager.add_task('https://missav.ai/mimk-601')
+    manager._queue.clear()
+    bad.status = good.status = 'failed'
+    restart = manager.restart_task
+    def attempt(task_id):
+        if task_id == bad.task_id:
+            raise ValueError('NAS 帳號已變更')
+        return restart(task_id)
+    monkeypatch.setattr(manager, 'restart_task', attempt)
+    result = manager.resume_unfinished()
+    assert result['resumed'] == 1
+    assert result['errors'] == [{'task_id': bad.task_id, 'error': 'NAS 帳號已變更'}]
+    assert bad.status == 'failed' and good.status == 'pending'

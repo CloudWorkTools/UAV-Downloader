@@ -301,6 +301,17 @@ class TaskManager:
         self.start_dispatcher()
         return True
 
+    def resume_unfinished(self):
+        with self._lock:
+            ids = [task.task_id for task in self._tasks.values() if task.status in ('paused', 'failed')]
+        resumed, errors = 0, []
+        for task_id in ids:
+            try:
+                resumed += bool(self.restart_task(task_id))
+            except ValueError as exc:
+                errors.append({'task_id': task_id, 'error': str(exc)})
+        return {'resumed': resumed, 'errors': errors}
+
     def remove_task(self, task_id: str) -> bool:
         with self._lock:
             task = self._tasks.get(task_id)

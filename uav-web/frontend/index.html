@@ -173,6 +173,7 @@
         </div>
         <div class="flex flex-wrap gap-2">
           <button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button>
+          <button id="resume-unfinished-button" onclick="resumeUnfinishedTasks()" disabled title="不用勾選，繼續所有已暫停或失敗的任務，保留已下載片段" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg disabled:opacity-40">續傳未完成</button>
           <button id="pause-tasks-button" onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button>
           <button id="resume-tasks-button" onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button>
           <button id="retry-tasks-button" onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重試所選</button>
@@ -185,6 +186,7 @@
         </div>
       </div>
 
+      <p id="queue-action-status" role="status" class="text-sm text-gray-300 whitespace-pre-line"></p>
       <p id="destination-test-status" role="status" class="text-sm text-gray-400"></p>
       <!-- Tasks List Table / Cards -->
       <div id="tasks-container" class="space-y-3">
@@ -448,6 +450,7 @@
     const taskSelection = createTaskSelection({cancelTask, taskAction});
     const busyTaskActions = new Set();
     let clearingCompleted = false;
+    let resumingUnfinished = false;
     let completedTaskCount = 0;
     let watcherTargetsData = {};
 
@@ -820,6 +823,7 @@
       const container = document.getElementById('tasks-container');
       latestDownloadTasks = tasks;
       renderBackendActivity();
+      document.getElementById('resume-unfinished-button').disabled = resumingUnfinished || !tasks.some(task => ['paused', 'failed'].includes(task.status));
       completedTaskCount = tasks.filter(task => task.status === 'completed').length;
       document.getElementById('clear-completed-button').disabled = clearingCompleted || !completedTaskCount;
       const priority = {downloading: 0, preparing: 1, uploading: 1, subtitles: 1, publishing: 1, pausing: 1, cancelling: 1, pending: 2, paused: 3};
@@ -905,6 +909,33 @@
         `;
       }).join('');
       taskSelection.update();
+    }
+
+    async function resumeUnfinishedTasks() {
+      if (resumingUnfinished || !latestDownloadTasks.some(task => ['paused', 'failed'].includes(task.status))) return;
+      resumingUnfinished = true;
+      const button = document.getElementById('resume-unfinished-button');
+      const status = document.getElementById('queue-action-status');
+      button.disabled = true;
+      status.textContent = '正在續傳未完成的任務…';
+      try {
+        const response = await fetch('/api/download/action', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action: 'resume_unfinished'})
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || '續傳失敗');
+        const errors = result.errors || [];
+        status.textContent = `已續傳 ${result.resumed} 筆任務` + (errors.length ? `；${errors.length} 筆無法續傳：` + [...new Set(errors.map(item => item.error))].join('；') : '。');
+        const refresh = await fetch('/api/download/tasks');
+        if (!refresh.ok) throw new Error('續傳已送出，但清單更新失敗，請稍後重新整理');
+        renderTasks((await refresh.json()).tasks || []);
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        resumingUnfinished = false;
+        button.disabled = !latestDownloadTasks.some(task => ['paused', 'failed'].includes(task.status));
+      }
     }
 
     async function clearCompletedTasks() {

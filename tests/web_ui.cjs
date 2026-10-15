@@ -185,6 +185,31 @@ async function run() {
   await context.clearCompletedTasks();
   assert.equal(element('clear-completed-button').disabled, false);
   assert.equal(alerts.at(-1), 'clear failed');
+  context.renderTasks([{task_id:'no-selection-paused',status:'paused'}, {task_id:'no-selection-failed',status:'failed'}, {task_id:'keep-cancelled',status:'cancelled'}]);
+  assert.equal(element('resume-unfinished-button').disabled, false);
+  const resumeRequests = [];
+  let finishResume;
+  context.fetch = (path, options) => {
+    resumeRequests.push(path);
+    if (options) {
+      assert.deepEqual(JSON.parse(options.body), {action:'resume_unfinished'});
+      return new Promise(resolve => {finishResume = resolve;});
+    }
+    return Promise.resolve({ok:true,json:async()=>({tasks:[{task_id:'keep-failed',status:'failed'}]})});
+  };
+  const resume = context.resumeUnfinishedTasks();
+  await context.resumeUnfinishedTasks();
+  assert.equal(element('resume-unfinished-button').disabled, true);
+  finishResume({ok:true,json:async()=>({success:true,resumed:1,errors:[{task_id:'keep-failed',error:'NAS 帳號已變更'}]})});
+  await resume;
+  assert.deepEqual(resumeRequests, ['/api/download/action','/api/download/tasks']);
+  assert.match(element('queue-action-status').textContent, /已續傳 1.*1 筆無法續傳.*NAS 帳號已變更/);
+  assert.equal(element('resume-unfinished-button').disabled, false);
+  context.fetch = async () => ({ok:false,json:async()=>({error:'服務暫時無法使用'})});
+  await context.resumeUnfinishedTasks();
+  assert.equal(element('queue-action-status').textContent, '服務暫時無法使用');
+  context.renderTasks([{task_id:'already-running',status:'downloading'}, {task_id:'cancelled',status:'cancelled'}]);
+  assert.equal(element('resume-unfinished-button').disabled, true);
   console.log('Video/task selection, batch cancellation, failure retention and NAS password UI: PASS');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });
