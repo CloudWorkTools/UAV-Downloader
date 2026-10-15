@@ -36,6 +36,7 @@ CF_OVERRIDES = {}
 VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
 VALID_SUBTITLE_PREFS = {'none', 'ja', 'en', 'zh', 'all'}
 VALID_FILENAME_MODES = {'full-title', 'code-only'}
+VALID_TRANSLATION_QUALITIES = ('fast', 'balanced', 'quality')
 VALID_RECOGNITION_QUALITIES = {'auto', 'quality', 'balanced', 'fast'}
 DEFAULT_DOWNLOAD_CONCURRENCY = 2
 MIN_DOWNLOAD_CONCURRENCY = 1
@@ -274,6 +275,22 @@ def set_recognition_quality(value):
             _save_prefs(prefs)
     except Exception:
         pass
+    return quality
+
+
+def get_translation_quality():
+    """Return the local translation decoding preference."""
+    quality = _load_prefs().get('translation_quality', 'balanced')
+    return quality if quality in VALID_TRANSLATION_QUALITIES else 'balanced'
+
+
+def set_translation_quality(quality):
+    if quality not in VALID_TRANSLATION_QUALITIES:
+        raise ValueError('不支援的翻譯品質')
+    with _prefs_lock:
+        prefs = _load_prefs()
+        prefs['translation_quality'] = quality
+        _save_prefs(prefs)
     return quality
 
 

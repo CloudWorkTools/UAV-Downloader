@@ -417,8 +417,10 @@ def test_local_model_honours_cancel_before_loading_runtime():
             cancel_check=lambda: True)
 
 
+@pytest.mark.parametrize('quality', ['fast', 'balanced', 'quality'])
 def test_local_model_isolates_each_job_in_a_fresh_worker(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, quality):
+    from uav_downloader.subtitles.settings import TranslationSettings
     model_dir = tmp_path / 'model'
     model_dir.mkdir()
     (model_dir / 'source.spm').write_bytes(b'source tokenizer')
@@ -440,17 +442,18 @@ def test_local_model_isolates_each_job_in_a_fresh_worker(
             request_path, result_path, progress_path = self.args
             payload = json.loads(
                 open(request_path, encoding='utf-8').read())
+            assert payload['quality'] == quality
             subtitles._atomic_write_text(
                 progress_path,
                 json.dumps({
-                    'schema': 1,
+                    'schema': subtitles.LOCAL_TRANSLATION_WORKER_SCHEMA,
                     'completed': len(payload['texts']),
                     'total': len(payload['texts']),
                 }))
             subtitles._atomic_write_text(
                 result_path,
                 json.dumps({
-                    'schema': 1,
+                    'schema': subtitles.LOCAL_TRANSLATION_WORKER_SCHEMA,
                     'ok': True,
                     'translations': list(payload['texts']),
                 }))
@@ -481,9 +484,10 @@ def test_local_model_isolates_each_job_in_a_fresh_worker(
         subtitles.multiprocessing, 'get_context',
         lambda method: FakeContext() if method == 'spawn' else None)
 
-    for job in range(20):
-        assert subtitles._run_local_model(
-            str(model_dir), [f'job {job}'], None, None) == [f'job {job}']
+    with subtitles._translation_profile_scope(TranslationSettings(quality=quality)):
+        for job in range(20):
+            assert subtitles._run_local_model(
+                str(model_dir), [f'job {job}'], None, None) == [f'job {job}']
 
     assert len(processes) == 20
     assert all(
@@ -494,8 +498,9 @@ def test_local_model_isolates_each_job_in_a_fresh_worker(
     )
 
 
+@pytest.mark.parametrize('quality,beam_size', [('fast', 1), ('balanced', 4), ('quality', 8)])
 def test_local_translation_worker_executes_model_and_reports_progress(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, quality, beam_size):
     model_dir = tmp_path / 'model'
     model_dir.mkdir()
     (model_dir / 'source.spm').write_bytes(b'source tokenizer')
@@ -519,7 +524,8 @@ def test_local_translation_worker_executes_model_and_reports_progress(
         def __init__(self, path, **_kwargs):
             assert path == os.path.abspath(model_dir)
 
-        def translate_batch(self, batches, **_kwargs):
+        def translate_batch(self, batches, **kwargs):
+            assert kwargs['beam_size'] == beam_size
             return [
                 SimpleNamespace(hypotheses=[list(tokens)])
                 for tokens in batches
@@ -536,6 +542,7 @@ def test_local_translation_worker_executes_model_and_reports_progress(
         'model_dir': os.path.abspath(model_dir),
         'texts': ['first', 'second'],
         'target_token': None,
+        'quality': quality,
     }), encoding='utf-8')
 
     subtitles._local_translation_worker_entry(
@@ -567,6 +574,7 @@ def test_local_translation_worker_caps_result_before_writing(
         'model_dir': os.path.abspath(model_dir),
         'texts': ['cue'],
         'target_token': None,
+        'quality': 'balanced',
     }), encoding='utf-8')
     monkeypatch.setattr(
         subtitles, 'LOCAL_TRANSLATION_WORKER_MAX_BYTES', 512)
@@ -1529,3 +1537,37 @@ def test_existing_subtitle_rejects_empty_and_malformed_sidecars(tmp_path):
 
     sidecar.write_text(_sample_srt('Valid subtitle.'), encoding='utf-8')
     assert subtitles._existing(str(sidecar))
+
+
+@pytest.mark.parametrize('quality', ['fast', 'balanced', 'quality'])
+def test_translation_quality_is_pinned_and_cache_is_isolated(monkeypatch, tmp_path, quality):
+    from uav_downloader.subtitles.settings import TranslationSettings
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(config, 'get_translation_quality', lambda: 'balanced')
+    balanced = subtitles._translation_memory_version()
+    profile = TranslationSettings(quality=quality)
+    signature = subtitles._translation_signature(profile)
+    with subtitles._translation_profile_scope(profile):
+        version = subtitles._translation_memory_version()
+        subtitles._translation_memory_store({'test': 'translated'}, 'ja', 'en')
+        monkeypatch.setattr(config, 'get_translation_quality', lambda: 'fast')
+        assert subtitles._local_translation_quality() == quality
+        assert subtitles._translation_memory_version() == version
+        assert subtitles._translation_memory_lookup(['test'], 'ja', 'en') == {'test': 'translated'}
+    assert (version == balanced) is (quality == 'balanced')
+    for other in ('fast', 'balanced', 'quality'):
+        if other != quality:
+            other_profile = TranslationSettings(quality=other)
+            assert subtitles._translation_signature(other_profile) != signature
+            with subtitles._translation_profile_scope(other_profile):
+                assert subtitles._translation_memory_lookup(['test'], 'ja', 'en') == {}
+
+
+@pytest.mark.parametrize('quality', ['unknown', None, [], True])
+def test_translation_worker_rejects_invalid_quality(tmp_path, quality):
+    with pytest.raises(subtitles.SubtitleError, match='request is invalid'):
+        subtitles._validate_translation_worker_request({
+            'schema': subtitles.LOCAL_TRANSLATION_WORKER_SCHEMA,
+            'model_dir': str(tmp_path), 'texts': ['test'],
+            'target_token': None, 'quality': quality,
+        })

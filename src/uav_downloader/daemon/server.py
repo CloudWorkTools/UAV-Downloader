@@ -169,6 +169,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     "subtitle_pref": config.get_subtitle_pref(),
                     "download_cover": config.get_download_cover(),
                     "recognition_quality": config.get_recognition_quality(),
+                    "translation_quality": config.get_translation_quality(),
                     "subtitle_runtime_supported": True,
                     "asr": asr.load_settings(),
                     "filename_mode": config.get_filename_mode(),
@@ -316,6 +317,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 })
 
             elif path == "/api/settings":
+                if "translation_quality" in body:
+                    config.set_translation_quality(body["translation_quality"])
                 if "asr" in body:
                     asr.save_settings(body["asr"])
                 if body.get("test_firecrawl"):

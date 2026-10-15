@@ -78,6 +78,7 @@ class TranslationSettings:
     model: str = ""
     api_key: str = field(default="", repr=False, compare=False)
     api_key_source: str = "none"
+    quality: str = "balanced"
 
     @property
     def uses_api(self) -> bool:
@@ -397,7 +398,9 @@ def get_translation_settings(
     else:
         api_key = _unprotect_secret(profile.get("api_key_protected"))
         source = "protected" if api_key else "none"
+    from uav_downloader.core.config import get_translation_quality
     return TranslationSettings(
+        quality=get_translation_quality(),
         provider=selected,
         base_url=base_url,
         model=model,

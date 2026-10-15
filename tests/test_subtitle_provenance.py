@@ -179,3 +179,38 @@ def test_no_speech_removes_only_an_obsolete_app_owned_sidecar(
     assert result.no_speech is True
     assert result.files == ()
     assert not japanese.exists()
+
+
+def test_quality_change_retranslates_managed_output_but_preserves_user_edits(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles.settings import TranslationSettings
+    video = tmp_path / 'movie.mp4'
+    japanese = tmp_path / 'movie.ja.srt'
+    english = tmp_path / 'movie.en.srt'
+    video.write_bytes(b'video')
+    japanese.write_text(_srt('既存の日本語字幕'), encoding='utf-8')
+    quality = ['balanced']
+    calls = []
+    monkeypatch.setattr(subtitles, '_selected_translation_profile',
+                        lambda: TranslationSettings(quality=quality[0]))
+    monkeypatch.setattr(subtitles, '_extract_audio',
+                        lambda *_args: (_ for _ in ()).throw(AssertionError('ASR must be reused')))
+
+    def translate(source, destination, *_args):
+        current = subtitles._local_translation_quality()
+        calls.append(current)
+        subtitles._atomic_write_text(destination, _srt(current))
+
+    monkeypatch.setattr(subtitles, 'translate_srt', translate)
+    assert subtitles.generate_subtitles(str(video), 'en').generated == (str(english),)
+    assert subtitles.generate_subtitles(str(video), 'en').generated == ()
+    quality[0] = 'quality'
+    assert subtitles.generate_subtitles(str(video), 'en').generated == (str(english),)
+    assert calls == ['balanced', 'quality']
+    assert english.read_text(encoding='utf-8') == _srt('quality')
+    english.write_text(_srt('User correction'), encoding='utf-8')
+    quality[0] = 'fast'
+    assert subtitles.generate_subtitles(str(video), 'en').generated == ()
+    assert english.read_text(encoding='utf-8') == _srt('User correction')
+    assert japanese.read_text(encoding='utf-8') == _srt('既存の日本語字幕')
+    assert video.read_bytes() == b'video'

@@ -308,7 +308,7 @@ AUDIO_EXTRACTION_TIMEOUT_SECONDS = 30 * 60
 VAD_MIN_TIMEOUT_SECONDS = 5 * 60
 WHISPER_MIN_TIMEOUT_SECONDS = 15 * 60
 WHISPER_STALL_TIMEOUT_SECONDS = 15 * 60
-LOCAL_TRANSLATION_WORKER_SCHEMA = 1
+LOCAL_TRANSLATION_WORKER_SCHEMA = 2
 LOCAL_TRANSLATION_WORKER_MAX_BYTES = 64 * 1024 * 1024
 LOCAL_TRANSLATION_WORKER_TIMEOUT_SECONDS = 2 * 60 * 60
 LOCAL_TRANSLATION_WORKER_STALL_TIMEOUT_SECONDS = 15 * 60
@@ -3278,11 +3278,23 @@ def _translation_memory_path() -> str:
         _cache_root(), 'translation', 'translation-memory.sqlite3')
 
 
-def _translation_memory_version() -> str:
+def _local_translation_quality(profile=None) -> str:
+    if profile is None:
+        profile = getattr(_translation_provider_state, 'profile', None)
+    if profile is None:
+        return config.get_translation_quality()
+    quality = getattr(profile, 'quality', 'balanced')
+    return quality if quality in config.VALID_TRANSLATION_QUALITIES else 'balanced'
+
+
+def _translation_memory_version(quality=None) -> str:
     from uav_downloader.subtitles.domain import DOMAIN_VERSION
+    quality = quality or _local_translation_quality()
+    # Preserve the existing beam-4 cache and provenance for balanced jobs.
+    suffix = '' if quality == 'balanced' else f'+quality:{quality}'
     return (
         f'{TRANSLATION_ENGINE_VERSION}+{DOMAIN_VERSION}'
-        f'+manifest:{TRANSLATION_MANIFEST_SHA256}')
+        f'+manifest:{TRANSLATION_MANIFEST_SHA256}{suffix}')
 
 
 def _translation_api_endpoint(profile) -> str:
@@ -3467,9 +3479,9 @@ def _load_translation_worker_json(path: str, limit: int) -> object:
 
 
 def _validate_translation_worker_request(
-        payload: object) -> tuple[str, list[str], Optional[str]]:
+        payload: object) -> tuple[str, list[str], Optional[str], str]:
     if not isinstance(payload, dict) or set(payload) != {
-            'schema', 'model_dir', 'texts', 'target_token'}:
+            'schema', 'model_dir', 'texts', 'target_token', 'quality'}:
         raise SubtitleError('Local translation worker request is invalid')
     if (
             type(payload.get('schema')) is not int
@@ -3491,7 +3503,10 @@ def _validate_translation_worker_request(
         raise SubtitleError('Local translation worker request is invalid')
     if target_token not in (None, '>>cmn_Hant<<'):
         raise SubtitleError('Local translation worker request is invalid')
-    return os.path.abspath(model_dir), list(texts), target_token
+    quality = payload.get('quality')
+    if quality not in config.VALID_TRANSLATION_QUALITIES:
+        raise SubtitleError('Local translation worker request is invalid')
+    return os.path.abspath(model_dir), list(texts), target_token, quality
 
 
 def _run_local_model_in_process(
@@ -3499,6 +3514,7 @@ def _run_local_model_in_process(
         target_token: Optional[str],
         cancel_check: Optional[CancelCheck],
         progress_callback: Optional[TranslationProgressCallback] = None,
+        quality: str = 'balanced',
 ) -> list[str]:
     """Run CTranslate2 inside the disposable translation worker process."""
     _check_cancel(cancel_check)
@@ -3559,7 +3575,9 @@ def _run_local_model_in_process(
                 tokens.append('</s>')
                 source_tokens.append(tokens)
             results = translator.translate_batch(
-                source_tokens, beam_size=4, max_batch_size=batch_size,
+                source_tokens,
+                beam_size={'fast': 1, 'balanced': 4, 'quality': 8}[quality],
+                max_batch_size=batch_size,
                 batch_type='examples', max_decoding_length=160)
             _check_cancel(cancel_check)
             if len(results) != len(batch):
@@ -3589,7 +3607,7 @@ def _local_translation_worker_entry(
     try:
         payload = _load_translation_worker_json(
             request_path, LOCAL_TRANSLATION_WORKER_MAX_BYTES)
-        model_dir, texts, target_token = (
+        model_dir, texts, target_token, quality = (
             _validate_translation_worker_request(payload))
 
         def report_progress(completed: int, total: int) -> None:
@@ -3608,7 +3626,8 @@ def _local_translation_worker_entry(
             )
 
         translations = _run_local_model_in_process(
-            model_dir, texts, target_token, None, report_progress)
+            model_dir, texts, target_token, None, report_progress,
+            quality=quality)
         result = {
             'schema': LOCAL_TRANSLATION_WORKER_SCHEMA,
             'ok': True,
@@ -3782,6 +3801,7 @@ def _run_local_model(
             'model_dir': model_dir,
             'texts': texts,
             'target_token': target_token,
+            'quality': _local_translation_quality(),
         }
         encoded = json.dumps(
             request,
@@ -4871,7 +4891,8 @@ def _translation_signature(profile) -> str:
     else:
         identity = {
             'pipeline': 'local-subtitle-v1',
-            'memory_version': _translation_memory_version(),
+            'memory_version': _translation_memory_version(
+                _local_translation_quality(profile)),
         }
     return _stable_signature(identity)
 

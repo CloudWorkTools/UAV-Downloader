@@ -373,6 +373,14 @@
                   <option value="all">日文／英文／繁中三語</option>
                 </select>
               </label>
+              <label>本機翻譯品質
+                <select id="setting-translation-quality" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
+                  <option value="fast">快速（較省運算）</option>
+                  <option value="balanced" selected>平衡（預設）</option>
+                  <option value="quality">精細（較慢）</option>
+                </select>
+              </label>
+              <p class="text-xs text-gray-400 sm:col-span-2">三檔使用相同翻譯模型；精細模式搜尋更多候選，較耗 CPU 與記憶體，不保證每句都更準。僅影響英文／繁中翻譯，不影響日文辨識；新開始的字幕工作使用儲存後的設定。</p>
               <label class="sm:col-span-2">語音辨識 API 網址
                 <input id="setting-asr-url" type="url" placeholder="http://uav-speaches:8000/v1" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
               </label>
@@ -903,7 +911,7 @@
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
                 ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
-                ${t.status === 'completed' && t.error?.startsWith('影片已完成，但字幕生成失敗') ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">重試字幕</button>` : ''}
+                ${t.status === 'completed' && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-10 px-3.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
                 ${taskSelection.canCancel(t) ?
                   `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-10 px-3.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
               </div>
@@ -1182,6 +1190,7 @@
         document.getElementById('setting-subtitles').checked = !!data.subtitle_pref && data.subtitle_pref !== 'none';
         document.getElementById('setting-subtitle-mode').value = data.subtitle_pref && data.subtitle_pref !== 'none' ? data.subtitle_pref : 'zh';
         document.getElementById('setting-download-cover').checked = data.download_cover !== false;
+        document.getElementById('setting-translation-quality').value = data.translation_quality || 'balanced';
         document.getElementById('setting-proxy-mode').value = data.proxy_mode || 'direct';
         document.getElementById('setting-asr-url').value = data.asr?.base_url || 'http://uav-speaches:8000/v1';
         document.getElementById('setting-asr-model').value = data.asr?.model || 'Systran/faster-whisper-small';
@@ -1194,6 +1203,7 @@
 
     async function saveSettings() {
       const payload = {
+        translation_quality: document.getElementById('setting-translation-quality').value,
         asr: {
           base_url: document.getElementById('setting-asr-url').value,
           model: document.getElementById('setting-asr-model').value,

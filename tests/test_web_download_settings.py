@@ -79,7 +79,9 @@ def test_explicit_task_options_override_defaults_and_null_uses_defaults(web_sett
 
 
 @pytest.mark.parametrize('payload', [{'download_cover': 'false'}, {'subtitle_pref': 'invalid'},
-                                     {'recognition_quality': 'invalid'}])
+                                     {'recognition_quality': 'invalid'},
+                                     {'translation_quality': 'invalid'},
+                                     {'translation_quality': []}])
 def test_invalid_settings_are_rejected(web_settings, payload):
     request, _, _ = web_settings
     assert request('/api/settings', payload)[0] == 400
@@ -192,3 +194,15 @@ def test_interrupted_subtitle_retry_can_cancel_after_restart_without_deleting_mp
     assert restored.cancel_task(task.task_id)
     assert restored.get_task(task.task_id).status=='cancelled'
     assert video.read_bytes()==b'completed video'
+
+
+@pytest.mark.parametrize('quality', ['fast', 'balanced', 'quality'])
+def test_translation_quality_persists_and_reaches_job_profile(web_settings, quality):
+    from uav_downloader.subtitles.settings import get_translation_settings
+    request, _, root = web_settings
+    assert request('/api/settings')[1]['translation_quality'] == 'balanced'
+    assert request('/api/settings', {'translation_quality': quality})[0] == 200
+    assert request('/api/settings')[1]['translation_quality'] == quality
+    saved = json.loads((root / 'config' / 'ui_prefs.json').read_text())
+    assert saved['translation_quality'] == quality
+    assert get_translation_settings().quality == quality

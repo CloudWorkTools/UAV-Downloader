@@ -116,6 +116,11 @@ async function run() {
   context.renderTasks([{task_id:'subtitle-error', status:'completed', error:'影片已完成，但字幕生成失敗: 時間戳'}]);
   assert.match(element('tasks-container').innerHTML, /retry_subtitles/);
   assert.match(element('tasks-container').innerHTML, /重試字幕/);
+  context.renderTasks([{task_id:'subtitle-done', status:'completed', subtitle_mode:'zh'}]);
+  assert.match(element('tasks-container').innerHTML, /retry_subtitles/);
+  assert.match(element('tasks-container').innerHTML, /重新產生字幕/);
+  context.renderTasks([{task_id:'no-subtitle', status:'completed', subtitle_mode:'none'}]);
+  assert.doesNotMatch(element('tasks-container').innerHTML, /retry_subtitles/);
   context.renderTasks([{task_id:'e', status:'cancelled'}]);
   assert.match(element('tasks-container').innerHTML, /已取消/);
   context.renderTasks([]);
@@ -267,7 +272,7 @@ async function run() {
     assert.equal(path, '/api/settings');
     if (options) settingsPayloads.push(JSON.parse(options.body));
     return {ok:true, json:async()=>options ? {success:true} : {
-      asr:{base_url:'https://asr.example/v1', model:'custom-whisper', api_key_saved:true}, subtitle_pref:'zh'
+      asr:{base_url:'https://asr.example/v1', model:'custom-whisper', api_key_saved:true}, subtitle_pref:'zh', translation_quality:'quality'
     }};
   };
   await context.loadSettings();
@@ -275,8 +280,11 @@ async function run() {
   assert.equal(element('setting-asr-model').value, 'custom-whisper');
   assert.equal(element('setting-asr-key').value, '');
   assert.match(element('setting-asr-key-status').textContent, /已設定金鑰/);
+  assert.equal(element('setting-translation-quality').value, 'quality');
+  element('setting-translation-quality').value = 'fast';
   element('setting-asr-key').value = 'new-key';
   await context.saveSettings();
+  assert.equal(settingsPayloads[0].translation_quality, 'fast');
   assert.deepEqual(settingsPayloads[0].asr, {
     base_url:'https://asr.example/v1', model:'custom-whisper', api_key:'new-key', clear_api_key:false
   });
