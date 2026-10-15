@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+from pathlib import Path
 import threading
 import time
 import uuid
@@ -82,14 +85,49 @@ class DownloadTask:
 class TaskManager:
     """Manages queue, concurrency, and execution of video downloads."""
 
-    def __init__(self, max_concurrent: int = 2):
-        self._lock = threading.Lock()
+    def __init__(self, max_concurrent: int = 2, state_path=None):
+        self._lock = threading.RLock()
+        self._state_path = Path(state_path) if state_path is not None else None
+        self._last_snapshot = None
+        self._persistence_stopped = False
         self.max_concurrent = max_concurrent
         self._tasks: Dict[str, DownloadTask] = {}
         self._queue: List[str] = []  # task_ids waiting
         self._active: Dict[str, DownloadTask] = {}  # task_id -> task
         self._worker_thread: Optional[threading.Thread] = None
         self._running = True
+        if self._state_path is not None and self._state_path.exists():
+            with self._state_path.open(encoding="utf-8") as source:
+                records = json.load(source)
+            for record in records:
+                task = DownloadTask(**record)
+                if task.status not in ("completed", "skipped", "cancelled", "failed"):
+                    task.status = "failed"
+                    task.error = "服務重啟中斷，未完成；請重新下載"
+                    task.updated_at = datetime.now(timezone.utc).isoformat()
+                task.speed_bps = 0
+                self._tasks[task.task_id] = task
+
+    def _save_tasks(self):
+        if self._state_path is None:
+            return
+        with self._lock:
+            if self._persistence_stopped:
+                return
+            # Persist public task fields only; NAS credentials and runtime objects stay in memory.
+            records = [{key: value for key, value in task.to_dict().items()
+                        if key != "speed_formatted"} for task in self._tasks.values()]
+            snapshot = json.dumps(records, ensure_ascii=False)
+            if snapshot == self._last_snapshot:
+                return
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._state_path.with_suffix(".tmp")
+            with temporary.open("w", encoding="utf-8") as target:
+                target.write(snapshot)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, self._state_path)
+            self._last_snapshot = snapshot
 
     def start_dispatcher(self) -> None:
         """Start the background dispatcher thread."""
@@ -103,7 +141,10 @@ class TaskManager:
 
     def stop_dispatcher(self) -> None:
         """Stop dispatcher and cancel all tasks."""
-        self._running = False
+        with self._lock:
+            self._running = False
+            self._save_tasks()
+            self._persistence_stopped = True
         self.cancel_all()
 
     def add_task(
@@ -154,6 +195,7 @@ class TaskManager:
             else:
                 self._queue.append(task_id)
 
+        self._save_tasks()
         self.start_dispatcher()
         return task
 
@@ -202,6 +244,7 @@ class TaskManager:
             except (OSError, nas.NasError) as exc:
                 task.error = f"取消後檔案清除失敗，請恢復儲存連線後重試取消：{exc}"
                 task.status = "failed"
+        self._save_tasks()
         return True
 
     def _cleanup_cancelled(self, task):
@@ -225,6 +268,10 @@ class TaskManager:
 
     def _dispatch_loop(self) -> None:
         while self._running:
+            try:
+                self._save_tasks()
+            except OSError:
+                logging.exception("無法儲存下載工作紀錄")
             task_to_run = None
             with self._lock:
                 while self._queue and len(self._active) < self.max_concurrent:
@@ -431,6 +478,7 @@ class TaskManager:
                 task.error = f"{task.error}；{warning}" if task.error else warning
             with self._lock:
                 self._active.pop(task.task_id, None)
+            self._save_tasks()
 
     def _run_subtitles(self, task: DownloadTask, job: Any) -> None:
         try:
@@ -450,3 +498,4 @@ class TaskManager:
         with self._lock:
             task.status = "cancelling" if task.cancelled_event.is_set() else status
             task.updated_at = datetime.now(timezone.utc).isoformat()
+        self._save_tasks()

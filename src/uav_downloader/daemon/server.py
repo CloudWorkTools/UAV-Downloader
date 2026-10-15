@@ -313,7 +313,10 @@ class DaemonServer:
         self.thread: Optional[threading.Thread] = None
 
         # Bind shared TaskManager
-        self.task_manager = TaskManager(max_concurrent=max_concurrent)
+        self.task_manager = TaskManager(
+            max_concurrent=max_concurrent,
+            state_path=nas._directory() / "web_download_tasks.json",
+        )
         DaemonRequestHandler.task_manager = self.task_manager
         DaemonRequestHandler.auth_token = self.auth_token
 

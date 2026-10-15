@@ -155,3 +155,69 @@ def test_pending_cancel_never_starts_download(manager):
     assert task.status == 'cancelled'
     assert task.task_id not in manager._queue
     assert not Path(task.dest).exists()
+
+
+@pytest.mark.parametrize('status', ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'cancelling'])
+def test_restart_keeps_unfinished_tasks(manager, tmp_path, status):
+    path = tmp_path / 'tasks.json'
+    manager._state_path = path
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.status = status
+    task.name = 'MIMK-290'
+    task.progress = 42
+    task.downloaded_segments = 21
+    task.total_segments = 50
+    task.nas_settings = {'password': 'must-not-persist'}
+    manager._save_tasks()
+    restored = tm.TaskManager(state_path=path)
+    record = restored.list_tasks()[0]
+    assert record['task_id'] == task.task_id
+    assert record['status'] == 'failed'
+    assert '服務重啟中斷' in record['error']
+    assert record['progress'] == 42
+    assert record['downloaded_segments'] == 21
+    assert record['name'] == 'MIMK-290'
+    assert record['url'] == task.url
+    assert not restored._queue
+    assert 'must-not-persist' not in path.read_text()
+
+
+def test_shutdown_preserves_unfinished_snapshot(manager, tmp_path):
+    path = tmp_path / 'tasks.json'
+    manager._state_path = path
+    task = manager.add_task('https://missav.ai/mimk-290')
+    manager.stop_dispatcher()
+    manager._save_tasks()
+    restored = tm.TaskManager(state_path=path)
+    assert restored.get_task(task.task_id).status == 'failed'
+    assert '服務重啟中斷' in restored.get_task(task.task_id).error
+
+
+@pytest.mark.parametrize('status', ['completed', 'skipped', 'cancelled', 'failed'])
+def test_restart_preserves_terminal_status(manager, tmp_path, status):
+    path = tmp_path / 'tasks.json'
+    manager._state_path = path
+    task = manager.add_task('https://missav.ai/mimk-290')
+    manager._finish_task(task, status)
+    assert tm.TaskManager(state_path=path).get_task(task.task_id).status == status
+
+
+def test_corrupt_task_file_is_not_silently_overwritten(tmp_path):
+    path = tmp_path / 'tasks.json'
+    path.write_text('broken')
+    with pytest.raises(ValueError):
+        tm.TaskManager(state_path=path)
+    assert path.read_text() == 'broken'
+
+
+def test_daemon_uses_persistent_config_directory(manager, monkeypatch, tmp_path):
+    from uav_downloader.daemon.server import DaemonServer
+
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path / 'config'))
+    first = DaemonServer()
+    task = first.task_manager.add_task('https://missav.ai/mimk-290')
+    first.stop()
+    second = DaemonServer()
+    assert second.task_manager.list_tasks()[0]['task_id'] == task.task_id
+    assert second.task_manager.get_task(task.task_id).status == 'failed'
+    second.stop()
