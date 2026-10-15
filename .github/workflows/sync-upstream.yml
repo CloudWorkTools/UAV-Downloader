@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       actions: write
     steps:
@@ -40,10 +40,7 @@ jobs:
             echo '上游版本已包含在目前分支。' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          branch="sync/upstream-${upstream_sha:0:12}"
-          gh auth setup-git
-          git push origin "$upstream_sha:refs/heads/$branch"
-          pr_url=$(gh pr list --head "$branch" --base "$BASE_BRANCH" --state open --json url --jq '.[0].url // empty')
+          pr_url=$(gh pr list --base "$BASE_BRANCH" --state open --json url,headRefName,headRepositoryOwner --jq '[.[] | select(.headRefName == "master" and .headRepositoryOwner.login == "Alos21750")][0].url // empty')
           if [ -z "$pr_url" ]; then
             {
               echo '## 上游更新評估'
@@ -58,7 +55,7 @@ jobs:
               echo '提交：'
               git log -15 --format='%h %s' "HEAD..$upstream_sha"
             } > "$RUNNER_TEMP/upstream-pr.md"
-            pr_url=$(gh pr create --base "$BASE_BRANCH" --head "$branch" --title 'chore: 評估上游更新' --body-file "$RUNNER_TEMP/upstream-pr.md")
+            pr_url=$(gh pr create --base "$BASE_BRANCH" --head Alos21750:master --title 'chore: 評估上游更新' --body-file "$RUNNER_TEMP/upstream-pr.md")
           fi
           gh workflow run web-check.yml --ref "$BASE_BRANCH" -f candidate_sha="$upstream_sha"
           echo "同步 PR：$pr_url；已啟動相容性檢查，等待維護者判斷。" >> "$GITHUB_STEP_SUMMARY"
