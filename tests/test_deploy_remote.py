@@ -96,3 +96,123 @@ def test_deployment_bundles_private_firecrawl_by_default(monkeypatch, tmp_path, 
     assert deploy.SPEACHES_IMAGE in (deploy.ROOT / 'docker-compose.yml').read_text()
     remote = calls[-1][-1]
     assert remote.endswith('1' if expected else '0')
+
+
+def test_container_storage_probe_uses_effective_settings_and_cleans_files(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    staging, destination = tmp_path / 'staging', tmp_path / 'videos'
+    staging.mkdir()
+    destination.mkdir()
+    video = destination / 'existing.mp4'
+    video.write_bytes(b'keep')
+    (tmp_path / 'ui_prefs.json').write_text(json.dumps({'staging_dir': str(staging), 'download_dir': str(destination)}))
+    exec(deploy.STORAGE_PROBE, {})
+    assert 'Staging write/cleanup: OK' in capsys.readouterr().out
+    assert list(staging.iterdir()) == []
+    assert list(destination.iterdir()) == [video]
+    assert video.read_bytes() == b'keep'
+
+
+@pytest.mark.parametrize('failure,reason', [(30, 'read-only filesystem'), (13, 'permission denied')])
+def test_storage_probe_reports_write_failure_without_sensitive_details(monkeypatch, tmp_path, capsys, failure, reason):
+    import os
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    (tmp_path / 'ui_prefs.json').write_text(json.dumps({'staging_dir': str(tmp_path)}))
+    mkdir = os.mkdir
+
+    def fail_probe(path, *args, **kwargs):
+        if '.uav-write-test-' in str(path):
+            raise OSError(failure, 'private-password')
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'mkdir', fail_probe)
+    with pytest.raises(SystemExit) as failed:
+        exec(deploy.STORAGE_PROBE, {})
+    assert failed.value.code == 1
+    output = capsys.readouterr().out
+    assert f'Staging write/cleanup: FAILED ({reason})' in output
+    assert 'private-password' not in output
+
+
+def test_storage_probe_reports_cleanup_failure(monkeypatch, tmp_path, capsys):
+    import shutil
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('DOWNLOAD_DIR', str(tmp_path))
+
+    def fail_cleanup(*args, **kwargs):
+        raise PermissionError(13, 'private-password')
+
+    monkeypatch.setattr(shutil, 'rmtree', fail_cleanup)
+    with pytest.raises(SystemExit):
+        exec(deploy.STORAGE_PROBE, {})
+    output = capsys.readouterr().out
+    assert 'Staging: SKIPPED (disabled)' in output
+    assert 'Destination write/cleanup: FAILED (permission denied)' in output
+    assert 'private-password' not in output
+
+
+@pytest.mark.parametrize('failure_stage', ['connection', 'write'])
+def test_storage_probe_distinguishes_nas_connection_from_write_failure(monkeypatch, tmp_path, capsys, failure_stage):
+    import os
+    import stat
+    import smbclient
+    from uav_downloader.daemon import nas
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    nas.save_settings(dict(enabled=True, mode='smb', host='nas.example', share='videos',
+                           directory='', username='operator', password='private-password'))
+    before = (tmp_path / 'nas.json').read_bytes()
+
+    def fail(*args, **kwargs):
+        raise PermissionError(13, 'private-password')
+
+    monkeypatch.setattr(smbclient, 'register_session', fail if failure_stage == 'connection' else lambda *a, **kw: None)
+    monkeypatch.setattr(smbclient, 'reset_connection_cache', lambda **kw: None)
+    monkeypatch.setattr(smbclient, 'stat', lambda *a, **kw: os.stat_result((stat.S_IFDIR | 0o700, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
+    monkeypatch.setattr(smbclient, 'mkdir', fail)
+    with pytest.raises(SystemExit):
+        exec(deploy.STORAGE_PROBE, {})
+    output = capsys.readouterr().out
+    expected = 'NAS connection: FAILED' if failure_stage == 'connection' else 'NAS destination write/cleanup: FAILED'
+    assert expected in output
+    assert ('NAS connection: OK' in output) is (failure_stage == 'write')
+    assert 'private-password' not in output
+    assert (tmp_path / 'nas.json').read_bytes() == before
+
+
+def test_failed_container_storage_check_rolls_back_healthy_service(monkeypatch, tmp_path, capsys):
+    import io
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    import urllib.request
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[:2] == ['docker', 'exec']:
+            assert args[2:5] == ['uav-downloader', 'sh', '-c']
+            assert 'gosu "$PUID:$PGID"' in args[5]
+            assert '"$PUID" -ne 0' in args[5]
+            assert args[-1] == deploy.STORAGE_PROBE
+            raise subprocess.CalledProcessError(1, args)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(deploy.subprocess, 'run', run)
+    monkeypatch.setattr(deploy.subprocess, 'check_output', lambda *a, **kw: 'uav-downloader\n')
+    monkeypatch.setattr(urllib.request, 'build_opener', lambda *a: SimpleNamespace(
+        open=lambda *a, **kw: io.BytesIO(b'{"status":"ok"}')))
+    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), 'app:test', '192.0.2.10', '8080', ''])
+    with pytest.raises(subprocess.CalledProcessError):
+        exec(deploy.REMOTE_INSTALL, {})
+    assert calls[-3:] == [['docker', 'rm', '-f', 'uav-downloader'],
+                          ['docker', 'rename', 'uav-downloader-previous', 'uav-downloader'],
+                          ['docker', 'start', 'uav-downloader']]
+    assert 'Service startup: OK' in capsys.readouterr().out
+
+
+def test_disabled_nas_does_not_require_saved_credentials(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('DOWNLOAD_DIR', str(tmp_path))
+    (tmp_path / 'nas.json').write_text(json.dumps({'enabled': False, 'password_encrypted': 'invalid'}))
+    exec(deploy.STORAGE_PROBE, {})
+    assert 'NAS: SKIPPED (disabled)' in capsys.readouterr().out
