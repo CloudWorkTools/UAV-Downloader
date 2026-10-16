@@ -173,15 +173,20 @@
         </div>
         <div class="flex flex-wrap gap-2">
           <button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button>
-          <button id="edit-tasks-button" onclick="taskSelection.edit()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">修改所選設定</button>
+          <button id="edit-tasks-button" hidden onclick="taskSelection.edit()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">修改所選設定</button>
           <button id="resume-unfinished-button" onclick="resumeUnfinishedTasks()" disabled title="不用勾選，繼續等待中、已暫停或失敗的任務；執行中的任務不會重複啟動" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg disabled:opacity-40">續傳未完成</button>
-          <button id="pause-tasks-button" onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button>
-          <button id="resume-tasks-button" onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button>
-          <button id="retry-tasks-button" onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重試所選</button>
+          <button id="pause-tasks-button" hidden onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button>
+          <button id="resume-tasks-button" hidden onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button>
+          <button id="retry-tasks-button" hidden onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重新開始所選</button>
+          <details class="relative">
+            <summary class="h-10 px-3.5 flex items-center cursor-pointer bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg">更多操作</summary>
+            <div class="absolute right-0 top-full mt-2 z-30 w-48 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
           <button id="remove-duplicate-tasks-button" onclick="removeDuplicateTasks()" disabled title="移除已略過及同番號的多餘清單紀錄，保留檔案、歷史及可續傳任務" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">移除重複番號</button>
           <button id="clear-completed-button" onclick="clearCompletedTasks()" disabled title="只從下載清單移除已完成紀錄，保留影片及下載歷史" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">清除已完成項目</button>
           <button onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
-          <button id="cancel-tasks-button" onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消所選 (0)</button>
+            </div>
+          </details>
+          <button id="cancel-tasks-button" hidden onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消所選 (0)</button>
           <button onclick="openQuickDownloadModal()" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
             ➕ 新增網址
           </button>
@@ -893,6 +898,7 @@
       document.getElementById('remove-duplicate-tasks-button').disabled = removingDuplicates || (tasks.length < 2 && !tasks.some(task => task.status === 'skipped'));
       renderBackendActivity();
       document.getElementById('resume-unfinished-button').disabled = resumingUnfinished || !tasks.some(task => ['pending', 'paused', 'failed'].includes(task.status));
+      document.getElementById('resume-unfinished-button').hidden = !tasks.some(task => ['pending', 'paused', 'failed'].includes(task.status));
       completedTaskCount = tasks.filter(task => task.status === 'completed').length;
       document.getElementById('clear-completed-button').disabled = clearingCompleted || !completedTaskCount;
       const priority = {downloading: 0, preparing: 1, uploading: 1, subtitles: 1, publishing: 1, pausing: 1, cancelling: 1, pending: 2, paused: 3};
@@ -958,11 +964,16 @@
               </div>
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
+                <details class="relative">
+                  <summary class="cursor-pointer px-2 py-1 text-xs text-gray-300 rounded border border-[#3e3e4e]">操作</summary>
+                  <div class="absolute right-0 top-full mt-1 z-20 w-40 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
                 ${taskSelection.canAction(t, 'edit') ? `<button onclick="taskSelection.edit('${t.task_id}')" class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded">設定</button>` : ''}
                 ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
                 ${t.status === 'completed' && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
                 ${taskSelection.canCancel(t) ?
                   `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-8 px-2.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
+                  </div>
+                </details>
               </div>
             </div>
             ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 truncate">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 truncate">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}

@@ -16,11 +16,17 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     toggle.textContent = all ? '取消全選' : '全選';
     const cancel = document.getElementById('cancel-tasks-button');
     const cancellable = [...selected].filter(id => canCancel(tasksById.get(id))).length;
+    cancel.hidden = !cancellable;
     cancel.disabled = busy || !cancellable;
     cancel.textContent = busy ? '處理中…' : `取消所選 (${cancellable})`;
     for (const action of ['pause', 'resume', 'retry', 'edit']) {
       const button = document.getElementById(`${action}-tasks-button`);
-      if (button) button.disabled = busy || ![...selected].some(id => canAction(tasksById.get(id), action));
+      if (button) {
+        const count = [...selected].filter(id => canAction(tasksById.get(id), action)).length;
+        button.hidden = !count;
+        button.disabled = busy || !count;
+        if (action === 'retry') button.textContent = `重新開始所選 (${count})`;
+      }
     }
     document.querySelectorAll('#tasks-container input[type="checkbox"]').forEach(box => {
       box.checked = selected.has(box.dataset.taskId);
