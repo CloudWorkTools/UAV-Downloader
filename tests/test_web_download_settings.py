@@ -217,7 +217,8 @@ def test_batch_task_settings_only_change_selected_idle_tasks_and_persist(web_set
     old.mkdir()
     partial = old / 'partial.ts'
     partial.write_bytes(b'keep')
-    for tid, status in [('pending', 'pending'), ('paused', 'paused'), ('active', 'downloading'), ('other', 'pending'), ('done', 'completed')]:
+    for tid, status in [('pending', 'pending'), ('paused', 'paused'), ('failed', 'failed'), ('cancelled', 'cancelled'),
+                        ('active', 'downloading'), ('other', 'pending'), ('done', 'completed')]:
         manager._tasks[tid] = DownloadTask(tid, 'https://missav.ai/' + tid, str(old), status=status,
                                            enable_subtitles=True, subtitle_mode='zh')
     manager._active['active'] = manager._tasks['active']
@@ -226,10 +227,10 @@ def test_batch_task_settings_only_change_selected_idle_tasks_and_persist(web_set
     workdir = manager._tasks['paused'].files.workdir
     target = str(root / 'new')
     code, result = request('/api/download/action', {'action': 'update_settings',
-        'task_ids': ['pending', 'paused', 'active', 'done', 'missing', 'paused'],
+        'task_ids': ['pending', 'paused', 'failed', 'cancelled', 'active', 'done', 'missing', 'paused'],
         'storage': 'local', 'dest': target, 'subtitle_mode': 'none'})
     assert code == 200
-    assert result['updated'] == ['pending', 'paused']
+    assert result['updated'] == ['pending', 'paused', 'failed', 'cancelled']
     assert result['skipped'] == ['active', 'done', 'missing']
     assert partial.read_bytes() == b'keep'
     assert Path(workdir).is_dir()
@@ -240,7 +241,49 @@ def test_batch_task_settings_only_change_selected_idle_tasks_and_persist(web_set
     for tid in result['updated']:
         task = restored.get_task(tid)
         assert task.dest == target and task.subtitle_mode == 'none' and not task.enable_subtitles
+        assert task.status == ('failed' if tid == 'pending' else tid)
+        assert restored.restart_task(tid)
+        assert restored.get_task(tid).status == 'pending'
     assert manager.get_task('active').dest == str(old)
+
+
+def test_single_active_task_settings_wait_for_pause_and_keep_partial_files(web_settings, monkeypatch):
+    from types import SimpleNamespace
+    from uav_downloader.daemon import task_manager as tm
+
+    request, server, root = web_settings
+    manager = server.task_manager
+    task = manager.add_task('https://missav.ai/mimk-290', subtitle_mode='zh', enable_subtitles=True)
+    old_dest = task.dest
+    payload = {'action': 'update_settings', 'task_ids': [task.task_id],
+               'storage': 'local', 'dest': str(root / 'new'), 'subtitle_mode': 'none'}
+    partials = []
+
+    def create_site(url, savepath, **kwargs):
+        def download():
+            partial = Path(savepath) / 'segment.ts'
+            partial.write_bytes(b'keep')
+            partials.append(partial)
+            assert request('/api/download/action', payload)[1]['skipped'] == [task.task_id]
+            code, result = request('/api/download/action', {'action': 'pause', 'task_id': task.task_id})
+            assert code == 200 and result['success']
+            assert manager.get_task(task.task_id).status == 'pausing'
+            assert request('/api/download/action', payload)[1]['updated'] == []
+            assert task.dest == old_dest
+            return False
+        return SimpleNamespace(is_url_vaildate=lambda: True, target_name=lambda: 'MIMK-290',
+                               dest_folder=lambda: savepath, start_download=download,
+                               cancel_download=lambda cleanup=True: None, _cancel_job=False)
+
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', create_site)
+    manager._run_task(task)
+    assert task.status == 'paused', task.error
+    code, result = request('/api/download/action', payload)
+    assert code == 200 and result['updated'] == [task.task_id] and result['skipped'] == []
+    assert partials[0].read_bytes() == b'keep'
+    restored = TaskManager(state_path=manager._state_path).get_task(task.task_id)
+    assert restored.status == 'paused' and restored.dest == str(root / 'new')
+    assert not restored.enable_subtitles and restored.subtitle_mode == 'none'
 
 
 @pytest.mark.parametrize('payload', [
