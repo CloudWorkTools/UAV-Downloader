@@ -960,7 +960,7 @@
               ${taskSelection.canCancel(t) || taskSelection.canAction(t, 'retry') ? `<input type="checkbox" data-task-id="${t.task_id}" aria-label="選取 ${safe(t.name || t.url)}" onchange="taskSelection.toggle('${t.task_id}', this.checked)" ${taskSelection.has(t.task_id) ? 'checked' : ''} class="mt-1 w-4 h-4 shrink-0 accent-brand-600">` : ''}
               <div class="flex-1 min-w-0 flex items-center gap-2">
                 <h4 title="${safe(downloadInfo)}" class="text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
-                ${/^https?:\/\//i.test(t.url || '') ? `<a href="${safe(t.url)}" target="_blank" rel="noopener noreferrer" class="shrink-0 text-xs text-brand-500 hover:text-white underline" aria-label="開啟原片：${safe(t.name || t.url)}（另開分頁）">原片連結 ↗</a>` : ''}
+                ${/^https?:\/\//i.test(t.url || '') ? `<a href="${safe(t.url)}" target="_blank" rel="noopener noreferrer" class="shrink-0 text-xs px-2 py-1 bg-[#282832] hover:bg-brand-600 hover:text-white rounded border border-[#3e3e4e] transition text-gray-200" aria-label="開啟原片：${safe(t.name || t.url)}（另開分頁）">原片連結 ↗</a>` : ''}
                 <span class="relative inline-block group shrink-0"><button type="button" aria-label="${safe(downloadInfo)}" class="text-xs text-brand-500 px-1" title="下載資訊">ⓘ</button><span role="tooltip" class="hidden group-hover:block group-focus-within:block absolute left-0 top-full mt-1 z-50 w-72 max-w-[75vw] p-3 bg-[#282832] border border-[#3e3e4e] rounded-lg shadow-xl text-xs text-gray-200 whitespace-pre-wrap break-words">${safe(downloadInfo)}</span></span>
               </div>
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
