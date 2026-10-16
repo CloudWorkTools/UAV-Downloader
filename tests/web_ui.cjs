@@ -120,6 +120,14 @@ async function run() {
   assert.match(element('tasks-container').innerHTML, /最終位置：smb:\/\/nas\/video/);
   assert.match(element('tasks-container').innerHTML, /影片：&lt;video&gt;/);
   assert.match(element('tasks-container').innerHTML, /taskSelection.edit\('info'\)/);
+  assert.match(element('tasks-container').innerHTML, /href="https:\/\/example.test\/video" target="_blank" rel="noopener noreferrer"/);
+  assert.match(element('tasks-container').innerHTML, /原片連結 ↗<\/a>/);
+  context.renderTasks([{task_id:'escaped-link', status:'completed', url:'https://example.test/?a=1&b="quoted"'}]);
+  assert.match(element('tasks-container').innerHTML, /href="https:\/\/example.test\/\?a=1&amp;b=&quot;quoted&quot;"/);
+  for (const url of [undefined, '', 'javascript:alert(1)']) {
+    context.renderTasks([{task_id:'invalid-link', status:'cancelled', url}]);
+    assert.doesNotMatch(element('tasks-container').innerHTML, /<a href=/);
+  }
   context.renderTasks(tasks);
   assert.ok(element('tasks-container').innerHTML.includes('successfully-cleaned'));
   assert.match(element('tasks-container').innerHTML, /重新開始/);
