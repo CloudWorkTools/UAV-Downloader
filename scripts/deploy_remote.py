@@ -25,6 +25,10 @@ def load_config(path=CONFIG):
         raise ValueError('Invalid remote directory')
     if type(config['port']) is not int or not 1024 <= config['port'] <= 65535:
         raise ValueError('Invalid service port')
+    if 'staging_host_dir' in config:
+        staging = config['staging_host_dir']
+        if not isinstance(staging, str) or not staging.startswith('/') or staging == '/' or '..' in PurePosixPath(staging).parts or not re.fullmatch(r'[A-Za-z0-9_./-]+', staging):
+            raise ValueError('Invalid staging host directory')
     return config
 
 
@@ -32,10 +36,16 @@ REMOTE_INSTALL = r'''
 import base64, json, pathlib, secrets, subprocess, sys, time, urllib.request
 root, image, host, port, bundle = sys.argv[1:6]
 install_firecrawl = len(sys.argv) < 7 or sys.argv[6] == '1'
+staging_dir = sys.argv[7] if len(sys.argv) > 7 else ''
 root = pathlib.Path(root)
 name = 'uav-downloader'
 def docker(*args, **kwargs):
     return subprocess.run(['docker', *args], check=True, **kwargs)
+mount_args = []
+if staging_dir:
+    if not pathlib.Path(staging_dir).is_dir():
+        raise ValueError('Staging host directory does not exist')
+    mount_args = ['--mount', f'type=bind,source={staging_dir},target={staging_dir}']
 for folder in ('config', 'downloads', 'appdata'):
     (root / folder).mkdir(parents=True, exist_ok=True, mode=0o700)
 stack = root / 'firecrawl'
@@ -72,7 +82,7 @@ try:
            '-p', f'{host}:{port}:8080', '-e', 'TZ=Asia/Taipei',
            '-e', 'APPDATA=/appdata',
            '-v', f'{root}/config:/config', '-v', f'{root}/downloads:/downloads',
-           '-v', f'{root}/appdata:/appdata', *network_args, image)
+           '-v', f'{root}/appdata:/appdata', *mount_args, *network_args, image)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     for _ in range(60):
         try:
@@ -134,6 +144,8 @@ def main():
         with archive.open('rb') as source:
             subprocess.run([*ssh, 'docker load'], stdin=source, check=True)
     args = [config['remote_dir'], image, config['host'], str(config['port']), bundle, '1' if options.with_firecrawl else '0']
+    if config.get('staging_host_dir'):
+        args.append(config['staging_host_dir'])
     subprocess.run([*ssh, 'python3 - ' + ' '.join(map(shlex.quote, args))], input=REMOTE_INSTALL, text=True, check=True)
 
 

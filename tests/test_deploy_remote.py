@@ -23,7 +23,8 @@ def test_remote_installer_compiles():
     compile(deploy.REMOTE_INSTALL, '<remote installer>', 'exec')
 
 
-def test_remote_private_stack_keeps_its_own_secrets_and_network(monkeypatch, tmp_path):
+@pytest.mark.parametrize('mount_staging', [False, True])
+def test_remote_private_stack_keeps_its_own_secrets_and_network(monkeypatch, tmp_path, mount_staging):
     import base64
     import io
     import sys
@@ -39,7 +40,12 @@ def test_remote_private_stack_keeps_its_own_secrets_and_network(monkeypatch, tmp
     monkeypatch.setattr(urllib.request, 'build_opener', lambda *a: SimpleNamespace(
         open=lambda *a, **kw: io.BytesIO(b'{"status":"ok"}')))
     bundle = base64.b64encode(json.dumps({'docker-compose.yml': 'services: {}'}).encode()).decode()
-    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), 'app:test', '192.0.2.10', '8080', bundle])
+    staging = tmp_path / 'staging'
+    staging.mkdir()
+    args = ['installer', str(tmp_path), 'app:test', '192.0.2.10', '8080', bundle]
+    if mount_staging:
+        args.extend(['1', str(staging)])
+    monkeypatch.setattr(sys, 'argv', args)
     exec(deploy.REMOTE_INSTALL, {})
     secret = tmp_path / 'firecrawl' / '.env'
     assert secret.stat().st_mode & 0o777 == 0o600
@@ -53,6 +59,18 @@ def test_remote_private_stack_keeps_its_own_secrets_and_network(monkeypatch, tmp
     run = next(args for args in calls if args[:2] == ['docker', 'run'])
     assert run[run.index('--network') + 1] == 'uav-firecrawl'
     assert 'UAV_FIRECRAWL_URL=http://uav-firecrawl-api:3002' in run
+    assert ('--mount' in run) is mount_staging
+    if mount_staging:
+        assert f'type=bind,source={staging},target={staging}' in run
+
+
+@pytest.mark.parametrize('value', ['/', '../staging', '/tmp/../etc', '/tmp/staging,readonly', 123])
+def test_invalid_staging_mount_is_rejected(tmp_path, value):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps(dict(host='192.0.2.10', user='operator', port=8080,
+                                   remote_dir='/home/operator/service', staging_host_dir=value)))
+    with pytest.raises(ValueError):
+        deploy.load_config(path)
 
 
 @pytest.mark.parametrize('arguments,expected', [([], True), (['--without-firecrawl'], False)])
