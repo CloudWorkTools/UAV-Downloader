@@ -186,7 +186,7 @@
           <button onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
             </div>
           </details>
-          <button id="cancel-tasks-button" hidden onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消所選 (0)</button>
+          <button id="cancel-tasks-button" hidden onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消下載 (0)</button>
           <button onclick="openQuickDownloadModal()" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
             ➕ 新增網址
           </button>
@@ -458,7 +458,7 @@
   <div id="selection-bar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a22] border border-[#3e3e4e] px-6 py-3 rounded-full shadow-2xl flex items-center gap-4 z-40">
     <span class="text-sm font-medium text-white">已選取 <span id="selected-count" class="text-brand-500 font-bold">0</span> 部影片</span>
     <button onclick="selection.download()" class="px-4 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-full shadow transition">加入佇列下載</button>
-    <button onclick="selection.clear()" class="text-xs text-gray-400 hover:text-white">取消全選</button>
+    <button onclick="selection.clear()" class="text-xs text-gray-400 hover:text-white">清除勾選</button>
   </div>
 
   <script src="/nas-settings.js"></script>
@@ -974,7 +974,7 @@
                 ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
                 ${t.status === 'completed' && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
                 ${taskSelection.canCancel(t) ?
-                  `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-8 px-2.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消</button>` : ''}
+                  `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-8 px-2.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消下載</button>` : ''}
                   </div>
                 </details>
               </div>

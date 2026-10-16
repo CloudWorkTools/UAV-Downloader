@@ -25,7 +25,7 @@ window.createVideoSelection = ({startDownload}) => {
       countEl.textContent = selectedUrls.size;
       const selectButton = document.getElementById('select-page-button');
       selectButton.disabled = !visibleUrls.length || submittingDownloads;
-      selectButton.textContent = visibleUrls.length && visibleUrls.every(url => selectedUrls.has(url)) ? '取消全選' : '全選';
+      selectButton.textContent = visibleUrls.length && visibleUrls.every(url => selectedUrls.has(url)) ? '清除勾選' : '全選';
       const downloadButton = document.getElementById('download-selected-button');
       downloadButton.disabled = !selectedUrls.size || submittingDownloads;
       downloadButton.textContent = submittingDownloads ? '加入中…' : `下載已選 (${selectedUrls.size})`;
