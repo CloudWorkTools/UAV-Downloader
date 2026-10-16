@@ -408,3 +408,25 @@ def test_invalid_staging_directory_is_rejected_without_changing_destination(web_
     request, _, _ = web_settings
     assert request('/api/settings', {'staging_dir': value})[0] == 400
     assert request('/api/download/action', {'action': 'update_settings', 'task_ids': ['task'], 'staging_dir': value})[0] == 400
+
+
+def test_disable_staging_for_multiple_tasks_without_accessing_failed_disk(web_settings, monkeypatch):
+    from uav_downloader.daemon.task_manager import DownloadTask
+    request, server, root = web_settings
+    tasks = [DownloadTask(tid, 'https://missav.ai/' + tid, str(root / 'final'),
+                          status='failed', staging_dir='/offline/ssd',
+                          nas_settings={'enabled': True, 'mode': 'smb', 'host': 'original.local', 'share': 'video'})
+             for tid in ('first', 'second')]
+    for task in tasks:
+        server.task_manager._tasks[task.task_id] = task
+    def inaccessible(*args, **kwargs):
+        raise OSError(30, 'Read-only file system')
+    monkeypatch.setattr('uav_downloader.daemon.task_manager.probe_destination', inaccessible)
+    code, result = request('/api/download/action', {'action': 'update_settings',
+                          'task_ids': ['first', 'second'], 'staging_dir': ''})
+    assert code == 200 and result['updated'] == ['first', 'second']
+    restored = TaskManager(state_path=server.task_manager._state_path)
+    for task in tasks:
+        saved = restored.get_task(task.task_id)
+        assert saved.staging_dir == ''
+        assert saved.dest == task.dest and saved.nas_settings == task.nas_settings

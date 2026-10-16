@@ -101,7 +101,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     document.getElementById('task-edit-count').textContent = editingIds.length;
     document.getElementById('task-edit-storage').value = '';
     document.getElementById('task-edit-dest').value = '';
-    document.getElementById('task-edit-change-staging').checked = false;
+    document.getElementById('task-edit-staging-mode').value = '';
     document.getElementById('task-edit-staging').value = '';
     document.getElementById('task-edit-staging').disabled = true;
     for (const key of ['host', 'share', 'directory', 'username', 'password', 'direct-path']) document.getElementById('task-edit-' + key).value = '';
@@ -132,10 +132,14 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     const storage = document.getElementById('task-edit-storage').value;
     const subtitles = document.getElementById('task-edit-subtitles').value;
     const status = document.getElementById('task-edit-status');
-    const changeStaging = document.getElementById('task-edit-change-staging').checked;
+    const stagingMode = document.getElementById('task-edit-staging-mode').value;
+    const changeStaging = stagingMode !== '';
     if (!storage && !subtitles && !changeStaging) { status.textContent = '請至少選擇一項修改'; return; }
     const payload = {action: 'update_settings', task_ids: editingIds};
-    if (changeStaging) payload.staging_dir = document.getElementById('task-edit-staging').value.trim();
+    if (changeStaging) {
+      payload.staging_dir = stagingMode === 'off' ? '' : document.getElementById('task-edit-staging').value.trim();
+      if (stagingMode === 'on' && !payload.staging_dir) { status.textContent = '請填寫暫存區 path'; return; }
+    }
     if (storage) payload.storage = storage;
     if (['local', 'upload'].includes(storage)) {
       payload.dest = document.getElementById('task-edit-dest').value.trim();

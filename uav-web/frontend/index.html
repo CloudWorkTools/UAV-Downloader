@@ -285,9 +285,9 @@
           <fieldset class="p-4 bg-[#23232c] border border-[#3e3e4e] rounded-lg space-y-3">
             <legend class="font-medium text-white">下載存放</legend>
             <div>
-              <label for="setting-staging-dir" class="block mb-1">1. 暫存區（選填）</label>
+              <label class="flex items-center gap-2 mb-1"><input id="setting-staging-enabled" type="checkbox" onchange="document.getElementById('setting-staging-dir').disabled = !this.checked">使用暫存區</label>
               <input id="setting-staging-dir" type="text" placeholder="例如 /downloads/.staging" class="w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 py-2 text-white">
-              <p class="text-xs text-gray-400 mt-1">分段、合成與字幕先在這裡處理，完成後才移到下方位置。成功後清除暫存，失敗則保留；留空維持原方式。</p>
+              <p class="text-xs text-gray-400 mt-1">分段、合成與字幕先在這裡處理，完成後才移到下方位置。成功後清除暫存，失敗則保留。關閉後直接在下載位置處理，不使用暫存磁碟。</p>
             </div>
             <label for="nas-storage-mode" class="block">2. 完成後存放位置</label>
             <select id="nas-storage-mode" onchange="NasSettings.updateMode()" class="h-10 w-full bg-[#282832] border border-[#3e3e4e] rounded-lg px-3 text-white">
@@ -462,9 +462,10 @@
       <h2 id="task-edit-title" class="font-bold">修改所選設定（<span id="task-edit-count">0</span> 個任務）</h2>
       <p class="text-sm text-gray-400">可修改單筆或多筆任務。下載中的任務會在套用時先暫停；設定完成後按「繼續」恢復下載。</p>
       <div class="text-sm space-y-1">
-        <label class="flex items-center gap-2"><input id="task-edit-change-staging" type="checkbox" onchange="document.getElementById('task-edit-staging').disabled = !this.checked">修改暫存區</label>
+        <label for="task-edit-staging-mode">暫存區</label>
+        <select id="task-edit-staging-mode" onchange="document.getElementById('task-edit-staging').disabled = this.value !== 'on'" class="w-full bg-[#282832] rounded p-2"><option value="">保持原設定</option><option value="off">關閉，不使用暫存區</option><option value="on">開啟，指定暫存區</option></select>
         <input id="task-edit-staging" disabled type="text" placeholder="例如 /downloads/.staging；留空停用" class="w-full bg-[#282832] rounded p-2">
-        <p class="text-xs text-gray-400">可只勾選這項，原本的存放位置與 NAS 設定保持不變。完成後才搬移；失敗保留暫存。</p>
+        <p class="text-xs text-gray-400">可全選後關閉暫存區，即使暫存磁碟故障也能修改。原本存放位置與 NAS 設定保持不變。</p>
       </div>
       <label class="block text-sm">完成後存放位置
         <select id="task-edit-storage" onchange="taskSelection.updateEditStorage()" class="block w-full mt-1 bg-[#282832] rounded p-2">
@@ -1230,6 +1231,8 @@
         }
         document.getElementById('setting-download-dir').value = data.download_dir || '';
         document.getElementById('setting-staging-dir').value = data.staging_dir || '';
+        document.getElementById('setting-staging-enabled').checked = !!data.staging_dir;
+        document.getElementById('setting-staging-dir').disabled = !data.staging_dir;
         document.getElementById('setting-resolution').value = data.resolution || 'highest';
         document.getElementById('setting-filename-mode').value = data.filename_mode || 'full-title';
         document.getElementById('setting-concurrency').value = data.download_concurrency || 2;
@@ -1250,6 +1253,11 @@
     }
 
     async function saveSettings() {
+      if (document.getElementById('setting-staging-enabled').checked && !document.getElementById('setting-staging-dir').value.trim()) {
+        alert('請填寫暫存區 path，或關閉使用暫存區');
+        document.getElementById('setting-staging-dir').focus();
+        return;
+      }
       const payload = {
         translation_quality: document.getElementById('setting-translation-quality').value,
         asr: {
@@ -1261,7 +1269,7 @@
         nas: NasSettings.payload(),
         firecrawl: {enabled: document.getElementById('firecrawl-enabled').checked},
         download_dir: document.getElementById('setting-download-dir').value,
-        staging_dir: document.getElementById('setting-staging-dir').value,
+        staging_dir: document.getElementById('setting-staging-enabled').checked ? document.getElementById('setting-staging-dir').value.trim() : '',
         resolution: document.getElementById('setting-resolution').value,
         filename_mode: document.getElementById('setting-filename-mode').value,
         download_concurrency: parseInt(document.getElementById('setting-concurrency').value),
