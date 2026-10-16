@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 
 "${PYTHON:-python3}" -m pytest -q \
   tests/test_nas.py tests/test_daemon.py tests/test_daemon_downloads.py \

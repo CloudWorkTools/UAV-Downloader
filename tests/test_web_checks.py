@@ -13,14 +13,16 @@ def test_web_check_command(tmp_path, python_status, node_status, expected):
     log = tmp_path / 'calls'
     for name, status in [('python-check', python_status), ('node', node_status)]:
         executable = tools / name
-        executable.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "$CHECK_LOG"\nexit {status}\n')
+        executable.write_text(f'#!/bin/sh\nprintf "%s" "$PYTHONPATH" > "$CHECK_IMPORTS"\nprintf "%s\\n" "$*" >> "$CHECK_LOG"\nexit {status}\n')
         executable.chmod(0o755)
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run(['bash', str(root / 'scripts/check_web.sh')], cwd=tmp_path,
                             env={**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
-                                 'PYTHON': str(tools / 'python-check'), 'CHECK_LOG': str(log)},
+                                 'PYTHON': str(tools / 'python-check'), 'CHECK_LOG': str(log),
+                                 'PYTHONPATH': '/extra/modules', 'CHECK_IMPORTS': str(tmp_path / 'imports')},
                             capture_output=True, text=True)
     assert result.returncode == expected, result.stderr
+    assert (tmp_path / 'imports').read_text().split(os.pathsep) == [str(root / 'src'), '/extra/modules']
     calls = log.read_text().splitlines()
     assert calls[0].startswith('-m pytest -q ')
     if python_status:
