@@ -16,6 +16,20 @@
 
 安裝與 Web 測試指令以[專案首頁](README.md#開發與檢查)為準。修改核心時，另執行受影響的原有測試；修改 UI 時，檢查窄畫面、按鈕高度、空資料、重複送出與失敗後重試。
 
+依修改功能選擇既有測試介面：
+
+| 功能 | 測試責任與導航 |
+| --- | --- |
+| 任務操作與服務重啟 | `tests/test_daemon_downloads.py` 驗證任務狀態、持久化與取消清理；`tests/test_web_download_settings.py` 驗證批次設定與 HTTP 行為。 |
+| 搜尋與來源擷取 | `tests/test_search_intersection.py` 驗證交集與增量分頁；`tests/test_firecrawl.py` 驗證擷取服務轉接。 |
+| 字幕 API 與重試 | `tests/test_asr_api.py` 驗證辨識回應；`tests/test_subtitle_engine.py` 與 `tests/test_subtitle_provenance.py` 驗證生成流程與已產生字幕的重用。 |
+| 背景更新與前端設定 | `tests/task_menu.cjs` 使用真實 DOM 驗證選單、焦點與表單；其他 `.cjs` 測試驗證選取與設定。 |
+| 儲存與部署 | `tests/test_nas.py`、`tests/test_smb_storage.py` 驗證隔離儲存；`tests/test_deploy_remote.py` 驗證假的 SSH／Docker 呼叫與部署失敗處理。 |
+
+新增 Web Python 回歸測試時，將模組接入 `scripts/check_web.sh` 的集中清單；新增前端 `.cjs` 測試會由入口自動納入。CI 直接使用此入口，文件只保留功能導航。
+
+共用入口的安裝與執行方式以[專案首頁](README.md#開發與檢查)為準。實際 NAS、ASR、模型品質與遠端容器掛載的驗證需要專用環境，離線回歸測試無法代替這些檢查。
+
 SMB 測試使用獨立的測試帳號與共享目錄，勿使用正式影片目錄作為測試資料。保留本機檔案、不覆寫遠端既有檔案、錯誤不包含密碼，均為 NAS 擴充的必要行為。
 
 ## 推送前的說明與截圖

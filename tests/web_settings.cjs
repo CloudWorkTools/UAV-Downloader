@@ -27,7 +27,8 @@ vm.runInContext(html.slice(html.indexOf('    let currentSite'), html.lastIndexOf
 async function run() {
   await context.loadSettings();
   assert.equal(element('setting-subtitles').checked, true);
-  assert.match(element('subtitle-runtime-warning').textContent, /Linux／Docker/);
+  assert.equal(element('setting-asr-url').value, 'http://uav-speaches:8000/v1');
+  assert.match(element('setting-asr-key-status').textContent, /Speaches/);
   assert.equal(element('setting-subtitle-mode').value, 'all');
   assert.equal(element('setting-download-cover').checked, false);
   assert.equal(element('setting-recognition-quality').value, 'quality');

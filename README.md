@@ -135,17 +135,26 @@ GitHub Actions 每天於臺灣時間 **09:17、21:17** 比較原作者 `master` 
 
 ## 開發與檢查
 
+Web 回歸測試與 CI 使用同一入口：
+
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-docker.txt pytest PySocks customtkinter Pillow
-.venv/bin/python -m pytest -q tests/test_nas.py tests/test_daemon.py tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py
-node tests/web_ui.cjs
-node tests/web_browse.cjs
-node tests/web_nas_space.cjs
+PYTHON=.venv/bin/python bash scripts/check_web.sh
+```
+
+另需 Node.js 與 Chrome／Chromium。真實 DOM 測試預設執行 `google-chrome`；其他安裝位置可用 `CHROME_BIN` 指定。缺少瀏覽器或測試失敗時，檢查會以非零狀態結束。
+
+入口集中維護離線 Python 測試清單，並自動執行 `tests/` 下所有 `.cjs` 測試。功能對應與新增測試方式見[貢獻指南](CONTRIBUTING.md#開發檢查)。這些測試使用隔離檔案與假的服務回應，不需正式 NAS、外部 ASR 或模型下載。
+
+Docker 建置與容器啟動檢查另行執行：
+
+```bash
+docker build -f Dockerfile.web -t uav-downloader:local .
 bash scripts/check_web_container.sh uav-downloader:local
 ```
 
-桌面版原有測試另有 GUI 與 AI 依賴；上方為 Web 擴充使用的檢查集合。
+容器檢查使用暫時容器，結束後清除；實際 NAS／ASR 連線與模型品質仍需專用環境驗證。原有桌面測試另有 GUI 與 AI 依賴。
 
 ## 原作者與授權
 
