@@ -895,6 +895,8 @@
     function renderTasks(tasks) {
       const container = document.getElementById('tasks-container');
       latestDownloadTasks = tasks;
+      // Keep the menu and keyboard focus intact until the user finishes interacting.
+      if (document.querySelectorAll('#tasks-container details[open]').length) return;
       document.getElementById('remove-duplicate-tasks-button').disabled = removingDuplicates || (tasks.length < 2 && !tasks.some(task => task.status === 'skipped'));
       renderBackendActivity();
       document.getElementById('resume-unfinished-button').disabled = resumingUnfinished || !tasks.some(task => ['pending', 'paused', 'failed'].includes(task.status));
@@ -965,9 +967,9 @@
               </div>
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
-                <details class="relative">
+                <details class="relative" ontoggle="if (!this.open && this.isConnected) renderTasks(latestDownloadTasks)">
                   <summary class="cursor-pointer px-2 py-1 text-xs text-gray-300 rounded border border-[#3e3e4e]">操作</summary>
-                  <div class="absolute right-0 top-full mt-1 z-20 w-40 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
+                  <div onclick="if (event.target.closest('button')) this.closest('details').open = false" class="absolute right-0 top-full mt-1 z-20 w-40 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
                 ${taskSelection.canAction(t, 'edit') ? `<button onclick="taskSelection.edit('${t.task_id}')" class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded">設定</button>` : ''}
                 ${[ ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
                 ${t.status === 'completed' && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
