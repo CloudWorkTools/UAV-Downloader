@@ -216,3 +216,52 @@ def test_disabled_nas_does_not_require_saved_credentials(monkeypatch, tmp_path, 
     (tmp_path / 'nas.json').write_text(json.dumps({'enabled': False, 'password_encrypted': 'invalid'}))
     exec(deploy.STORAGE_PROBE, {})
     assert 'NAS: SKIPPED (disabled)' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('staging_enabled', [False, True])
+def test_upload_nas_still_requires_writable_local_destination(monkeypatch, tmp_path, capsys, staging_enabled):
+    import errno
+    import ntpath
+    import os
+    import shutil
+    import smbclient
+    import smbclient.shutil
+    from uav_downloader.daemon import nas
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    local, remote, staging = [tmp_path / name for name in ('local', 'remote', 'staging')]
+    for folder in (local, remote, staging):
+        folder.mkdir()
+    (tmp_path / 'ui_prefs.json').write_text(json.dumps({
+        'download_dir': str(local), 'staging_dir': str(staging) if staging_enabled else ''}))
+    nas.save_settings(dict(enabled=True, mode='upload', host='nas.example', share='videos',
+                           directory='', username='operator', password='private-password'))
+
+    def mapped(path):
+        return remote.joinpath(*ntpath.relpath(path, r'\\nas.example\videos').split('\\'))
+
+    monkeypatch.setattr(smbclient, 'register_session', lambda *a, **kw: None)
+    monkeypatch.setattr(smbclient, 'reset_connection_cache', lambda **kw: None)
+    monkeypatch.setattr(smbclient, 'stat', lambda path, **kw: mapped(path).stat())
+    monkeypatch.setattr(smbclient, 'makedirs', lambda path, **kw: mapped(path).mkdir(exist_ok=kw['exist_ok']))
+    monkeypatch.setattr(smbclient, 'mkdir', lambda path, **kw: mapped(path).mkdir())
+    monkeypatch.setattr(smbclient, 'open_file', lambda path, **kw: mapped(path).open(kw['mode']))
+    monkeypatch.setattr(smbclient, 'rename', lambda source, target, **kw: mapped(source).rename(mapped(target)))
+    monkeypatch.setattr(smbclient, 'remove', lambda path, **kw: mapped(path).unlink())
+    monkeypatch.setattr(smbclient.shutil, 'rmtree', lambda path, **kw: shutil.rmtree(mapped(path)))
+    mkdir = os.mkdir
+
+    def deny_local_probe(path, *args, **kwargs):
+        if Path(path).parent == local and Path(path).name.startswith('.uav-write-test-'):
+            raise PermissionError(errno.EACCES, 'private-password')
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'mkdir', deny_local_probe)
+    with pytest.raises(SystemExit) as failed:
+        exec(deploy.STORAGE_PROBE, {})
+    assert failed.value.code == 1
+    output = capsys.readouterr().out
+    assert 'NAS destination write/cleanup: OK' in output
+    assert 'Destination write/cleanup: FAILED (permission denied)' in output
+    assert 'private-password' not in output
+    assert list(remote.iterdir()) == []
+    assert list(staging.iterdir()) == []

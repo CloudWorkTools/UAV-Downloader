@@ -70,6 +70,10 @@ try:
         with nas.open_smb_storage(settings, destination):
             probe_destination(destination)
     print(stage + ': OK', flush=True)
+    if settings['enabled'] and settings['mode'] == 'upload':
+        stage = 'Destination write/cleanup'
+        probe_destination(prefs.get('download_dir') or os.environ.get('DOWNLOAD_DIR') or os.path.abspath('download'))
+        print(stage + ': OK', flush=True)
 except Exception as exc:
     reason = {errno.EROFS: 'read-only filesystem', errno.EACCES: 'permission denied',
               errno.EPERM: 'operation not permitted', errno.ENOSPC: 'no space left',
