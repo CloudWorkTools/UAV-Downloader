@@ -8,6 +8,9 @@ CloudWorkTools 版本以繁體中文 Web 操作與 NAS 擴充為主：
 - [架構與模組邊界](architecture.md)
 - [四站精準搜尋與套件評估](search-optimization-research.md)
 - [貢獻指南](../CONTRIBUTING.md)
+- [代理任務追蹤](agents/issue-tracker.md)
+- [代理分流標籤](agents/triage-labels.md)
+- [領域文件讀取規則](agents/domain.md)
 
 ## 原有桌面與核心文件
 

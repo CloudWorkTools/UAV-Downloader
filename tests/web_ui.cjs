@@ -40,7 +40,7 @@ async function run() {
   boxes = [{checked: false}, {checked: false}];
   assert.equal(element('download-selected-button').disabled, true);
   selection.togglePage();
-  assert.equal(element('select-page-button').textContent, '取消全選');
+  assert.equal(element('select-page-button').textContent, '清除勾選');
   assert.equal(element('download-selected-button').textContent, '下載已選 (2)');
   assert.ok(boxes.every(b => b.checked));
   selection.togglePage();
@@ -159,7 +159,8 @@ async function run() {
   taskSelection.toggle('e', false);
   taskSelection.toggleAll();
   assert.equal(element('retry-tasks-button').textContent, '重新開始所選 (2)');
-  assert.equal(element('cancel-tasks-button').textContent, '取消所選 (3)');
+  assert.equal(element('cancel-tasks-button').textContent, '取消下載 (3)');
+  assert.equal(element('select-tasks-button').textContent, '清除勾選');
   assert.match(element('tasks-container').innerHTML, /已略過重複影片/);
   assert.ok(!element('tasks-container').innerHTML.includes('data-task-id="c"'));
   context.renderTasks(tasks);
@@ -173,7 +174,7 @@ async function run() {
   await Promise.all([taskSelection.cancel(), taskSelection.cancel()]);
   assert.deepEqual(cancellations, ['b','a','d']);
   assert.equal(taskSelection.has('d'), true, 'Keep failed cancellations selected for retry');
-  assert.equal(element('cancel-tasks-button').textContent, '取消所選 (1)');
+  assert.equal(element('cancel-tasks-button').textContent, '取消下載 (1)');
   context.renderTasks(tasks.map(t => ({...t, status:'completed'})));
   assert.equal(element('cancel-tasks-button').disabled, true);
   assert.equal(element('select-tasks-button').disabled, true);

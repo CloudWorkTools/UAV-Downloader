@@ -13,12 +13,12 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     const all = eligible.size > 0 && [...eligible].every(id => selected.has(id));
     const toggle = document.getElementById('select-tasks-button');
     toggle.disabled = busy || !eligible.size;
-    toggle.textContent = all ? '取消全選' : '全選';
+    toggle.textContent = all ? '清除勾選' : '全選';
     const cancel = document.getElementById('cancel-tasks-button');
     const cancellable = [...selected].filter(id => canCancel(tasksById.get(id))).length;
     cancel.hidden = !cancellable;
     cancel.disabled = busy || !cancellable;
-    cancel.textContent = busy ? '處理中…' : `取消所選 (${cancellable})`;
+    cancel.textContent = busy ? '處理中…' : `取消下載 (${cancellable})`;
     for (const action of ['pause', 'resume', 'retry', 'edit']) {
       const button = document.getElementById(`${action}-tasks-button`);
       if (button) {

@@ -167,7 +167,8 @@ def test_pending_cancel_never_starts_download(manager):
 def test_restart_keeps_unfinished_tasks(manager, tmp_path, status):
     path = tmp_path / 'tasks.json'
     manager._state_path = path
-    task = manager.add_task('https://missav.ai/mimk-290')
+    task = manager.add_task('https://missav.ai/mimk-290', resolution='720', max_workers=3,
+                            download_cover=False, enable_subtitles=True, subtitle_mode='zh')
     task.status = status
     task.name = 'MIMK-290'
     task.progress = 42
@@ -186,6 +187,13 @@ def test_restart_keeps_unfinished_tasks(manager, tmp_path, status):
     assert record['url'] == task.url
     assert not restored._queue
     assert 'must-not-persist' not in path.read_text()
+    resumed = restored.get_task(task.task_id)
+    assert resumed.dest == task.dest
+    assert (resumed.resolution, resumed.max_workers, resumed.download_cover) == ('720', 3, False)
+    assert resumed.enable_subtitles and resumed.subtitle_mode == 'zh'
+    assert restored.restart_task(task.task_id)
+    assert restored.list_tasks()[0]['status'] == 'pending'
+    assert restored.restart_task(task.task_id) is False
 
 
 def test_shutdown_preserves_unfinished_snapshot(manager, tmp_path):
@@ -339,6 +347,38 @@ def test_failed_retry_reuses_task_and_private_workspace(manager, monkeypatch):
     assert Path(workdir, 'segment.ts').exists()
     assert manager._queue == [task.task_id]
     assert not manager.restart_task(task.task_id)
+
+
+@pytest.mark.parametrize('status,action,accepted,expected_status', [
+    ('pending', 'pause_task', True, 'paused'),
+    ('downloading', 'pause_task', True, 'pausing'),
+    ('paused', 'pause_task', False, 'paused'),
+    ('failed', 'pause_task', False, 'failed'),
+    ('cancelled', 'pause_task', False, 'cancelled'),
+    ('completed', 'pause_task', False, 'completed'),
+    ('pending', 'restart_task', False, 'pending'),
+    ('downloading', 'restart_task', False, 'downloading'),
+    ('paused', 'restart_task', True, 'pending'),
+    ('failed', 'restart_task', True, 'pending'),
+    ('cancelled', 'restart_task', True, 'pending'),
+    ('completed', 'restart_task', False, 'completed'),
+    ('pending', 'cancel_task', True, 'cancelled'),
+    ('downloading', 'cancel_task', True, 'cancelling'),
+    ('paused', 'cancel_task', True, 'cancelled'),
+    ('failed', 'cancel_task', True, 'cancelled'),
+    ('cancelled', 'cancel_task', False, 'cancelled'),
+    ('completed', 'cancel_task', False, 'completed'),
+])
+def test_task_operation_state_matrix(manager, status, action, accepted, expected_status):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.status = status
+    if status == 'downloading':
+        manager._active[task.task_id] = task
+    assert getattr(manager, action)(task.task_id) is accepted
+    assert manager.list_tasks()[0]['status'] == expected_status
+    if action == 'restart_task' and accepted:
+        assert manager.restart_task(task.task_id) is False
+        assert manager.list_tasks()[0]['status'] == 'pending'
 
 
 def test_pending_pause_cancel_restart_and_remove(manager, tmp_path):

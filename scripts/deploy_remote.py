@@ -32,6 +32,56 @@ def load_config(path=CONFIG):
     return config
 
 
+STORAGE_PROBE = r'''
+import errno, os, sys
+from uav_downloader.core import config
+from uav_downloader.core.storage import probe_destination
+from uav_downloader.daemon import nas
+stage = 'Storage settings'
+try:
+    prefs = config._load_prefs()
+    staging = prefs.get('staging_dir', '').strip()
+    if staging:
+        stage = 'Staging write/cleanup'
+        probe_destination(staging)
+        print(stage + ': OK', flush=True)
+    else:
+        print('Staging: SKIPPED (disabled)', flush=True)
+    stage = 'NAS settings'
+    settings = nas.load_settings()
+    if not settings['enabled']:
+        print('NAS: SKIPPED (disabled)', flush=True)
+        stage = 'Destination write/cleanup'
+        probe_destination(prefs.get('download_dir') or os.environ.get('DOWNLOAD_DIR') or os.path.abspath('download'))
+    elif settings['mode'] == 'direct':
+        stage = 'NAS mount'
+        destination = nas.direct_destination(settings)
+        print(stage + ': OK', flush=True)
+        stage = 'NAS destination write/cleanup'
+        probe_destination(destination)
+    else:
+        settings = nas.load_settings(secret=True)
+        stage = 'NAS connection'
+        with nas._connection(settings, create_directory=False) as (smb, root, options):
+            smb.stat(root, **options)
+        print(stage + ': OK', flush=True)
+        stage = 'NAS destination write/cleanup'
+        destination = nas.smb_destination()
+        with nas.open_smb_storage(settings, destination):
+            probe_destination(destination)
+    print(stage + ': OK', flush=True)
+    if settings['enabled'] and settings['mode'] == 'upload':
+        stage = 'Destination write/cleanup'
+        probe_destination(prefs.get('download_dir') or os.environ.get('DOWNLOAD_DIR') or os.path.abspath('download'))
+        print(stage + ': OK', flush=True)
+except Exception as exc:
+    reason = {errno.EROFS: 'read-only filesystem', errno.EACCES: 'permission denied',
+              errno.EPERM: 'operation not permitted', errno.ENOSPC: 'no space left',
+              errno.ENOENT: 'directory missing'}.get(getattr(exc, 'errno', None), 'check configuration, connection and storage permissions')
+    print(stage + ': FAILED (' + reason + ')', flush=True)
+    sys.exit(1)
+'''
+
 REMOTE_INSTALL = r'''
 import base64, json, pathlib, secrets, subprocess, sys, time, urllib.request
 root, image, host, port, bundle = sys.argv[1:6]
@@ -94,6 +144,10 @@ try:
         time.sleep(1)
     else:
         raise RuntimeError('New deployment failed health check')
+    print('Service startup: OK', flush=True)
+    docker('exec', name, 'sh', '-c',
+           'if [ "$PUID" -ne 0 ]; then exec gosu "$PUID:$PGID" python -c "$1"; else exec python -c "$1"; fi',
+           'storage-probe', STORAGE_PROBE)
 except Exception:
     subprocess.run(['docker', 'rm', '-f', name])
     if old:
@@ -106,6 +160,7 @@ if bundle and install_firecrawl:
         "from uav_downloader.core.firecrawl import scrape; scrape('https://example.com')"])
     print('Private Firecrawl functional scrape: ' + ('OK; test each target site in settings' if smoke.returncode == 0 else 'FAILED; keep disabled and inspect the stack'))
 '''
+REMOTE_INSTALL = REMOTE_INSTALL.replace('STORAGE_PROBE)', repr(STORAGE_PROBE) + ')')
 
 
 def main():
