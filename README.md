@@ -154,7 +154,10 @@ Docker 建置與容器啟動檢查另行執行：
 ```bash
 docker build -f Dockerfile.web -t uav-downloader:local .
 bash scripts/check_web_container.sh uav-downloader:local
+bash scripts/check_smb_batch_container.sh uav-downloader:local
 ```
+
+SMB 檢查另以隔離 Samba 驗證同批多任務的並行儲存。CI 與生產環境的完成條件見[貢獻指南](CONTRIBUTING.md#ci-與生產環境驗證)。
 
 容器檢查使用暫時容器，結束後清除；實際 NAS／ASR 連線與模型品質仍需專用環境驗證。原有桌面測試另有 GUI 與 AI 依賴。
 

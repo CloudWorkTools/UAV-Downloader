@@ -51,6 +51,8 @@ jobs:
         run: |
           docker build -f Dockerfile.web -t uav-web-check .
           bash scripts/check_web_container.sh uav-web-check
+      - name: 正式映像驗證同批 SMB 任務並行寫入與清理
+        run: bash scripts/check_smb_batch_container.sh uav-web-check
       - name: 評估摘要
         if: always()
         env:

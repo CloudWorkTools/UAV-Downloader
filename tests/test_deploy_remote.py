@@ -265,3 +265,31 @@ def test_upload_nas_still_requires_writable_local_destination(monkeypatch, tmp_p
     assert 'private-password' not in output
     assert list(remote.iterdir()) == []
     assert list(staging.iterdir()) == []
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_production_smb_batch_gate_runs_after_basic_write_probe(monkeypatch, tmp_path, capsys, fails):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from uav_downloader.daemon import nas, storage_smoke
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    monkeypatch.setattr(nas, 'load_settings', lambda **kw: {'enabled': True, 'mode': 'smb'})
+    monkeypatch.setattr(nas, '_connection', lambda *a, **kw: nullcontext((SimpleNamespace(stat=lambda *a, **kw: None), 'test', {})))
+    monkeypatch.setattr(nas, 'open_smb_storage', lambda *a: nullcontext())
+    monkeypatch.setattr('uav_downloader.core.storage.probe_destination', lambda *a: None)
+    calls = []
+    def check(settings):
+        calls.append(settings['mode'])
+        if fails:
+            raise OSError('test failure')
+        return True
+    monkeypatch.setattr(storage_smoke, 'check_batch_smb', check)
+    if fails:
+        with pytest.raises(SystemExit):
+            exec(deploy.STORAGE_PROBE, {})
+    else:
+        exec(deploy.STORAGE_PROBE, {})
+    assert calls == ['smb']
+    output = capsys.readouterr().out
+    assert 'NAS destination write/cleanup: OK' in output
+    assert 'NAS concurrent batch write/read/cleanup: ' + ('FAILED' if fails else 'OK') in output
