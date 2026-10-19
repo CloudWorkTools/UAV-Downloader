@@ -18,8 +18,14 @@ permissions:
 jobs:
   compatibility:
     name: Web / UI compatibility
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on:
+      group: shared-runners
+      labels: [self-hosted, Linux, X64, shared]
     timeout-minutes: 20
+    env:
+      CI_IMAGE: uav-web-check:${{ github.run_id }}-${{ github.run_attempt }}
+      CI_TEST_IMAGE: uav-web-tests:${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -36,23 +42,27 @@ jobs:
           git config user.email 'compatibility@users.noreply.github.com'
           git fetch origin "$BASE_BRANCH"
           git merge --no-edit FETCH_HEAD
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.12'
-      - name: 安裝無介面測試依賴
-        run: python -m pip install -r requirements-docker.txt pytest PySocks customtkinter Pillow
+      - name: 檢查自架 runner 的 Docker
+        run: |
+          command -v docker
+          docker info >/dev/null
+          echo "執行 runner：$RUNNER_NAME ($RUNNER_OS / $RUNNER_ARCH)"
+      - name: 建置正式映像與隔離測試環境
+        run: |
+          docker build -f Dockerfile.web -t "$CI_IMAGE" .
+          docker build -f Dockerfile.web-tests --build-arg APP_IMAGE="$CI_IMAGE" -t "$CI_TEST_IMAGE" .
       - name: 執行共用 Web 回歸檢查
-        env:
-          CHROME_BIN: google-chrome
         run: |
-          command -v "$CHROME_BIN"
-          bash scripts/check_web.sh
-      - name: 建置並啟動 Web 容器
-        run: |
-          docker build -f Dockerfile.web -t uav-web-check .
-          bash scripts/check_web_container.sh uav-web-check
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --mount "type=bind,source=$PWD,target=/workspace,readonly" \
+            --workdir /workspace "$CI_TEST_IMAGE"
+      - name: 啟動正式 Web 容器並檢查
+        run: bash scripts/check_web_container.sh "$CI_IMAGE"
       - name: 正式映像驗證同批 SMB 任務並行寫入與清理
-        run: bash scripts/check_smb_batch_container.sh uav-web-check
+        run: bash scripts/check_smb_batch_container.sh "$CI_IMAGE"
+      - name: 清理本次測試映像
+        if: always()
+        run: docker image rm "$CI_TEST_IMAGE" "$CI_IMAGE" || true
       - name: 評估摘要
         if: always()
         env:
@@ -63,7 +73,9 @@ jobs:
   candidate-status:
     if: always() && github.event_name == 'workflow_dispatch' && inputs.candidate_sha != ''
     needs: compatibility
-    runs-on: ubuntu-latest
+    runs-on:
+      group: shared-runners
+      labels: [self-hosted, Linux, X64, shared]
     permissions:
       checks: write
     steps:
