@@ -1,8 +1,9 @@
 ARG APP_IMAGE=uav-web-check
 FROM ${APP_IMAGE}
-RUN apt-get update && apt-get install -y --no-install-recommends chromium nodejs git \
+RUN apt-get update && apt-get install -y --no-install-recommends chromium nodejs git libtk8.6 \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir pytest PySocks customtkinter Pillow
+    && python -m pip install --no-cache-dir pytest PySocks customtkinter Pillow \
+    && python -c "import tkinter"
 ENV CHROME_BIN=chromium \
     CONFIG_DIR=/tmp/uav-ci-config \
     APPDATA=/tmp/uav-ci-appdata \
