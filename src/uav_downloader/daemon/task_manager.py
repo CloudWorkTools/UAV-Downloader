@@ -56,6 +56,7 @@ class DownloadTask:
     cancelled_event: threading.Event = field(default_factory=threading.Event)
     paused_event: threading.Event = field(default_factory=threading.Event)
     staging_dir: str = ''
+    folder_policy: str = ''
 
     def set_phase(self, message, done=0, total=0):
         self.phase, self.phase_done, self.phase_total = message, done, total
@@ -70,6 +71,7 @@ class DownloadTask:
             "url": self.url,
             "dest": destination,
             "staging_dir": self.staging_dir,
+            "folder_policy": self.folder_policy,
             "final_dest": nas.public_destination(self.nas_settings) if self.nas_settings.get('enabled') and self.nas_settings.get('mode') == 'upload' else destination,
             "name": self.name,
             "status": self.status,
@@ -121,6 +123,7 @@ class TaskManager:
         if self._state_path is not None and self._state_path.exists():
             with self._state_path.open(encoding="utf-8") as source:
                 records = json.load(source)
+            smb_destinations = set()
             for record in records:
                 files = record.pop('files', None)
                 task = DownloadTask(**record)
@@ -129,6 +132,17 @@ class TaskManager:
                     if current.get('enabled') and current.get('mode') == 'smb' and nas.public_destination(current) == task.dest:
                         task.dest = nas.smb_destination()
                         task.nas_settings = dict(current, _smb_path=task.dest)
+                if (task.nas_settings.get('enabled') and task.nas_settings.get('mode') == 'smb'
+                        and task.dest.startswith(SMB_PATH_ROOT + os.sep)):
+                    if task.dest in smb_destinations:
+                        old_dest, task.dest = task.dest, nas.smb_destination()
+                        if files:
+                            def relocate(path):
+                                return task.dest + path[len(old_dest):] if path == old_dest or path.startswith(old_dest + os.sep) else path
+                            files['workdir'] = relocate(files['workdir'])
+                            files['published'] = [relocate(path) for path in files.get('published', [])]
+                        task.nas_settings['_smb_path'] = task.dest
+                    smb_destinations.add(task.dest)
                 if files:
                     task.files = DownloadFiles.restore(task.dest, task.task_id, files, task.staging_dir)
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
@@ -200,6 +214,9 @@ class TaskManager:
         subtitle_mode: Optional[str] = None,
         download_cover: Optional[bool] = None,
         staging_dir: Optional[str] = None,
+        batch_destination=None,
+        folder_policy="",
+        defer_start=False,
     ) -> DownloadTask:
         subtitle_mode = config.get_subtitle_pref() if subtitle_mode is None else subtitle_mode
         if subtitle_mode not in config.VALID_SUBTITLE_PREFS:
@@ -216,7 +233,13 @@ class TaskManager:
             target_dest = os.path.join(os.getcwd(), "download")
 
         nas_settings = nas.load_settings()
-        if nas_settings.get("enabled"):
+        if batch_destination is not None:
+            target_dest, nas_settings = batch_destination
+            nas_settings = dict(nas_settings)
+            if nas_settings.get('enabled') and nas_settings.get('mode') == 'smb':
+                target_dest = nas.smb_destination()
+                nas_settings['_smb_path'] = target_dest
+        elif nas_settings.get("enabled"):
             if nas_settings.get("mode") == "direct":
                 target_dest = nas.direct_destination(nas_settings, probe=True)
                 if dest and os.path.abspath(dest) != target_dest:
@@ -230,9 +253,13 @@ class TaskManager:
                     target_dest = nas.smb_destination()
                     nas_settings['_smb_path'] = target_dest
 
+        if folder_policy == "overwrite":
+            nas_settings["_overwrite"] = True
+
         task_id = f"task_{uuid.uuid4().hex[:10]}"
         task = DownloadTask(
             nas_settings=nas_settings,
+            folder_policy=folder_policy,
             task_id=task_id,
             url=url.strip(),
             dest=os.path.abspath(target_dest),
@@ -252,8 +279,9 @@ class TaskManager:
             else:
                 self._queue.append(task_id)
 
-        self._save_tasks()
-        self.start_dispatcher()
+        if not defer_start:
+            self._save_tasks()
+            self.start_dispatcher()
         return task
 
     def get_task(self, task_id: str) -> Optional[DownloadTask]:
@@ -329,6 +357,10 @@ class TaskManager:
                         task.name, task.progress = '', 0.0
                         task.downloaded_segments = task.total_segments = 0
                     task.dest, task.nas_settings = target, dict(settings)
+                    if settings.get('enabled') and settings.get('mode') == 'smb':
+                        task.dest = nas.smb_destination()
+                        task.nas_settings['_smb_path'] = task.dest
+                    task.folder_policy = ''
                 if staging_dir is not None and staging_dir != task.staging_dir:
                     task.staging_dir = staging_dir
                     task.files, task.remote_files, task.job = None, [], None
@@ -495,6 +527,13 @@ class TaskManager:
 
     def _duplicate_reason(self, task):
         key = video_key(task.url, task.name)
+        if task.folder_policy:
+            for other in self._tasks.values():
+                if other is task or other.status in ('completed', 'failed', 'cancelled', 'skipped'):
+                    continue
+                if video_key(other.url, other.name) == key:
+                    return '相同影片仍有未完成任務，請先完成或取消該任務'
+            return ''
         for other in self._tasks.values():
             if (other is not task and other.status not in ("failed", "cancelled", "skipped")
                     and video_key(other.url, other.name) == key):
@@ -625,7 +664,7 @@ class TaskManager:
             if task.staging_dir:
                 probe_destination(task.staging_dir)
 
-            if not (task.files and task.files.published) and existing_video(task.dest, task.url):
+            if task.folder_policy != "overwrite" and not (task.files and task.files.published) and existing_video(task.dest, task.url):
                 task.error = "儲存目錄已有相同番號的影片，已略過"
                 self._finish_task(task, "skipped")
                 return
@@ -694,21 +733,21 @@ class TaskManager:
             with self._lock:
                 task.name = job.target_name() or "video"
                 reason = self._duplicate_reason(task)
-            if reason or (not task.files.published and existing_video(task.dest, task.url, task.name)):
+            if reason or (task.folder_policy != "overwrite" and not task.files.published and existing_video(task.dest, task.url, task.name)):
                 task.error = reason or "儲存目錄已有相同番號的影片，已略過"
                 self._finish_task(task, "skipped")
                 return
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode", "upload") == "upload":
                 remote = nas.smb_destination()
                 with nas.open_smb_storage(task.nas_settings, remote):
-                    if existing_video(remote, task.url, task.name):
+                    if task.folder_policy != "overwrite" and existing_video(remote, task.url, task.name):
                         task.error = "NAS 已有相同番號的影片，已略過"
                         self._finish_task(task, "skipped")
                         return
             if task.nas_settings.get("enabled") and task.nas_settings.get("mode") in ("direct", "smb"):
                 if os.path.normcase(os.path.abspath(job.dest_folder())) != os.path.normcase(task.files.workdir):
                     raise nas.NasError("下載器未使用指定的 NAS 目錄，已停止下載")
-                storage.enter_context(nas.reserve_direct_target(task.nas_settings, f"{task.name}.mp4", owned_paths=task.files.published if task.staging_dir else ()))
+                storage.enter_context(nas.reserve_direct_target(task.nas_settings, f"{task.name}.mp4", owned_paths=task.files.published if task.staging_dir else (), overwrite=task.folder_policy == "overwrite"))
             with self._lock:
                 if task.paused_event.is_set() or task.cancelled_event.is_set():
                     self._finish_task(task, 'cancelled')
@@ -761,7 +800,7 @@ class TaskManager:
             if not storage_fs(video_file).isfile(video_file):
                 raise OSError("下載器未產生完成的影片，已保留暫存檔")
             task.set_phase('移動完成檔案至存放位置' if task.staging_dir else '發布完成檔案至下載目的地')
-            task.files.publish(task.cancelled_event)
+            task.files.publish(task.cancelled_event, overwrite=task.folder_policy == "overwrite")
             if task.cancelled_event.is_set():
                 self._finish_task(task, "cancelled")
                 return

@@ -59,7 +59,7 @@ class DownloadFiles:
         files.published = published
         return files
 
-    def publish(self, cancelled):
+    def publish(self, cancelled, *, overwrite=False):
         target_fs = storage_fs(self.destination)
         target_fs.makedirs(self.destination, exist_ok=True)
         for name in self.filesystem.listdir(self.workdir):
@@ -73,7 +73,10 @@ class DownloadFiles:
                 if not target_fs.islink(target) and target_fs.isfile(target) and target_fs.getsize(target) == self.filesystem.getsize(source):
                     continue
                 raise OSError('已發布的任務檔案遭到變更，請檢查目的地後重試')
-            if target_fs.exists(target) and os.path.splitext(name)[1].lower() not in VIDEO_EXTENSIONS:
+            replacing = target_fs.exists(target)
+            if target_fs.islink(target):
+                raise ValueError('目的地檔案不可使用符號連結')
+            if replacing and not overwrite and os.path.splitext(name)[1].lower() not in VIDEO_EXTENSIONS:
                 continue
             if self.staging_dir:
                 temporary = os.path.join(self.destination, '.uav-' + uuid.uuid4().hex + '.part')
@@ -91,13 +94,14 @@ class DownloadFiles:
                         raise OSError('完成檔案大小不符，暫存檔已保留')
                     if cancelled.is_set():
                         return
-                    target_fs.publish(temporary, target)
+                    (target_fs.replace if overwrite else target_fs.publish)(temporary, target)
                 finally:
                     if target_fs.exists(temporary):
                         target_fs.remove(temporary)
             else:
-                self.filesystem.publish(source, target)
-            self.published.append(target)
+                (target_fs.replace if overwrite else self.filesystem.publish)(source, target)
+            if not replacing:
+                self.published.append(target)
 
     def cleanup(self, *, cancelled=False):
         if cancelled:

@@ -473,3 +473,105 @@ def test_disable_staging_for_multiple_tasks_without_accessing_failed_disk(web_se
         saved = restored.get_task(task.task_id)
         assert saved.staging_dir == ''
         assert saved.dest == task.dest and saved.nas_settings == task.nas_settings
+
+
+def batch_preview(request, **options):
+    body = dict(action='preview', storage='query', name='台北空拍', policy='new', naming='date')
+    body.update(options)
+    status, result = request('/api/download/batch', body)
+    assert status == 200, result
+    return body, result
+
+
+def test_batch_preview_cancel_and_submit_are_one_destination(web_settings):
+    request, server, root = web_settings
+    body, preview = batch_preview(request)
+    folder = root / 'videos' / '台北空拍'
+    assert preview['destination'] == str(folder)
+    assert preview['base_destination'] == str(root / 'videos')
+    assert not folder.exists()
+    payload = dict(body, action='submit', expected_destination=preview['destination'], request_id='first',
+                   urls=['https://example.com/one', 'https://example.com/two'])
+    status, result = request('/api/download/batch', payload)
+    assert status == 200
+    assert folder.is_dir()
+    assert len(result['tasks']) == 2
+    assert {task['dest'] for task in result['tasks']} == {str(folder)}
+    assert request('/api/download/batch', payload)[1] == result
+    assert len(server.task_manager._tasks) == 2
+    assert config._load_prefs().get('download_dir') is None
+
+
+def test_batch_existing_folder_naming_and_race(web_settings):
+    request, server, root = web_settings
+    folder = root / 'videos' / '台北空拍'
+    folder.mkdir(parents=True)
+    body, preview = batch_preview(request)
+    assert preview['exists']
+    assert preview['name'].startswith('台北空拍_')
+    assert not Path(preview['destination']).exists()
+    Path(preview['destination']).mkdir()
+    status, result = request('/api/download/batch', dict(body, action='submit', expected_destination=preview['destination'],
+                                                       request_id='race', urls=['https://example.com/one']))
+    assert status == 400
+    assert not server.task_manager._tasks
+    body, preview = batch_preview(request, naming='number')
+    assert preview['name'] == '台北空拍_2'
+    _, custom = batch_preview(request, naming='custom')
+    assert not custom['can_submit']
+
+
+@pytest.mark.parametrize('name', ['../outside', 'a/b\\c', 'CON', '  ...  ', 'a:*?<>|'])
+def test_batch_names_stay_inside_root(web_settings, name):
+    request, server, root = web_settings
+    _, preview = batch_preview(request, name=name)
+    assert Path(preview['destination']).parent == root / 'videos'
+    assert preview['name'] not in ('.', '..', 'CON')
+    assert not Path(preview['destination']).exists()
+
+
+def test_batch_merge_busy_and_overwrite_persist(web_settings):
+    request, server, root = web_settings
+    folder = root / 'videos' / '台北空拍'
+    folder.mkdir(parents=True)
+    (folder / 'old.mp4').write_bytes(b'old')
+    body, preview = batch_preview(request, policy='overwrite')
+    assert preview['file_count'] == 1
+    status, result = request('/api/download/batch', dict(body, action='submit', expected_destination=preview['destination'],
+                                                       request_id='overwrite', urls=['https://example.com/one']))
+    assert status == 200
+    task = server.task_manager.get_task(result['tasks'][0]['task_id'])
+    assert task.folder_policy == 'overwrite'
+    _, busy = batch_preview(request, policy='merge')
+    assert busy['busy'] and not busy['can_submit']
+    restarted = TaskManager(state_path=server.task_manager._state_path)
+    assert restarted.get_task(task.task_id).folder_policy == 'overwrite'
+    assert (folder / 'old.mp4').read_bytes() == b'old'
+
+
+def test_batch_rejects_symlink_and_invalid_urls(web_settings):
+    request, server, root = web_settings
+    (root / 'videos').mkdir()
+    (root / 'videos' / 'link').symlink_to(root, target_is_directory=True)
+    assert request('/api/download/batch', dict(action='preview', name='link'))[0] == 400
+    assert request('/api/download/batch', dict(action='submit', urls=['file:///etc/passwd']))[0] == 400
+
+
+@pytest.mark.parametrize('staging', [False, True])
+def test_explicit_overwrite_is_atomic_and_cancel_preserves_replacements(tmp_path, staging):
+    import threading
+    from uav_downloader.daemon.download_files import DownloadFiles
+    folder = tmp_path / 'target'
+    folder.mkdir()
+    (folder / 'old.mp4').write_bytes(b'original')
+    (folder / 'unrelated.mp4').write_bytes(b'untouched')
+    stage = tmp_path / 'stage'
+    stage.mkdir()
+    files = DownloadFiles(str(folder), 'test', str(stage) if staging else '')
+    Path(files.workdir, 'old.mp4').write_bytes(b'replacement')
+    Path(files.workdir, 'new.mp4').write_bytes(b'new')
+    files.publish(threading.Event(), overwrite=True)
+    files.cleanup(cancelled=True)
+    assert (folder / 'old.mp4').read_bytes() == b'replacement'
+    assert (folder / 'unrelated.mp4').read_bytes() == b'untouched'
+    assert not (folder / 'new.mp4').exists()

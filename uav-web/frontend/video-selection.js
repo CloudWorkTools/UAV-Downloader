@@ -1,4 +1,4 @@
-window.createVideoSelection = ({startDownload}) => {
+window.createVideoSelection = ({startDownload, startBatch}) => {
     const selectedUrls = new Set();
     let visibleUrls = [];
     let submittingDownloads = false;
@@ -44,12 +44,19 @@ window.createVideoSelection = ({startDownload}) => {
       submittingDownloads = true;
       update();
       const urls = Array.from(selectedUrls);
-      for (const url of urls) {
-        if (await startDownload(url)) selectedUrls.delete(url);
+      try {
+        if (startBatch) {
+          if (await startBatch(urls)) urls.forEach(url => selectedUrls.delete(url));
+        } else {
+          for (const url of urls) {
+            if (await startDownload(url)) selectedUrls.delete(url);
+          }
+        }
+      } finally {
+        submittingDownloads = false;
+        document.querySelectorAll('#video-grid input[type="checkbox"]').forEach((c, i) => c.checked = selectedUrls.has(visibleUrls[i]));
+        update();
       }
-      submittingDownloads = false;
-      document.querySelectorAll('#video-grid input[type="checkbox"]').forEach((c, i) => c.checked = selectedUrls.has(visibleUrls[i]));
-      update();
     }
 
     return {setVisible, has: url => selectedUrls.has(url), togglePage, toggle, clear, download};

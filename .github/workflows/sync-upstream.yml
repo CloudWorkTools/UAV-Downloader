@@ -14,7 +14,9 @@ concurrency:
 jobs:
   compare:
     if: github.repository == 'CloudWorkTools/UAV-Downloader'
-    runs-on: ubuntu-latest
+    runs-on:
+      group: shared-runners
+      labels: [self-hosted, Linux, X64, shared]
     timeout-minutes: 10
     permissions:
       contents: read

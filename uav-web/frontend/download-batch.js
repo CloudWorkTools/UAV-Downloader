@@ -1,0 +1,116 @@
+window.createDownloadBatch = ({getQuery, onTasks}) => {
+  const dialog = document.getElementById('download-batch-dialog');
+  const form = document.getElementById('download-batch-form');
+  const field = id => document.getElementById('batch-' + id);
+  const preferenceKey = 'uav-download-storage';
+  let preferredStorage = 'query';
+  try {
+    const saved = localStorage.getItem(preferenceKey);
+    if (saved === 'settings' || saved === 'query') preferredStorage = saved;
+  } catch {}
+  let urls = [], resolve, preview, revision = 0, submitting = false, requestId, pendingRequest;
+  const settle = success => { ++revision; const done = resolve; resolve = null; if (done) done(success); };
+  const storage = () => form.querySelector('input[name="batch-storage"]:checked').value;
+  const values = () => ({storage: storage(), name: field('name').value,
+    policy: field('policy').value, naming: field('naming').value});
+  async function request(body) {
+    const response = await fetch('/api/download/batch', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      const error = Error(data.error || '資料夾操作失敗');
+      error.serverRejected = true;
+      throw error;
+    }
+    return data;
+  }
+  async function refresh() {
+    const version = ++revision;
+    preview = null;
+    field('submit').disabled = true;
+    field('status').textContent = '正在檢查儲存位置…';
+    if (storage() === 'settings' && field('policy').value === 'new') field('policy').value = 'merge';
+    field('policy').querySelector('option[value="new"]').disabled = storage() === 'settings';
+    const options = values();
+    field('name').disabled = options.storage === 'settings';
+    try {
+      const data = await request({action:'preview', ...options});
+      if (version !== revision || !dialog.open) return;
+      preview = data;
+      field('base-destination').textContent = data.base_destination;
+      field('destination').textContent = data.destination;
+      field('conflict').hidden = !data.exists;
+      field('naming-row').hidden = options.policy !== 'new' || options.storage === 'settings';
+      field('status').textContent = data.busy ? '此資料夾有未完成任務，請使用新的名稱。' : !data.can_submit ? '此名稱已存在，請修改名稱。' :
+        options.policy === 'overwrite' ? `資料夾目前有 ${data.file_count} 個檔案。只覆寫本次產生的同名檔案，其餘保留；實際同名檔案於解析影片後確認，已覆寫的檔案不會因取消而還原。` :
+        data.exists ? '已找到同名資料夾，請確認處理方式與儲存位置。' : '確認後才會建立資料夾。';
+      field('submit').textContent = options.policy === 'overwrite' ? '覆寫並下載' : '開始下載';
+      field('submit').disabled = !data.can_submit;
+    } catch (error) {
+      if (version === revision) field('status').textContent = error.message;
+    }
+  }
+  form.addEventListener('input', event => {
+    if (submitting) return;
+    if (event.target.name === 'batch-storage') {
+      preferredStorage = storage();
+      try { localStorage.setItem(preferenceKey, preferredStorage); } catch {}
+      field('policy').value = preferredStorage === 'settings' ? 'merge' : 'new';
+    }
+    refresh();
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (submitting || !preview || field('submit').disabled) return;
+    submitting = true;
+    field('submit').disabled = true;
+    field('cancel').disabled = true;
+    for (const control of form.querySelectorAll('input, select')) control.disabled = true;
+    try {
+      pendingRequest ||= {action:'submit', ...values(), expected_destination:preview.destination, urls, request_id:requestId};
+      const data = await request(pendingRequest);
+      pendingRequest = null;
+      onTasks(data.tasks);
+      dialog.close('submitted');
+      settle(true);
+    } catch (error) {
+      if (error.serverRejected) {
+        pendingRequest = null;
+        await refresh();
+        field('status').textContent = error.message + '；請重新確認後再試。';
+      } else {
+        field('status').textContent = '未收到加入結果，請重試確認同一批任務，避免重複加入。';
+        field('submit').disabled = false;
+      }
+    } finally {
+      submitting = false;
+      field('cancel').disabled = false;
+      for (const control of form.querySelectorAll('input, select')) control.disabled = !!pendingRequest;
+      field('name').disabled = !!pendingRequest || storage() === 'settings';
+    }
+  });
+  field('cancel').addEventListener('click', () => {dialog.close(); settle(false);});
+  dialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    if (!submitting) {dialog.close(); settle(false);}
+  });
+  dialog.addEventListener('close', () => { if (!dialog.open) settle(dialog.returnValue === 'submitted'); });
+  return {open(selected) {
+    if (dialog.open || !selected.length) return Promise.resolve(false);
+    urls = [...selected];
+    pendingRequest = null;
+    for (const control of form.querySelectorAll('input, select')) control.disabled = false;
+    requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+    form.reset();
+    field('storage-' + preferredStorage).checked = true;
+    field('base-destination').textContent = '讀取設定中…';
+    field('destination').textContent = '';
+    field('count').textContent = urls.length;
+    const now = new Date();
+    const date = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+    field('name').value = getQuery() || `下載_${date}`;
+    dialog.returnValue = '';
+    dialog.showModal();
+    refresh();
+    return new Promise(done => { resolve = done; });
+  }};
+};

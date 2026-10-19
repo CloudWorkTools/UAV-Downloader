@@ -1,0 +1,115 @@
+// Exercise the actual dialog in Chrome, including cancellation and stale responses.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {spawnSync} = require('node:child_process');
+const html = fs.readFileSync('uav-web/frontend/index.html', 'utf8');
+const dialog = html.slice(html.indexOf('  <dialog id="download-batch-dialog"'), html.indexOf('  <script src="/download-batch.js"'));
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'uav-batch-'));
+try {
+  const page = path.join(temporary, 'test.html');
+  fs.writeFileSync(page, '<body>' + dialog + '<script>' + fs.readFileSync('uav-web/frontend/download-batch.js', 'utf8') + `
+    const check = (condition, message) => {if (!condition) throw Error(message);};
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+    const field = id => document.getElementById('batch-' + id);
+    const dialog = document.getElementById('download-batch-dialog');
+    const requests = [];
+    let fail = false, lost = false, slow, query = '台北空拍', received;
+    window.fetch = async (url, options) => {
+      check(url === '/api/download/batch', 'Wrong endpoint');
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      if (body.name === 'slow') await new Promise(resolve => {slow = resolve;});
+      if (lost && body.action === 'submit') {lost=false; throw Error('connection lost');}
+      if (fail && body.action === 'submit') return {ok:false, json:async()=>({error:'磁碟離線'})};
+      return {ok:true,json:async()=>({success:true, name:body.name, base_destination:'/downloads', destination:body.storage === 'settings' ? '/downloads' : '/downloads/' + body.name,
+        exists:body.name === '台北空拍', file_count:2, can_submit:true, busy:false,
+        tasks:[{task_id:'test',dest:'/downloads/' + body.name}]})};
+    };
+    const batch = createDownloadBatch({getQuery:()=>query,onTasks:tasks=>{received=tasks;}});
+    (async () => {
+      let result = batch.open(['https://example.com/a','https://example.com/b']);
+      await tick();
+      check(field('name').value === '台北空拍', 'Query was not prefilled');
+      check(field('base-destination').textContent === '/downloads', 'Configured path is not visible beside the choice');
+      check(field('storage-settings').isConnected && field('storage-query').checked, 'Storage choices are not visible together');
+      query = 'edited draft';
+      check(field('name').value === '台北空拍', 'Open batch query changed');
+      check(!field('conflict').hidden, 'Existing folder choices missing');
+      field('cancel').click();
+      check(await result === false, 'Cancel submitted a batch');
+      check(requests.every(body=>body.action==='preview'), 'Cancel mutated queue');
+      result = batch.open(['https://example.com/a']);
+      field('name').value = 'slow'; field('name').dispatchEvent(new Event('input',{bubbles:true}));
+      field('name').value = 'latest'; field('name').dispatchEvent(new Event('input',{bubbles:true}));
+      await tick(); slow(); await tick();
+      check(field('destination').textContent === '/downloads/latest', 'Stale preview replaced latest destination');
+      field('policy').value = 'overwrite'; field('policy').dispatchEvent(new Event('input',{bubbles:true}));
+      await tick();
+      check(field('submit').textContent === '覆寫並下載', 'Overwrite lacks explicit button');
+      fail = true;
+      field('submit').click(); await tick(); await tick();
+      check(dialog.open && field('name').value === 'latest', 'Failed submission lost edit');
+      check(field('status').textContent.includes('磁碟離線'), 'Submission error missing');
+      fail = false;
+      field('submit').click(); field('submit').click();
+      check(field('cancel').disabled, 'Cancel enabled during submission');
+      await tick(); await tick();
+      check(await result === true, 'Submission did not resolve');
+      check(received[0].dest === '/downloads/latest', 'Returned tasks not rendered');
+      const submits = requests.filter(body=>body.action==='submit');
+      check(submits.length === 2, 'Double click submitted more than once');
+      check(submits[0].request_id === submits[1].request_id, 'Retry lost batch identity');
+      result = batch.open(['https://example.com/lost']); await tick();
+      lost = true;
+      field('submit').click(); await tick(); await tick();
+      check(dialog.open && field('name').disabled, 'Unknown submission result allowed destination changes');
+      check(field('status').textContent.includes('同一批任務'), 'Lost response recovery missing');
+      const uncertain = requests.at(-1);
+      field('submit').click(); await tick(); await tick();
+      check(await result === true, 'Lost-response retry did not complete');
+      check(JSON.stringify(requests.at(-1)) === JSON.stringify(uncertain), 'Lost-response retry changed the request');
+      result = batch.open(['https://example.com/b']); await tick();
+      const editedName = field('name').value;
+      field('storage-settings').click();
+      await tick();
+      check(field('name').disabled && field('policy').value==='merge', 'Settings folder incorrectly creates suffix');
+      check(field('destination').textContent === '/downloads', 'Settings option did not use configured path');
+      field('storage-query').click(); await tick();
+      check(!field('name').disabled && field('name').value === editedName, 'Switching storage lost the editable folder name');
+      check(field('policy').value === 'new', 'Query folder did not restore new-folder default');
+      dialog.dispatchEvent(new Event('cancel',{cancelable:true}));
+      dialog.close(); await result;
+      result = batch.open(['https://example.com/remember']); await tick();
+      field('storage-settings').click(); await tick();
+      field('cancel').click(); await result;
+      result = batch.open(['https://example.com/remember-again']); await tick();
+      check(field('storage-settings').checked && field('name').disabled, 'Storage choice was not remembered');
+      check(localStorage.getItem('uav-download-storage') === 'settings', 'Storage choice was not persisted');
+      field('storage-query').click(); await tick();
+      field('cancel').click(); await result;
+      query = '新的搜尋條件';
+      result = batch.open(['https://example.com/query-again']); await tick();
+      check(field('storage-query').checked && field('name').value === query && !field('name').disabled, 'Query choice did not reuse the new search');
+      field('name').value = '自己命名'; field('name').dispatchEvent(new Event('input',{bubbles:true})); await tick();
+      check(field('destination').textContent === '/downloads/自己命名', 'Edited name did not update destination');
+      field('cancel').click(); await result;
+      localStorage.setItem('uav-download-storage', 'settings');
+      dialog.replaceWith(dialog.cloneNode(true));
+      const restored = createDownloadBatch({getQuery:()=>query,onTasks:()=>{}});
+      const restoredResult = restored.open(['https://example.com/reload']); await tick();
+      check(field('storage-settings').checked && field('name').disabled, 'New controller did not restore the persisted choice');
+      field('cancel').click(); await restoredResult;
+      document.body.innerHTML='<p>BATCH_TEST_PASS</p>';
+    })().catch(error=>{document.body.innerHTML='<p>BATCH_TEST_FAIL: '+error.message+'</p>';});
+  </script>`);
+  const result = spawnSync(process.env.CHROME_BIN || 'google-chrome', ['--headless','--no-sandbox','--disable-gpu','--no-first-run',
+    '--window-size=390,844','--user-data-dir='+path.join(temporary,'profile'),'--dump-dom','--virtual-time-budget=2000','file://'+page],
+    {encoding:'utf8',timeout:20000,maxBuffer:4*1024*1024});
+  assert.ifError(result.error);
+  assert.equal(result.status,0,result.stderr);
+  const output=result.stdout.replace(/<script[\s\S]*?<\/script>/g,'');
+  assert.match(output, /<p>BATCH_TEST_PASS<\/p>/, output);
+  console.log('Download dialog, cancel, stale preview, overwrite, retry and double submit: PASS');
+} finally { fs.rmSync(temporary,{recursive:true,force:true}); }

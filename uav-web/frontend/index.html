@@ -502,6 +502,34 @@
       <div class="flex justify-end gap-3"><button type="button" onclick="document.getElementById('task-edit-dialog').close()" class="p-2">關閉</button><button id="task-edit-save" type="submit" class="bg-brand-600 rounded px-4 py-2 disabled:opacity-40">套用至所選任務</button></div>
     </form>
   </dialog>
+  <dialog id="download-batch-dialog" aria-labelledby="batch-title" class="bg-[#1a1a22] text-gray-200 rounded-xl border border-[#3e3e4e] p-6 w-[min(95vw,32rem)] backdrop:bg-black/60">
+    <form id="download-batch-form" class="space-y-4">
+      <h2 id="batch-title" class="text-lg font-semibold">下載 <span id="batch-count"></span> 部影片</h2>
+      <fieldset class="space-y-3">
+        <legend class="mb-2">儲存方式</legend>
+        <p class="text-xs text-gray-400">此瀏覽器會記住上次選擇，下次自動預選。</p>
+        <label class="block rounded-lg border border-[#3e3e4e] p-3 cursor-pointer">
+          <span class="flex items-center gap-2"><input id="batch-storage-settings" type="radio" name="batch-storage" value="settings" class="accent-brand-600">使用目前設定的下載路徑</span>
+          <output id="batch-base-destination" class="block mt-2 text-sm text-gray-400 break-all">讀取設定中…</output>
+        </label>
+        <div class="rounded-lg border border-[#3e3e4e] p-3">
+          <label class="flex items-center gap-2 cursor-pointer"><input id="batch-storage-query" type="radio" name="batch-storage" value="query" checked class="accent-brand-600">以搜尋條件建立資料夾</label>
+          <label for="batch-name" class="block text-sm mt-3">資料夾名稱（可修改）</label>
+          <input id="batch-name" maxlength="100" aria-describedby="batch-name-help" class="block w-full bg-[#282832] rounded p-2 mt-1 disabled:opacity-40">
+          <p id="batch-name-help" class="text-xs text-gray-400 mt-2">已預填搜尋條件，可直接確認或修改名稱。資料夾會建立在上方下載路徑內。</p>
+        </div>
+      </fieldset>
+      <p class="text-sm break-all">本次儲存位置：<output id="batch-destination"></output></p>
+      <fieldset id="batch-conflict" hidden class="space-y-3 border border-[#3e3e4e] rounded p-3">
+        <legend>同名資料夾已存在</legend>
+        <label class="block">處理方式<select id="batch-policy" class="block w-full bg-[#282832] rounded p-2 mt-1"><option value="new">建立新資料夾（建議）</option><option value="merge">存入既有資料夾，略過已有影片</option><option value="overwrite">覆寫同名檔案，保留其他檔案</option></select></label>
+        <label id="batch-naming-row" class="block">命名方式<select id="batch-naming" class="block w-full bg-[#282832] rounded p-2 mt-1"><option value="date">日期後綴</option><option value="number">流水號</option><option value="custom">自行修改上方名稱</option></select></label>
+      </fieldset>
+      <p id="batch-status" role="status" class="text-sm text-amber-300"></p>
+      <div class="flex justify-end gap-3"><button id="batch-cancel" type="button" class="h-10 px-3">取消</button><button id="batch-submit" type="submit" disabled class="h-10 px-4 bg-brand-600 rounded disabled:opacity-40">開始下載</button></div>
+    </form>
+  </dialog>
+  <script src="/download-batch.js"></script>
   <script src="/video-selection.js"></script>
   <script src="/task-selection.js"></script>
   <script src="/category-browser.js"></script>
@@ -515,9 +543,17 @@
     let currentPage = 1;
     let currentCategoryUrl = '';
     let currentSearchQuery = '';
+    let displayedSearchQuery = '';
+    let displayedSelectionContext = '';
     let searchSession = null;
     let searchJobId = null;
-    const selection = createVideoSelection({startDownload: startSingleDownload});
+    let batchController;
+    const downloadBatch = {open: urls => {
+      batchController ||= createDownloadBatch({getQuery: () => displayedSearchQuery,
+        onTasks: tasks => { latestDownloadTasks = [...tasks, ...latestDownloadTasks.filter(task => !tasks.some(item => item.task_id === task.task_id))]; renderTasks(latestDownloadTasks); }});
+      return batchController.open(urls);
+    }};
+    const selection = createVideoSelection({startDownload: startSingleDownload, startBatch: urls => downloadBatch.open(urls)});
     const taskSelection = createTaskSelection({cancelTask, taskAction});
     const busyTaskActions = new Set();
     let clearingCompleted = false;
@@ -790,6 +826,10 @@
     }
 
     function renderVideos(videos) {
+      const context = JSON.stringify([currentSite, currentSearchQuery, currentCategoryUrl]);
+      if (context !== displayedSelectionContext) selection.clear();
+      displayedSelectionContext = context;
+      displayedSearchQuery = currentSearchQuery;
       const grid = document.getElementById('video-grid');
       grid.innerHTML = '';
       selection.setVisible(videos.map(v => v.url));
@@ -831,18 +871,7 @@
     }
 
     async function startSingleDownload(url) {
-      try {
-        const resp = await fetch('/api/download/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url })
-        });
-        const res = await resp.json();
-        if (!resp.ok || !res.success) throw new Error(res.error || '加入下載失敗');
-        return true;
-      } catch (e) {
-        alert('加入下載佇列失敗: ' + e);
-      }
+      return downloadBatch.open([url]);
     }
 
     function changePage(delta) {
@@ -979,6 +1008,7 @@
                 </details>
               </div>
             </div>
+            ${t.folder_policy ? `<p class="text-xs text-gray-400 truncate" title="${safe(t.final_dest || t.dest)}">儲存至：${safe(t.final_dest || t.dest)}</p>` : ''}
             ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 truncate">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 truncate">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
             <!-- Progress Bar -->
             ${t.total_segments > 0 && !['completed', 'skipped', 'cancelled'].includes(t.status) ? `<div class="space-y-1">
@@ -1129,10 +1159,7 @@
     async function submitModalUrls() {
       const text = document.getElementById('modal-urls-input').value;
       const urls = text.split('\n').map(u => u.trim()).filter(u => u && !u.startsWith('#'));
-      for (const url of urls) {
-        await startSingleDownload(url);
-      }
-      closeQuickDownloadModal();
+      if (await downloadBatch.open(urls)) closeQuickDownloadModal();
     }
 
     // History

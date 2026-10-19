@@ -437,3 +437,29 @@ def test_staged_worker_downloads_locally_then_moves_to_original_nas(smb, tmp_pat
     assert task.dest == smb.root
     assert (smb.folder / 'MIMK-290.mp4').read_bytes() == b'complete'
     assert not list(Path(staging).iterdir())
+
+
+def test_production_batch_smoke_uses_two_connections_and_cleans_only_its_folder(smb):
+    from uav_downloader.daemon.storage_smoke import check_batch_smb
+    original = smb.folder / 'existing.mp4'
+    original.write_bytes(b'keep')
+    assert check_batch_smb(smb.settings)
+    assert list(smb.folder.iterdir()) == [original]
+    assert original.read_bytes() == b'keep'
+
+
+def test_production_batch_smoke_catches_shared_roots_and_cleans_on_failure(smb, monkeypatch):
+    from uav_downloader.daemon.storage_smoke import check_batch_smb
+    add = TaskManager.add_task
+    shared = []
+    def broken_add(self, *args, **kwargs):
+        task = add(self, *args, **kwargs)
+        if not shared:
+            shared.append(task.dest)
+        task.dest = shared[0]
+        task.nas_settings['_smb_path'] = task.dest
+        return task
+    monkeypatch.setattr(TaskManager, 'add_task', broken_add)
+    with pytest.raises(ValueError, match='Storage destination is already active'):
+        check_batch_smb(smb.settings)
+    assert list(smb.folder.iterdir()) == []

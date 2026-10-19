@@ -750,3 +750,83 @@ def test_staging_keeps_sources_after_publish_failure_and_retries_owned_outputs(m
     assert task.status == 'completed', task.error
     assert (Path(task.dest) / 'MIMK-290.zh.srt').read_bytes() == b'subtitle'
     assert not list(Path(staging).iterdir())
+
+
+@pytest.mark.parametrize('policy,expected', [('merge', 'skipped'), ('overwrite', 'completed'), ('new', 'completed')])
+def test_batch_policy_controls_existing_video_and_history(manager, monkeypatch, tmp_path, policy, expected):
+    from uav_downloader.daemon import download_batch
+    source = 'https://missav.ai/mimk-290'
+    tm.get_history_manager().record_download(source, title='MIMK-290')
+    folder = tmp_path / 'videos' / 'query'
+    folder.mkdir(parents=True)
+    (folder / 'MIMK-290.mp4').write_bytes(b'old')
+    (folder / 'keep.mp4').write_bytes(b'keep')
+    options = dict(name='query', policy=policy, urls=[source], request_id='batch-test')
+    preview = download_batch.destination(manager, options)
+    result = download_batch.submit(manager, dict(options, expected_destination=preview['destination']))
+    task = manager.get_task(result['tasks'][0]['task_id'])
+    def download(job):
+        Path(job.dest_folder(), 'MIMK-290.mp4').write_bytes(b'new')
+        return True
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+    assert task.status == expected, task.error
+    assert (folder / 'keep.mp4').read_bytes() == b'keep'
+    assert (folder / 'MIMK-290.mp4').read_bytes() == (b'new' if policy == 'overwrite' else b'old')
+    if policy == 'new':
+        assert Path(task.dest, 'MIMK-290.mp4').read_bytes() == b'new'
+
+
+def test_batch_rolls_back_queue_when_persistence_fails(manager, monkeypatch):
+    from uav_downloader.daemon import download_batch
+    options = dict(name='query', urls=['https://example.com/a','https://example.com/b'], request_id='failed')
+    preview = download_batch.destination(manager, options)
+    monkeypatch.setattr(manager, '_save_tasks', MagicMock(side_effect=OSError('disk full')))
+    with pytest.raises(OSError, match='disk full'):
+        download_batch.submit(manager, dict(options, expected_destination=preview['destination']))
+    assert not manager._tasks and not manager._queue
+
+
+@pytest.mark.parametrize('staging', [False, True])
+def test_restore_shared_smb_roots_keeps_task_workspaces(manager, tmp_path, staging):
+    import json
+    import os
+    from uav_downloader.core.storage import SMB_PATH_ROOT
+    root = os.path.join(SMB_PATH_ROOT, 'shared-batch')
+    stage = str(tmp_path / 'staging') if staging else ''
+    records = []
+    for index in range(2):
+        task_id = f'task_{index}'
+        task = tm.DownloadTask(task_id, f'https://example.com/{index}', root, status='failed',
+                               staging_dir=stage, nas_settings={'enabled': True, 'mode': 'smb', '_smb_path': root,
+                                                             'host': 'nas.example', 'share': 'videos', 'directory': ''})
+        record = {key: getattr(task, key) for key in ('task_id', 'url', 'dest', 'status', 'staging_dir', 'nas_settings')}
+        record['files'] = {'workdir': os.path.join(stage or root, f'.uav-{task_id}-partial'),
+                           'published': [os.path.join(root, f'{index}.mp4')]}
+        records.append(record)
+    state = tmp_path / 'shared-tasks.json'
+    state.write_text(json.dumps(records))
+    restored = tm.TaskManager(state_path=state)
+    first, second = list(restored._tasks.values())
+    assert first.dest != second.dest
+    for task in (first, second):
+        assert task.nas_settings['_smb_path'] == task.dest
+        assert task.files.destination == task.dest
+        assert os.path.dirname(task.files.workdir) == (stage or task.dest)
+        assert os.path.dirname(task.files.published[0]) == task.dest
+        assert task.files.workdir.endswith(f'.uav-{task.task_id}-partial')
+    restored._save_tasks()
+    reloaded = tm.TaskManager(state_path=state)
+    assert [task.dest for task in reloaded._tasks.values()] == [first.dest, second.dest]
+
+
+def test_batch_edit_assigns_independent_smb_roots(manager, monkeypatch):
+    first = manager.add_task('https://example.com/first')
+    second = manager.add_task('https://example.com/second')
+    monkeypatch.setattr(tm.nas, 'load_settings', lambda **kw: {'enabled': True, 'mode': 'smb'})
+    monkeypatch.setattr(tm.nas, 'test_connection', lambda *a, **kw: None)
+    result = manager.update_tasks([first.task_id, second.task_id], storage='settings')
+    assert len(result['updated']) == 2
+    assert first.dest != second.dest
+    assert first.nas_settings['_smb_path'] == first.dest
+    assert second.nas_settings['_smb_path'] == second.dest

@@ -70,6 +70,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/search", post(search_handler))
         .route("/api/search/cancel", post(cancel_search_handler))
         .route("/api/download/start", post(start_download_handler))
+        .route("/api/download/batch", post(download_batch_handler))
         .route("/api/download/cancel", post(cancel_download_handler))
         .route("/api/download/action", post(task_action_handler))
         .route("/api/download/tasks", get(tasks_handler))
@@ -150,6 +151,13 @@ async fn search_handler(
 
 async fn cancel_search_handler(State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> impl IntoResponse {
     match state.client.cancel_search(body).await {
+        Ok((status, value)) => (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(value)).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn download_batch_handler(State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    match state.client.download_batch(body).await {
         Ok((status, value)) => (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(value)).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }
