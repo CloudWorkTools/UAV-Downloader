@@ -125,6 +125,12 @@ impl DaemonClient {
         Ok((resp.status().as_u16(), resp.json().await?))
     }
 
+    pub async fn download_batch(&self, body: serde_json::Value) -> Result<(u16, serde_json::Value), reqwest::Error> {
+        let resp = self.apply_auth(self.client.post(format!("{}/api/download/batch", self.base_url)))
+            .json(&body).send().await?;
+        Ok((resp.status().as_u16(), resp.json().await?))
+    }
+
     pub async fn start_download(
         &self,
         req: StartDownloadRequest,

@@ -244,6 +244,16 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     return self._send_error(str(exc), 400)
                 return self._send_json(result)
 
+            elif path == '/api/download/batch':
+                from uav_downloader.daemon import download_batch
+                if body.get('action') == 'preview':
+                    result = download_batch.destination(self.task_manager, body)
+                elif body.get('action') == 'submit':
+                    result = download_batch.submit(self.task_manager, body)
+                else:
+                    raise ValueError('不支援的批次操作')
+                return self._send_json(result)
+
             elif path == "/api/download/start":
                 url = body.get("url", "").strip()
                 if not url:

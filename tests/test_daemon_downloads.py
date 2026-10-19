@@ -750,3 +750,38 @@ def test_staging_keeps_sources_after_publish_failure_and_retries_owned_outputs(m
     assert task.status == 'completed', task.error
     assert (Path(task.dest) / 'MIMK-290.zh.srt').read_bytes() == b'subtitle'
     assert not list(Path(staging).iterdir())
+
+
+@pytest.mark.parametrize('policy,expected', [('merge', 'skipped'), ('overwrite', 'completed'), ('new', 'completed')])
+def test_batch_policy_controls_existing_video_and_history(manager, monkeypatch, tmp_path, policy, expected):
+    from uav_downloader.daemon import download_batch
+    source = 'https://missav.ai/mimk-290'
+    tm.get_history_manager().record_download(source, title='MIMK-290')
+    folder = tmp_path / 'videos' / 'query'
+    folder.mkdir(parents=True)
+    (folder / 'MIMK-290.mp4').write_bytes(b'old')
+    (folder / 'keep.mp4').write_bytes(b'keep')
+    options = dict(name='query', policy=policy, urls=[source], request_id='batch-test')
+    preview = download_batch.destination(manager, options)
+    result = download_batch.submit(manager, dict(options, expected_destination=preview['destination']))
+    task = manager.get_task(result['tasks'][0]['task_id'])
+    def download(job):
+        Path(job.dest_folder(), 'MIMK-290.mp4').write_bytes(b'new')
+        return True
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+    assert task.status == expected, task.error
+    assert (folder / 'keep.mp4').read_bytes() == b'keep'
+    assert (folder / 'MIMK-290.mp4').read_bytes() == (b'new' if policy == 'overwrite' else b'old')
+    if policy == 'new':
+        assert Path(task.dest, 'MIMK-290.mp4').read_bytes() == b'new'
+
+
+def test_batch_rolls_back_queue_when_persistence_fails(manager, monkeypatch):
+    from uav_downloader.daemon import download_batch
+    options = dict(name='query', urls=['https://example.com/a','https://example.com/b'], request_id='failed')
+    preview = download_batch.destination(manager, options)
+    monkeypatch.setattr(manager, '_save_tasks', MagicMock(side_effect=OSError('disk full')))
+    with pytest.raises(OSError, match='disk full'):
+        download_batch.submit(manager, dict(options, expected_destination=preview['destination']))
+    assert not manager._tasks and not manager._queue

@@ -485,3 +485,65 @@ def test_subtitle_only_upload_never_overwrites_existing_mp4(profile, remote, tmp
     nas.upload_video(profile, video, threading.Event(), subtitles_only=True)
     assert remote.files[target]==b'existing NAS video'
     assert len(remote.files)==2 and b'new subtitles' in remote.files.values()
+
+
+@pytest.mark.parametrize('mode', ['smb', 'upload', 'direct'])
+def test_batch_subfolder_uses_actual_nas_destination(profile, monkeypatch, tmp_path, mode):
+    import os
+    from uav_downloader.core.storage import LocalStorage
+    from uav_downloader.daemon import download_batch
+    remote_root = tmp_path / 'remote'
+    (remote_root / 'UAV').mkdir(parents=True)
+    settings = dict(profile, mode=mode, direct_path=str(remote_root / 'UAV'))
+    monkeypatch.setattr(nas, 'load_settings', lambda **kw: dict(settings))
+    monkeypatch.setattr(nas, 'direct_destination', lambda value, **kw: value['direct_path'])
+    monkeypatch.setenv('DOWNLOAD_DIR', str(tmp_path / 'local'))
+    class RemoteFolders(LocalStorage):
+        def __init__(self, settings, root):
+            self.root, self.directory = root, remote_root / settings['directory']
+        def local(self, path):
+            return self.directory / os.path.relpath(path, self.root)
+        def exists(self, path): return self.local(path).exists()
+        def isfile(self, path): return self.local(path).is_file()
+        def isdir(self, path): return self.local(path).is_dir()
+        def islink(self, path): return self.local(path).is_symlink()
+        def listdir(self, path): return os.listdir(self.local(path))
+        def makedirs(self, path, exist_ok=False): return self.local(path).mkdir(parents=True, exist_ok=exist_ok)
+        def close(self): pass
+    monkeypatch.setattr('uav_downloader.core.smb_storage.SmbStorage', RemoteFolders)
+    manager = TaskManager()
+    monkeypatch.setattr(manager, 'start_dispatcher', lambda: None)
+    options = dict(name='collection', request_id='nas-batch', urls=['https://example.com/movie'])
+    preview = download_batch.destination(manager, options)
+    assert not (remote_root / 'UAV' / 'collection').exists()
+    assert not (tmp_path / 'local').exists()
+    result = download_batch.submit(manager, dict(options, expected_destination=preview['destination']))
+    task = manager.get_task(result['tasks'][0]['task_id'])
+    assert (remote_root / 'UAV' / 'collection').is_dir()
+    assert task.to_dict()['final_dest'] == preview['destination']
+    assert 'nas-secret' not in json.dumps(result)
+    if mode in ('smb', 'upload'):
+        assert task.nas_settings['directory'] == 'UAV/collection'
+        assert settings['directory'] == 'UAV'
+    else:
+        assert task.dest == str(remote_root / 'UAV' / 'collection')
+
+
+def test_explicit_upload_overwrite_keeps_replaced_file_on_cancel(profile, remote, monkeypatch, tmp_path):
+    import smbclient
+    target = ntpath.join(r'\\192.168.1.10\video', 'UAV', 'movie.mp4')
+    remote.files[target] = b'old'
+    untouched = ntpath.join(r'\\192.168.1.10\video', 'UAV', 'other.mp4')
+    remote.files[untouched] = b'keep'
+    video = tmp_path / 'movie.mp4'
+    video.write_bytes(b'new')
+    monkeypatch.setattr(smbclient.path, 'islink', lambda *a, **kw: False)
+    cancelled = threading.Event()
+    def replace(source, destination, **kwargs):
+        remote.files[destination] = remote.files.pop(source)
+        cancelled.set()
+    monkeypatch.setattr(smbclient, 'replace', replace)
+    nas.upload_video(dict(profile, _overwrite=True), video, cancelled)
+    assert remote.files[target] == b'new'
+    assert remote.files[untouched] == b'keep'
+    assert not any(path.endswith('.part') for path in remote.files)

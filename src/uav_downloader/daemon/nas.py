@@ -276,8 +276,15 @@ def upload_video(settings, video_file, cancelled, published=None, *, subtitles_o
                         if cancelled.is_set():
                             return
                         # rename refuses existing targets, preserving files already on the NAS.
-                        smb.rename(temporary, target, **options)
-                        published.append(target)
+                        replacing = smb.path.exists(target, **options)
+                        if settings.get('_overwrite'):
+                            if smb.path.islink(target, **options):
+                                raise NasError('目的地檔案不可使用符號連結')
+                            smb.replace(temporary, target, **options)
+                        else:
+                            smb.rename(temporary, target, **options)
+                        if not replacing:
+                            published.append(target)
                         published.remove(temporary)
                     finally:
                         if smb.path.exists(temporary, **options):
@@ -381,7 +388,7 @@ def open_smb_storage(settings, destination):
 
 
 @contextmanager
-def reserve_direct_target(settings, filename, *, owned_paths=()):
+def reserve_direct_target(settings, filename, *, owned_paths=(), overwrite=False):
     folder = (settings['_smb_path'] if settings.get('mode') == 'smb'
               else direct_destination(settings))
     target = os.path.join(folder, filename)
@@ -394,7 +401,7 @@ def reserve_direct_target(settings, filename, *, owned_paths=()):
             raise NasError('此 NAS 檔案已有下載任務使用中，請等待該任務結束後再試') from None
         raise NasError('NAS 無法取得下載鎖，請確認連線及讀寫、刪除權限') from None
     try:
-        if filesystem.islink(target) or (filesystem.exists(target) and target not in owned_paths):
+        if filesystem.islink(target) or (not overwrite and filesystem.exists(target) and target not in owned_paths):
             raise NasError('NAS 已存在同名影片，已停止下載以避免覆寫')
         yield
     finally:

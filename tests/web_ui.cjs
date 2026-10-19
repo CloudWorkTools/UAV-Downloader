@@ -28,6 +28,11 @@ const context = vm.createContext({
     return {ok: body.url !== failedUrl, json: async () => ({success: body.url !== failedUrl, error: 'test failure'})};
   },
 });
+context.createDownloadBatch = () => ({open: async urls => {
+  requests.push(...urls);
+  if (urls.includes(failedUrl)) {alerts.push('test failure'); return false;}
+  return true;
+}});
 vm.runInContext(fs.readFileSync('uav-web/frontend/video-selection.js', 'utf8'), context);
 context.createVideoSelection = context.window.createVideoSelection;
 vm.runInContext(fs.readFileSync('uav-web/frontend/task-selection.js', 'utf8'), context);
@@ -53,7 +58,7 @@ async function run() {
   await Promise.all([selection.download(), selection.download()]);
   assert.deepEqual(requests, ['earlier-page', 'a', 'b']);
   assert.equal(alerts.length, 1);
-  assert.equal(element('download-selected-button').textContent, '下載已選 (1)');
+  assert.equal(element('download-selected-button').textContent, '下載已選 (3)');
   failedUrl = '';
   await selection.download();
   assert.equal(element('download-selected-button').disabled, true);
