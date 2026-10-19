@@ -513,7 +513,7 @@ def test_batch_subfolder_uses_actual_nas_destination(profile, monkeypatch, tmp_p
     monkeypatch.setattr('uav_downloader.core.smb_storage.SmbStorage', RemoteFolders)
     manager = TaskManager()
     monkeypatch.setattr(manager, 'start_dispatcher', lambda: None)
-    options = dict(name='collection', request_id='nas-batch', urls=['https://example.com/movie'])
+    options = dict(name='collection', request_id='nas-batch', urls=['https://example.com/movie', 'https://example.com/another'])
     preview = download_batch.destination(manager, options)
     assert not (remote_root / 'UAV' / 'collection').exists()
     assert not (tmp_path / 'local').exists()
@@ -521,6 +521,11 @@ def test_batch_subfolder_uses_actual_nas_destination(profile, monkeypatch, tmp_p
     task = manager.get_task(result['tasks'][0]['task_id'])
     assert (remote_root / 'UAV' / 'collection').is_dir()
     assert task.to_dict()['final_dest'] == preview['destination']
+    if mode == 'smb':
+        other = manager.get_task(result['tasks'][1]['task_id'])
+        with nas.open_smb_storage(task.nas_settings, task.dest):
+            with nas.open_smb_storage(other.nas_settings, other.dest):
+                assert task.to_dict()['final_dest'] == other.to_dict()['final_dest']
     assert 'nas-secret' not in json.dumps(result)
     if mode in ('smb', 'upload'):
         assert task.nas_settings['directory'] == 'UAV/collection'

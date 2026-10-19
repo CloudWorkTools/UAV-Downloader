@@ -123,6 +123,7 @@ class TaskManager:
         if self._state_path is not None and self._state_path.exists():
             with self._state_path.open(encoding="utf-8") as source:
                 records = json.load(source)
+            smb_destinations = set()
             for record in records:
                 files = record.pop('files', None)
                 task = DownloadTask(**record)
@@ -131,6 +132,17 @@ class TaskManager:
                     if current.get('enabled') and current.get('mode') == 'smb' and nas.public_destination(current) == task.dest:
                         task.dest = nas.smb_destination()
                         task.nas_settings = dict(current, _smb_path=task.dest)
+                if (task.nas_settings.get('enabled') and task.nas_settings.get('mode') == 'smb'
+                        and task.dest.startswith(SMB_PATH_ROOT + os.sep)):
+                    if task.dest in smb_destinations:
+                        old_dest, task.dest = task.dest, nas.smb_destination()
+                        if files:
+                            def relocate(path):
+                                return task.dest + path[len(old_dest):] if path == old_dest or path.startswith(old_dest + os.sep) else path
+                            files['workdir'] = relocate(files['workdir'])
+                            files['published'] = [relocate(path) for path in files.get('published', [])]
+                        task.nas_settings['_smb_path'] = task.dest
+                    smb_destinations.add(task.dest)
                 if files:
                     task.files = DownloadFiles.restore(task.dest, task.task_id, files, task.staging_dir)
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
@@ -224,6 +236,9 @@ class TaskManager:
         if batch_destination is not None:
             target_dest, nas_settings = batch_destination
             nas_settings = dict(nas_settings)
+            if nas_settings.get('enabled') and nas_settings.get('mode') == 'smb':
+                target_dest = nas.smb_destination()
+                nas_settings['_smb_path'] = target_dest
         elif nas_settings.get("enabled"):
             if nas_settings.get("mode") == "direct":
                 target_dest = nas.direct_destination(nas_settings, probe=True)
@@ -342,6 +357,9 @@ class TaskManager:
                         task.name, task.progress = '', 0.0
                         task.downloaded_segments = task.total_segments = 0
                     task.dest, task.nas_settings = target, dict(settings)
+                    if settings.get('enabled') and settings.get('mode') == 'smb':
+                        task.dest = nas.smb_destination()
+                        task.nas_settings['_smb_path'] = task.dest
                     task.folder_policy = ''
                 if staging_dir is not None and staging_dir != task.staging_dir:
                     task.staging_dir = staging_dir
