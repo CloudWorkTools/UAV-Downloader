@@ -15,6 +15,7 @@ import uuid
 
 from uav_downloader.subtitles import asr, engine, results
 from uav_downloader.subtitles.profiles import ProfileSnapshot
+from uav_downloader.core.storage import SMB_PATH_ROOT
 
 _STAGES = ('vad', 'asr', 'correction', 'translation')
 _RETRY_LIMIT = 2
@@ -68,6 +69,8 @@ def _safe_error(stage, error):
     from uav_downloader.subtitles.models import StageRequestError
 
     message = str(error)
+    if stage == 'publish' and isinstance(error, OSError):
+        return '字幕發布失敗：目的地儲存無法寫入，請檢查連線後只重試儲存'
     http = re.search(r'HTTP\s+(\d{3})\b', message, flags=re.IGNORECASE)
     prefix = f'{stage or "字幕"} 階段失敗'
     if http:
@@ -102,7 +105,7 @@ def _safe_error(stage, error):
 class SubtitleTaskManager:
     """Owns subtitle task ordering, persistence, cancellation and retries."""
 
-    def __init__(self, state_path=None, max_concurrent=1):
+    def __init__(self, state_path=None, max_concurrent=1, source_manager=None):
         self._lock = threading.RLock()
         self._state_path = Path(state_path) if state_path is not None else asr._folder() / 'web_subtitle_tasks.json'
         self._tasks = {}
@@ -110,6 +113,10 @@ class SubtitleTaskManager:
         self._active = {}
         self._video_locks = {}
         self._max_concurrent = max(1, int(max_concurrent))
+        if source_manager is None:
+            from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+            source_manager = SubtitleFileManager()
+        self._source_manager = source_manager
         self._running = False
         self._dispatcher = None
         self._load()
@@ -176,7 +183,7 @@ class SubtitleTaskManager:
 
     def submit(self, video_id, selected_stages, profile_snapshots, target_languages,
                *, audio_path=None, video_path=None, input_result_id=None,
-               allow_reasoning=False, _force_new=False):
+               allow_reasoning=False, output_languages=(), _force_new=False):
         if not isinstance(video_id, str) or not video_id or len(video_id) > 512:
             raise ValueError('字幕影片識別碼無效')
         if (not isinstance(selected_stages, (list, tuple)) or not selected_stages
@@ -204,8 +211,13 @@ class SubtitleTaskManager:
             raise ValueError('請指定字幕翻譯語言')
         if any(not isinstance(language, str) or not language for language in languages):
             raise ValueError('字幕翻譯語言無效')
+        if (not isinstance(output_languages, (list, tuple))
+                or any(language not in ('ja', 'en', 'zh-TW') for language in output_languages)):
+            raise ValueError('字幕輸出語言無效')
+        output_languages = list(dict.fromkeys(output_languages))
         fingerprint = _request_key(video_id, stages, snapshots, languages,
-                                   {'result_id': input_result_id, 'allow_reasoning': allow_reasoning})
+                                   {'result_id': input_result_id, 'allow_reasoning': allow_reasoning,
+                                    'output_languages': output_languages})
         with self._lock:
             for task in self._tasks.values():
                 if not _force_new and task['request_key'] == fingerprint and task['status'] in (
@@ -214,9 +226,12 @@ class SubtitleTaskManager:
             task_id = f'subtitle_{uuid.uuid4().hex}'
             task = {
                 'task_id': task_id, 'execution_id': task_id, 'video_id': video_id,
-                'video_path': os.path.abspath(video_path) if video_path else None,
-                'audio_path': os.path.abspath(audio_path) if audio_path else None,
+                'video_path': (video_path if video_path and video_path.startswith(SMB_PATH_ROOT + os.path.sep)
+                               else os.path.abspath(video_path) if video_path else None),
+                'audio_path': (audio_path if audio_path and audio_path.startswith(SMB_PATH_ROOT + os.path.sep)
+                               else os.path.abspath(audio_path) if audio_path else None),
                 'selected_stages': stages, 'target_languages': languages,
+                'output_languages': output_languages, 'publish_status': {},
                 'profile_snapshots': snapshots, 'input_result_id': input_result_id,
                 'allow_reasoning': allow_reasoning, 'inputs': {}, 'results': {},
                 'completed': [], 'retry_attempts': {}, 'retry_limit': _RETRY_LIMIT,
@@ -239,7 +254,7 @@ class SubtitleTaskManager:
 
     def redo(self, video_id, stage, profile_snapshot, language=None,
              input_result_id=None, *, audio_path=None, video_path=None,
-             allow_reasoning=False):
+             allow_reasoning=False, output_languages=()):
         if stage not in _STAGES:
             raise ValueError('字幕階段無效')
         if stage == 'translation' and not language:
@@ -248,6 +263,7 @@ class SubtitleTaskManager:
                            [language] if language else [], audio_path=audio_path,
                            video_path=video_path, input_result_id=input_result_id,
                            allow_reasoning=allow_reasoning,
+                           output_languages=output_languages,
                            _force_new=True)
 
     def reorder(self, task_id, position):
@@ -288,7 +304,8 @@ class SubtitleTaskManager:
             task['request_key'] = _request_key(task['video_id'], task['selected_stages'], snapshots,
                                                 task['target_languages'], {
                                                     'result_id': task['input_result_id'],
-                                                    'allow_reasoning': task['allow_reasoning']})
+                                                    'allow_reasoning': task['allow_reasoning'],
+                                                    'output_languages': task.get('output_languages', [])})
             task['updated_at'] = time.time()
             try:
                 self._save_locked()
@@ -493,6 +510,8 @@ class SubtitleTaskManager:
                 if self._cancelled(task_id, generation):
                     raise engine.SubtitleCancelled('Subtitle generation cancelled')
             video_locked = True
+            with self._source_manager.resolve(task['video_id']):
+                pass
             self._pin_inputs(task)
             task = self.get_task(task_id)
             for stage in task['selected_stages']:
@@ -513,6 +532,8 @@ class SubtitleTaskManager:
                         current['updated_at'] = time.time()
                         self._save_locked()
                     cancel_check = lambda: self._cancelled(task_id, generation)
+                    with self._source_manager.resolve(task['video_id']):
+                        pass
                     audio_path = self._audio_for(task, cancel_check) if stage in ('vad', 'asr') else None
                     snapshot_key = stage if stage in task['profile_snapshots'] else 'text'
                     snapshot = _snapshot_from_dict(task['profile_snapshots'][snapshot_key])
@@ -530,14 +551,17 @@ class SubtitleTaskManager:
                     first_attempt = task.get('retry_attempts', {}).get(key, 0)
                     for attempt in range(first_attempt, _RETRY_LIMIT + 1):
                         try:
+                            with self._source_manager.resolve(task['video_id']):
+                                pass
                             result = engine.run_stage(
                                 task['video_id'], audio_path, stage, snapshot,
                                 target_language=language, input_result_id=input_id,
                                 allow_reasoning=task['allow_reasoning'],
                                 cancel_check=cancel_check, progress_callback=progress,
                                 execution_id=task['execution_id'],
-                                commit_guard=lambda commit, tid=task_id, gen=generation, key=key:
-                                    self._commit_guard(tid, gen, key, commit),
+                                commit_guard=lambda commit, tid=task_id, gen=generation, key=key,
+                                    source_id=task['video_id']:
+                                    self._commit_guard(tid, gen, key, commit, source_id),
                             )
                             break
                         except Exception as exc:
@@ -580,6 +604,7 @@ class SubtitleTaskManager:
                         current['updated_at'] = time.time()
                         self._save_locked()
                     task = self.get_task(task_id)
+            self._publish_completed(task_id, generation)
             with self._lock:
                 current = self._tasks[task_id]
                 if current['generation'] == generation and current['status'] == 'running':
@@ -621,13 +646,98 @@ class SubtitleTaskManager:
             task = self._tasks.get(task_id)
             return not task or task['generation'] != generation or task['status'] not in ('running', 'retry_wait')
 
-    def _commit_guard(self, task_id, generation, stage_key, commit):
+    def _commit_guard(self, task_id, generation, stage_key, commit, video_id=None):
         with self._lock:
             task = self._tasks.get(task_id)
             if not task or task['generation'] != generation or task['status'] != 'running':
                 raise engine.SubtitleCancelled('Subtitle generation cancelled')
+            if video_id:
+                with self._source_manager.resolve(video_id):
+                    pass
             result = commit()
             task['results'][stage_key] = result.result_id
             task['updated_at'] = time.time()
             self._save_locked()
             return result
+
+    def _publish_completed(self, task_id, generation):
+        """Publish only result IDs produced by this task; keep model status independent."""
+        from uav_downloader.subtitles import results
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task or task['generation'] != generation or task['status'] != 'running':
+                raise engine.SubtitleCancelled('Subtitle generation cancelled')
+            video_id = task['video_id']
+            outputs = list(task.get('output_languages', []))
+            completed = dict(task['results'])
+        for language in outputs:
+            stage_keys = ([f'translation:{language}'] if language != 'ja' else [])
+            if language == 'ja':
+                stage_keys = ['correction:', 'asr:']
+            result_id = next((completed[key] for key in stage_keys if completed.get(key)), None)
+            if not result_id:
+                continue
+            with self._lock:
+                task = self._tasks.get(task_id)
+                if not task or task['generation'] != generation or task['status'] != 'running':
+                    raise engine.SubtitleCancelled('Subtitle generation cancelled')
+                task['publish_status'][language] = {'status': 'publishing', 'result_id': result_id}
+                task['updated_at'] = time.time()
+                self._save_locked()
+            try:
+                with self._source_manager.resolve(video_id):
+                    value = results.get(video_id, result_id)
+                    if value is None:
+                        raise ValueError('字幕結果不存在')
+                    self._source_manager.publish_result(video_id, value, language)
+                status = {'status': 'published', 'result_id': result_id}
+            except Exception as exc:
+                status = {'status': 'failed', 'result_id': result_id,
+                          'error': _safe_error('publish', exc)}
+            with self._lock:
+                task = self._tasks.get(task_id)
+                if task and task['generation'] == generation:
+                    task['publish_status'][language] = status
+                    task['updated_at'] = time.time()
+                    self._save_locked()
+
+    def retry_publish(self, task_id, language):
+        """Retry storage only for a completed model result; never call a model stage."""
+        if language not in ('ja', 'en', 'zh-TW'):
+            raise ValueError('字幕輸出語言無效')
+        with self._lock:
+            task = self._tasks.get(task_id)
+            entry = task.get('publish_status', {}).get(language) if task else None
+            if not task or task['status'] != 'completed' or not entry or entry.get('status') != 'failed':
+                raise ValueError('字幕發布目前無法重試')
+            video_id, result_id = task['video_id'], entry['result_id']
+        from uav_downloader.subtitles import results
+        result = results.get(video_id, result_id)
+        if result is None:
+            raise ValueError('字幕結果不存在')
+        published = self._source_manager.publish_result(video_id, result, language)
+        with self._lock:
+            task = self._tasks[task_id]
+            task['publish_status'][language] = {'status': 'published', 'result_id': result_id,
+                                                'path': published['path']}
+            task['updated_at'] = time.time()
+            self._save_locked()
+        return self.get_task(task_id)
+
+    def restore_previous(self, video_id, stage, language=None, *, output_language=None,
+                         replace_existing=False):
+        """Publish an adopted prior success without invoking a model stage."""
+        if stage not in ('asr', 'correction', 'translation'):
+            raise ValueError('此字幕階段沒有可發布文字')
+        if stage == 'translation' and not language:
+            raise ValueError('請指定字幕翻譯語言')
+        output_language = output_language or (language if stage == 'translation' else 'ja')
+        if output_language not in ('ja', 'en', 'zh-TW'):
+            raise ValueError('字幕輸出語言無效')
+        with self._source_manager.resolve(video_id):
+            restored = results.restore_previous(video_id, stage, language)
+            published = self._source_manager.publish_result(
+                video_id, restored, output_language, replace_existing=replace_existing)
+        return {'video_id': video_id, 'result_id': restored.result_id,
+                'language': output_language, 'publish_status': 'published',
+                'path': published['path']}

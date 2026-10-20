@@ -791,6 +791,10 @@ def test_new_subtitle_request_failure_keeps_download_completed(manager, monkeypa
     assert calls == ['download']
     assert queue.arguments[1]['video_path'] == str(Path(task.dest) / 'MIMK-290.mp4')
     assert queue.arguments[1]['allow_reasoning'] is True
+    assert queue.arguments[0][0].startswith('source-v1:')
+    assert queue.arguments[0][0] != 'downloaded-video'
+    with manager._subtitle_file_manager.resolve(queue.arguments[0][0]) as registered:
+        assert registered.video_path == queue.arguments[1]['video_path']
     assert 'api_key' not in task.subtitle_request
     assert 'video_path' not in task.subtitle_request
 

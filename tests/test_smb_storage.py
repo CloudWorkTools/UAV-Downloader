@@ -92,6 +92,95 @@ def test_smb_writes_seek_and_exclusive_publish(smb):
     assert (smb.folder / 'video.mp4').read_bytes()[4:8] == b'abcd'
 
 
+def test_subtitle_publication_uses_virtual_smb_root_and_one_sidecar(smb, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+    from uav_downloader.subtitles.models import SubtitleSegment
+    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(smb.settings))
+    monkeypatch.setattr('uav_downloader.core.history.get_history_manager',
+                        lambda: SimpleNamespace(_entries={}))
+
+    video_dir = os.path.join(smb.root, 'category')
+    smb.backend.makedirs(video_dir, exist_ok=True)
+    video_path = os.path.join(video_dir, 'movie.mp4')
+    with storage_open(video_path, 'wb') as handle:
+        handle.write(b'video-bytes')
+    manager = SubtitleFileManager(state_path=tmp_path / 'subtitle-sources.json')
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [])
+    listed = manager.list_videos()
+    nested = next(item for item in listed if item['name'] == 'movie.mp4' and item['source'] == 'smb')
+    source = manager.register_history(nested['video_id'])
+    assert source.video_path.endswith(os.path.join('category', 'movie.mp4'))
+    result = SimpleNamespace(video_id=source.video_id, result_id='smb-result-1',
+                             segments=(SubtitleSegment('segment', 0, 1, '字幕'),))
+
+    published = manager.publish_result(source.video_id, result, 'zh-TW')
+
+    assert published['path'] == 'movie.zh-TW.srt'
+    assert (smb.folder / 'category' / 'movie.zh-TW.srt').read_text(encoding='utf-8').endswith('字幕\n')
+    assert (smb.folder / 'category' / 'movie.uav-subtitles.json').exists()
+    assert not Path(smb.root).exists()
+
+
+def test_subtitle_publish_rejects_changed_smb_video_and_changed_credentials(smb, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+    from uav_downloader.subtitles.models import SubtitleSegment
+
+    video_path = os.path.join(smb.root, 'movie.mp4')
+    with storage_open(video_path, 'wb') as handle:
+        handle.write(b'original video')
+    manager = SubtitleFileManager(state_path=tmp_path / 'subtitle-sources.json')
+    source = manager.register_smb(video_path, storage_root=smb.root, nas_settings=smb.settings)
+    result = SimpleNamespace(video_id=source.video_id, result_id='smb-result-2',
+                             segments=(SubtitleSegment('segment', 0, 1, '字幕'),))
+
+    changed = {**smb.settings, 'password': 'different', 'username': 'another'}
+    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: changed)
+    with pytest.raises(ValueError, match='NAS 設定已變更'):
+        manager.publish_result(source.video_id, result, 'ja')
+    assert not (smb.folder / 'movie.ja.srt').exists()
+    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(smb.settings))
+    with storage_open(video_path, 'wb') as handle:
+        handle.write(b'replaced video')
+    with pytest.raises(ValueError, match='影片已變更'):
+        manager.publish_result(source.video_id, result, 'ja')
+    assert not (smb.folder / 'movie.ja.srt').exists()
+
+
+def test_upload_subtitle_uses_registered_remote_relative_locator(smb, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+    from uav_downloader.subtitles.models import SubtitleSegment
+    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(smb.settings))
+    roots = iter((os.path.join(SMB_PATH_ROOT, 'upload-w5-resolve'),
+                  os.path.join(SMB_PATH_ROOT, 'upload-w5-publish')))
+    monkeypatch.setattr(nas, 'smb_destination', lambda: next(roots))
+
+    local_root = tmp_path / 'download'
+    local_root.mkdir()
+    local_video = local_root / 'movie.mp4'
+    local_video.write_bytes(b'video')
+    (smb.folder / 'category').mkdir()
+    (smb.folder / 'category' / 'movie.mp4').write_bytes(b'video')
+    manager = SubtitleFileManager(state_path=tmp_path / 'subtitle-sources.json')
+    source = manager.register_upload(
+        str(local_video), allowed_roots=[str(local_root)], nas_settings=smb.settings,
+        remote_root=smb.root, remote_video_path=os.path.join(smb.root, 'category', 'movie.mp4'))
+    result = SimpleNamespace(video_id=source.video_id, result_id='upload-result-1',
+                             segments=(SubtitleSegment('segment', 0, 1, '上傳字幕'),))
+
+    published = manager.publish_result(source.video_id, result, 'en')
+
+    assert published['path'] == 'movie.en.srt'
+    assert (smb.folder / 'category' / 'movie.en.srt').read_text(encoding='utf-8').endswith('上傳字幕\n')
+    monkeypatch.setattr(nas, 'smb_destination',
+                        lambda: os.path.join(SMB_PATH_ROOT, 'upload-w5-changed-check'))
+    (smb.folder / 'category' / 'movie.mp4').write_bytes(b'replaced remote video')
+    with pytest.raises(ValueError, match='NAS 影片已變更'):
+        manager.publish_result(source.video_id, result, 'zh-TW')
+    assert not (smb.folder / 'category' / 'movie.zh-TW.srt').exists()
+
 def test_smb_lock_and_existing_file_protection(smb):
     with nas.reserve_direct_target(smb.settings, 'video.mp4'):
         with pytest.raises(nas.NasError, match='任務使用中'):
