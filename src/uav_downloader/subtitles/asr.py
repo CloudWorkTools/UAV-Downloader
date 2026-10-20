@@ -401,21 +401,7 @@ def transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check
         raise ValueError('所選設定不支援語音辨識')
     if profile.get('provider') not in ('localai', 'openai-compatible'):
         raise ValueError('所選模型服務不支援時間戳語音辨識')
-    parameters = profile.get('parameters')
-    if not isinstance(parameters, dict) or set(parameters) - {'prompt', 'temperature'}:
-        raise ValueError('辨識模型參數不受支援')
-    prompt = parameters.get('prompt')
-    if prompt is not None and (not isinstance(prompt, str) or len(prompt) > 4096 or '\x00' in prompt):
-        raise ValueError('辨識模型參數 prompt 格式無效')
-    temperature = parameters.get('temperature')
-    if temperature is not None:
-        try:
-            valid_temperature = (type(temperature) in (int, float)
-                                 and math.isfinite(temperature) and 0 <= temperature <= 2)
-        except (OverflowError, TypeError):
-            valid_temperature = False
-        if not valid_temperature:
-            raise ValueError('辨識模型參數 temperature 格式或範圍無效')
+    parameters = validate_asr_parameters(profile.get('parameters'))
     if not profile.get('base_url') or not profile.get('model'):
         raise ValueError('請設定辨識模型服務與模型')
     language = str(language or '').strip()
@@ -482,6 +468,25 @@ def transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check
                 result.append(SubtitleSegment(
                     f'segment-{chunk.index:06d}-{ordinal:04d}', absolute_start, absolute_end, text))
         return result
+
+def validate_asr_parameters(parameters):
+    """Validate the supported public ASR parameters without making a request."""
+    if not isinstance(parameters, dict) or set(parameters) - {'prompt', 'temperature'}:
+        raise ValueError('辨識模型參數不受支援')
+    prompt = parameters.get('prompt')
+    if prompt is not None and (not isinstance(prompt, str) or len(prompt) > 4096 or '\x00' in prompt):
+        raise ValueError('辨識模型參數 prompt 格式無效')
+    temperature = parameters.get('temperature')
+    if temperature is not None:
+        try:
+            valid_temperature = (type(temperature) in (int, float)
+                                 and math.isfinite(temperature) and 0 <= temperature <= 2)
+        except (OverflowError, TypeError):
+            valid_temperature = False
+        if not valid_temperature:
+            raise ValueError('辨識模型參數 temperature 格式或範圍無效')
+    return parameters
+
 
 def _stage_segments(payload, duration):
     if not isinstance(payload, dict) or not isinstance(payload.get('segments'), list):

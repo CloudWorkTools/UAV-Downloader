@@ -113,7 +113,7 @@ def test_subtitle_publication_uses_virtual_smb_root_and_one_sidecar(smb, tmp_pat
     nested = next(item for item in listed if item['name'] == 'movie.mp4' and item['source'] == 'smb')
     source = manager.register_history(nested['video_id'])
     assert source.video_path.endswith(os.path.join('category', 'movie.mp4'))
-    result = SimpleNamespace(video_id=source.video_id, result_id='smb-result-1',
+    result = SimpleNamespace(video_id=source.video_id, result_id='smb-result-1', stage='translation', language='zh-TW',
                              segments=(SubtitleSegment('segment', 0, 1, '字幕'),))
 
     published = manager.publish_result(source.video_id, result, 'zh-TW')
@@ -134,7 +134,7 @@ def test_subtitle_publish_rejects_changed_smb_video_and_changed_credentials(smb,
         handle.write(b'original video')
     manager = SubtitleFileManager(state_path=tmp_path / 'subtitle-sources.json')
     source = manager.register_smb(video_path, storage_root=smb.root, nas_settings=smb.settings)
-    result = SimpleNamespace(video_id=source.video_id, result_id='smb-result-2',
+    result = SimpleNamespace(video_id=source.video_id, result_id='smb-result-2', stage='asr', language='ja',
                              segments=(SubtitleSegment('segment', 0, 1, '字幕'),))
 
     changed = {**smb.settings, 'password': 'different', 'username': 'another'}
@@ -169,7 +169,7 @@ def test_upload_subtitle_uses_registered_remote_relative_locator(smb, tmp_path, 
     source = manager.register_upload(
         str(local_video), allowed_roots=[str(local_root)], nas_settings=smb.settings,
         remote_root=smb.root, remote_video_path=os.path.join(smb.root, 'category', 'movie.mp4'))
-    result = SimpleNamespace(video_id=source.video_id, result_id='upload-result-1',
+    result = SimpleNamespace(video_id=source.video_id, result_id='upload-result-1', stage='translation', language='en',
                              segments=(SubtitleSegment('segment', 0, 1, '上傳字幕'),))
 
     published = manager.publish_result(source.video_id, result, 'en')
@@ -180,7 +180,7 @@ def test_upload_subtitle_uses_registered_remote_relative_locator(smb, tmp_path, 
                         lambda: os.path.join(SMB_PATH_ROOT, 'upload-w5-changed-check'))
     (smb.folder / 'category' / 'movie.mp4').write_bytes(b'replaced remote video')
     with pytest.raises(ValueError, match='NAS 影片已變更'):
-        manager.publish_result(source.video_id, result, 'zh-TW')
+        manager.publish_result(source.video_id, result, 'en')
     assert not (smb.folder / 'category' / 'movie.zh-TW.srt').exists()
 
 
@@ -256,6 +256,84 @@ def test_subtitle_queue_upload_keeps_nas_source_verified_during_stage(smb, tmp_p
 
     assert tasks.get_task(task['task_id'])['status'] == 'completed'
     assert extracted == [str(local_video)]
+
+
+@pytest.mark.parametrize('mode', ['smb', 'upload'])
+def test_completed_batch_download_hook_keeps_exact_nas_batch_folder(
+        smb, tmp_path, monkeypatch, mode):
+    from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+    from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+    from uav_downloader.daemon.task_manager import DownloadTask
+    from uav_downloader.subtitles import engine
+    from uav_downloader.subtitles.models import SubtitleSegment
+    monkeypatch.setattr(SubtitleTaskManager, 'start_dispatcher', lambda _self: None)
+    resolved_paths = []
+    monkeypatch.setattr(engine, '_extract_audio', lambda video, audio, _log, _cancel:
+                        resolved_paths.append(video) or Path(audio).write_bytes(b'audio'))
+    monkeypatch.setattr(engine, 'run_stage', lambda *args, commit_guard, **kwargs:
+                        commit_guard(lambda: SimpleNamespace(result_id='batch-vad-result')))
+
+    base_settings = {**smb.settings, 'mode': mode}
+    batch_settings = {
+        **base_settings, 'directory': 'category/batch-7',
+        '_subtitle_base_directory': '', '_subtitle_relative_path': 'category/batch-7',
+    }
+    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(base_settings))
+
+    if mode == 'smb':
+        destination = os.path.join(SMB_PATH_ROOT, 'w6-batch-smb')
+        with nas.open_smb_storage(batch_settings, destination):
+            with storage_open(os.path.join(destination, 'movie.mp4'), 'wb') as handle:
+                handle.write(b'batch smb video')
+    else:
+        destination = tmp_path / 'batch-stage'
+        destination.mkdir()
+        video = destination / 'movie.mp4'
+        video.write_bytes(b'batch upload video')
+        upload_root = os.path.join(SMB_PATH_ROOT, 'w6-batch-upload')
+        with nas.open_smb_storage(batch_settings, upload_root):
+            with storage_open(os.path.join(upload_root, 'movie.mp4'), 'wb') as handle:
+                handle.write(video.read_bytes())
+
+    files = SubtitleFileManager(state_path=tmp_path / f'{mode}-batch-sources.json')
+    subtitle_tasks = SubtitleTaskManager(state_path=tmp_path / f'{mode}-batch-tasks.json',
+                                         source_manager=files)
+    task_manager = TaskManager(subtitle_task_manager=subtitle_tasks)
+    task_manager._subtitle_file_manager = files
+    task = DownloadTask('download-batch', 'https://example.test/movie', str(destination),
+                        name='movie', status='completed', nas_settings=batch_settings)
+    task.subtitle_request = {
+        'selected_stages': ['vad'], 'target_languages': [], 'output_languages': [],
+        'allow_reasoning': False,
+        'profile_snapshots': {'vad': {'profile_json': '{}', 'snapshot_id': 'saved-vad'}},
+    }
+
+    if mode == 'smb':
+        with nas.open_smb_storage(batch_settings, destination):
+            task_manager._submit_subtitle_request(task)
+    else:
+        task_manager._submit_subtitle_request(task)
+
+    assert task.error is None
+    video_id = next(iter(files._sources))
+    descriptor = task_manager._subtitle_file_manager._sources[video_id]
+    assert descriptor['nas_identity'][3] == ''
+    locator = descriptor.get('relative_path', descriptor.get('remote_relative_path'))
+    assert locator == os.path.join('category', 'batch-7', 'movie.mp4')
+    with files.resolve(video_id) as source:
+        remote_path = source.publish_path or source.video_path
+        assert remote_path.endswith(locator)
+
+    queued = subtitle_tasks.list_tasks()[0]
+    subtitle_tasks._run_task(queued['task_id'])
+    assert subtitle_tasks.get_task(queued['task_id'])['status'] == 'completed'
+    assert resolved_paths
+
+    published = files.publish_result(video_id, SimpleNamespace(
+        video_id=video_id, stage='translation', language='en', result_id='batch-result',
+        segments=(SubtitleSegment('batch-segment', 0, 1, '批次字幕'),)), 'en')
+    assert published['publish_status'] == 'published'
+    assert (smb.folder / 'category' / 'batch-7' / 'movie.en.srt').exists()
 
 
 def test_resolve_rejects_nested_smb_symlink_added_after_selection(smb, tmp_path, monkeypatch):

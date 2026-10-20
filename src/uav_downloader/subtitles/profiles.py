@@ -106,13 +106,34 @@ def _validate_profile(profile: StageProfile) -> StageProfile:
         base_url = validated["base_url"]
     else:
         base_url = ""
+    canonical_parameters = _canonical_parameters(profile.parameters_json)
     return StageProfile(
         profile_id=profile.profile_id, display_name=profile.display_name.strip(),
         kind=profile.kind, provider=profile.provider,
         capabilities=capabilities, base_url=base_url, model=profile.model.strip(),
-        parameters_json=_canonical_parameters(profile.parameters_json),
+        parameters_json=canonical_parameters,
         credential_ref=profile.credential_ref,
     )
+
+
+def validate_stage_parameters(kind, provider, parameters):
+    """Apply the same pure parameter contract used by the selected adapter."""
+    if kind == "asr":
+        if provider not in ("localai", "openai-compatible"):
+            raise ValueError("所選模型服務不支援時間戳語音辨識")
+        return asr.validate_asr_parameters(parameters)
+    if kind == "vad":
+        if provider != "localai":
+            raise ValueError("所選模型服務不支援獨立語音活動偵測")
+        from uav_downloader.subtitles.vad import validate_vad_parameters
+        return validate_vad_parameters(parameters)
+    if kind == "text":
+        from uav_downloader.subtitles.llm import _validate_text_parameters
+        try:
+            return _validate_text_parameters(provider, parameters)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
+    raise ValueError("模型設定檔類型無效")
 
 
 def _read_raw() -> dict:

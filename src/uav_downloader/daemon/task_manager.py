@@ -963,21 +963,20 @@ class TaskManager:
                 manager = self._subtitle_file_manager = SubtitleFileManager()
             settings = task.nas_settings or {}
             if settings.get('enabled') and settings.get('mode') == 'smb':
-                current = nas.load_settings(secret=True)
-                if manager._nas_identity(current) != manager._nas_identity(settings):
-                    raise ValueError('NAS 設定已變更，無法註冊字幕影片來源')
+                current = self._subtitle_nas_settings(settings, manager)
                 source = manager.register_smb(video_path, storage_root=task.dest,
-                                              nas_settings=current, output_mode='smb')
+                                              nas_settings=current, output_mode='smb',
+                                              batch_relative_path=settings.get('_subtitle_relative_path', ''))
             elif settings.get('enabled') and settings.get('mode') == 'upload':
-                current = nas.load_settings(secret=True)
-                if manager._nas_identity(current) != manager._nas_identity(settings):
-                    raise ValueError('NAS 設定已變更，無法驗證已上傳影片')
+                current = self._subtitle_nas_settings(settings, manager)
+                upload_settings = dict(current, directory=settings.get('directory', ''))
                 root = nas.smb_destination()
-                with nas.open_smb_storage(current, root):
+                with nas.open_smb_storage(upload_settings, root):
                     remote_video = os.path.join(root, os.path.basename(video_path))
                     source = manager.register_upload(
                         video_path, allowed_roots=[task.dest], nas_settings=current,
-                        remote_root=root, remote_video_path=remote_video)
+                        remote_root=root, remote_video_path=remote_video,
+                        batch_relative_path=settings.get('_subtitle_relative_path', ''))
             else:
                 roots = [task.dest]
                 if task.staging_dir:
@@ -997,6 +996,37 @@ class TaskManager:
                 self._save_tasks()
             except Exception:
                 logging.exception('影片已完成，但字幕佇列警告無法保存')
+
+    @staticmethod
+    def _subtitle_nas_settings(settings, manager):
+        """Revalidate base NAS identity while retaining the exact batch folder."""
+        current = nas.load_settings(secret=True)
+        relative = settings.get('_subtitle_relative_path')
+        if relative is None:
+            if manager._nas_identity(current) != manager._nas_identity(settings):
+                raise ValueError('NAS 設定已變更，無法註冊字幕影片來源')
+            return current
+
+        base_directory = settings.get('_subtitle_base_directory')
+        if not isinstance(base_directory, str) or not isinstance(relative, str):
+            raise ValueError('NAS 批次儲存位置無效，無法註冊字幕影片來源')
+        normalized_base = base_directory.replace('\\', '/').strip('/')
+        normalized_relative = relative.replace('\\', '/').strip('/')
+        components = normalized_base.split('/') if normalized_base else []
+        suffix = normalized_relative.split('/') if normalized_relative else []
+        if (not suffix or any(part in ('', '.', '..') for part in components + suffix)
+                or any(ord(char) < 32 for char in normalized_relative)):
+            raise ValueError('NAS 批次儲存位置無效，無法註冊字幕影片來源')
+        expected_directory = '/'.join(components + suffix)
+        if settings.get('directory', '').replace('\\', '/').strip('/') != expected_directory:
+            raise ValueError('NAS 批次儲存位置已變更，無法註冊字幕影片來源')
+        current_base = current.get('directory', '')
+        if not isinstance(current_base, str) or current_base.replace('\\', '/').strip('/') != normalized_base:
+            raise ValueError('NAS 設定已變更，無法註冊字幕影片來源')
+        base_settings = dict(settings, directory=current_base)
+        if manager._nas_identity(current) != manager._nas_identity(base_settings):
+            raise ValueError('NAS 設定已變更，無法註冊字幕影片來源')
+        return current
 
     def _finish_task(self, task: DownloadTask, status: str) -> None:
         with self._lock:

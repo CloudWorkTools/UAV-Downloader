@@ -33,6 +33,12 @@ from uav_downloader.core.storage import probe_destination
 from uav_downloader.metadata import APP_DISPLAY_NAMES, VERSION
 
 
+class SubtitleHttpError(Exception):
+    def __init__(self, status, message):
+        self.status = status
+        self.message = message
+
+
 class DaemonRequestHandler(BaseHTTPRequestHandler):
     """Handles JSON-RPC and REST requests from the Rust Web UI."""
 
@@ -63,7 +69,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Auth-Token")
         self.end_headers()
         self.wfile.write(payload)
@@ -84,10 +90,34 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             raise ValueError(f"無效的 JSON 請求: {exc}")
 
+    def _read_subtitle_json_body(self) -> Dict[str, Any]:
+        content_type = self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
+        if content_type != 'application/json':
+            raise SubtitleHttpError(415, '字幕 API 僅接受 application/json')
+        raw_length = self.headers.get('Content-Length')
+        try:
+            length = int(raw_length) if raw_length is not None else 0
+        except (TypeError, ValueError):
+            raise SubtitleHttpError(400, '請求長度格式無效') from None
+        if length < 0:
+            raise SubtitleHttpError(400, '請求長度格式無效')
+        if length > 1024 * 1024:
+            raise SubtitleHttpError(413, '字幕 API 請求超過大小限制')
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            raise SubtitleHttpError(400, '字幕 API 請求內容不完整')
+        try:
+            body = json.loads(raw.decode('utf-8')) if raw.strip() else {}
+        except (UnicodeError, json.JSONDecodeError):
+            raise SubtitleHttpError(400, '字幕 API JSON 格式無效') from None
+        if not isinstance(body, dict):
+            raise SubtitleHttpError(400, '字幕 API 請求必須是 JSON 物件')
+        return body
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Auth-Token")
         self.end_headers()
 
@@ -98,6 +128,9 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         path = parsed.path.rstrip("/") or "/"
         query = parse_qs(parsed.query)
+
+        if path.startswith('/api/subtitles'):
+            return self._dispatch_subtitle_api('GET', path, None)
 
         try:
             if path == "/api/ping":
@@ -196,6 +229,13 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         path = parsed.path.rstrip("/") or "/"
 
+        if path.startswith('/api/subtitles'):
+            try:
+                body = self._read_subtitle_json_body()
+            except SubtitleHttpError as exc:
+                return self._send_error(exc.message, exc.status)
+            return self._dispatch_subtitle_api('POST', path, body)
+
         try:
             body = self._read_json_body()
         except ValueError as exc:
@@ -264,6 +304,15 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 max_workers = body.get("max_workers")
                 enable_subtitles = body.get("enable_subtitles")
                 subtitle_mode = body.get("subtitle_mode")
+                subtitle_request = None
+                request_spec = body.get('subtitle_request')
+                if request_spec is not None:
+                    from uav_downloader.daemon.subtitle_http import prepare_download_request
+                    from uav_downloader.daemon.subtitle_http import ApiError
+                    try:
+                        subtitle_request = prepare_download_request(request_spec)
+                    except ApiError as exc:
+                        return self._send_error(exc.message, exc.status)
 
                 task = self.task_manager.add_task(
                     url=url,
@@ -274,6 +323,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     subtitle_mode=subtitle_mode,
                     download_cover=body.get("download_cover"),
                     staging_dir=body.get("staging_dir"),
+                    subtitle_request=subtitle_request,
                 )
                 return self._send_json({
                     "success": True,
@@ -395,6 +445,26 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             return self._send_error(str(exc), 500)
 
+    def do_PUT(self) -> None:
+        if not self._check_auth():
+            return self._send_error("未授權 (Unauthorized)", 401)
+        path = urlsplit(self.path).path.rstrip('/') or '/'
+        if not path.startswith('/api/subtitles'):
+            return self._send_error('路徑不存在', 404)
+        try:
+            body = self._read_subtitle_json_body()
+        except SubtitleHttpError as exc:
+            return self._send_error(exc.message, exc.status)
+        return self._dispatch_subtitle_api('PUT', path, body)
+
+    def _dispatch_subtitle_api(self, method, path, body):
+        from uav_downloader.daemon import subtitle_http
+        try:
+            status, value = subtitle_http.route(self, method, path, body)
+        except Exception:
+            return self._send_error('字幕服務發生內部錯誤', 500)
+        return self._send_json(value, status=status)
+
 
 class DaemonServer:
     """Wrapper to start and manage the ThreadingHTTPServer daemon."""
@@ -417,11 +487,22 @@ class DaemonServer:
             max_concurrent=config.get_download_concurrency() if max_concurrent is None else max_concurrent,
             state_path=nas._directory() / "web_download_tasks.json",
         )
+        from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+        from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+        self.subtitle_file_manager = SubtitleFileManager(
+            state_path=nas._directory() / 'subtitle_video_sources.json')
+        self.subtitle_task_manager = SubtitleTaskManager(
+            state_path=nas._directory() / 'web_subtitle_tasks.json',
+            source_manager=self.subtitle_file_manager)
+        self.task_manager._subtitle_file_manager = self.subtitle_file_manager
+        self.task_manager.set_subtitle_task_manager(self.subtitle_task_manager)
         DaemonRequestHandler.task_manager = self.task_manager
         DaemonRequestHandler.auth_token = self.auth_token
 
     def start(self) -> None:
         self.server = ThreadingHTTPServer((self.host, self.port), DaemonRequestHandler)
+        self.server.subtitle_file_manager = self.subtitle_file_manager
+        self.server.subtitle_task_manager = self.subtitle_task_manager
         self.task_manager.start_dispatcher()
         self.thread = threading.Thread(
             target=self.server.serve_forever, daemon=True, name="uav-daemon-http"
@@ -432,6 +513,7 @@ class DaemonServer:
 
     def stop(self) -> None:
         self.task_manager.stop_dispatcher()
+        self.subtitle_task_manager.stop_dispatcher()
         if self.server:
             self.server.shutdown()
             self.server.server_close()

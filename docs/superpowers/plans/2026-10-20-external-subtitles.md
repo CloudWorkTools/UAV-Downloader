@@ -108,7 +108,13 @@ class StageResult:
 
 `subtitle_tasks.submit(video_id, selected_stages, profile_snapshots, target_languages) -> TaskSnapshot`；`subtitle_tasks.redo(video_id, stage, profile_snapshot, language=None, input_result_id=None) -> TaskSnapshot`；`subtitle_tasks.cancel(task_id) -> None`；`subtitle_tasks.resume(task_id) -> TaskSnapshot`。既有 daemon 任務介面保持不變，供下載呼叫端使用。
 
-HTTP 路由前綴為 `/api/subtitles`：`GET/PUT /profiles`、`POST /profiles/test`、`GET /videos`、`GET/POST /tasks`、`GET /tasks/{task_id}` 與 `POST /tasks/{task_id}/action`。任務 action JSON 的 `action` 為 `cancel | resume | reorder | apply_new_settings | redo_stage | retry_publish`；僅在該操作需要時使用 `position`、`profile_id`、`stage`、`language`、`input_result_id` 與 `publish_status`。`GET /videos/{video_id}/results` 列出各階段／語言的最新、上一份及過期狀態；`GET /videos/{video_id}/results/{result_id}` 回傳片段及原文／矯正後文字的比較資訊；`GET /videos/{video_id}/results/{result_id}/content` 回傳可下載的 SRT。`POST /videos/{video_id}/results/{result_id}/action` 使用 `action` = `restore | publish`；只有使用者明確選擇替換時才傳 `replace_existing: true`。所有 JSON 統一使用 `profile_id`、`stage`、`language`、`task_id`、`result_id`、`stale` 與 `publish_status`。即使 Rust 已驗證過，daemon 仍須再次驗證。
+HTTP 路由前綴為 `/api/subtitles`：`GET/PUT /profiles`、`POST /profiles/test`、`GET /videos`、`GET/POST /tasks`、`GET /tasks/{task_id}` 與 `POST /tasks/{task_id}/action`。任務 action JSON 的 `action` 為 `cancel | resume | reorder | apply_new_settings | redo | retry_publish`；僅在該操作需要時使用 `position`、`profile_ids`、`profile_id`、`stage`、`language`、`input_result_id` 與 `publish_status`。`GET /videos/{video_id}/results` 列出階段結果版本及 `stale`／`adopted` 狀態；`GET /videos/{video_id}/results/{result_id}` 回傳區間或字幕片段、上游版本及建立時的非秘密設定快照；`GET /videos/{video_id}/results/{result_id}/content` 一律回傳 JSON `{content_type, filename, content}`。文字結果的 `content` 是 SRT 字串；VAD 結果的 `content` 是 `{start, end}` 區間陣列。Web 以 Blob 顯示或下載該內容，不把內容端點視為原始 HTTP 媒體回應。結果 action 的 `publish` 使用 `output_language` 並要求明確布林值 `replace_existing`；`restore` 只選上一個版本，發布失敗可用 publication ID 再送 `retry_publish`，只重試儲存。下載提交可帶 `subtitle_request`（階段、profile IDs、語言及思考選項）；daemon 在接受下載前驗證並拍下設定快照，沿用下載完成後的既有字幕提交 hook。
+
+`POST /profiles/test` 必須帶 `confirm_external_call: true`；相容性探測實際呼叫所選 adapter 的微型音訊／文字請求，回報 `format_pass`、`reasoning_control`（`supported | unknown | unsupported`）與 `quality: unverified`。只有另帶 `allow_reasoning: true` 才允許文字測試以思考模式送出。自動模型清單失敗時仍允許手動輸入。字幕 JSON POST/PUT 必須使用 `application/json`，daemon 與 Rust 各自設 1 MiB 請求上限；Rust 保留 daemon 狀態碼與 JSON body，且只代理清單內方法和路徑。即使 Rust 已驗證過，daemon 仍須再次驗證。
+
+LM Studio 模型清單使用官方 REST `GET /api/v0/models` 的 `{object: "list", data: [{id, type, ...}]}` 格式；只列出 `llm`／`vlm`（或沒有 `type` 的舊條目），不猜測 `/api/v1/models` 原生清單格式。清單讀取失敗時仍保留手動輸入模型名稱。格式依 [LM Studio REST endpoints](https://lmstudio.ai/docs/developer/rest/endpoints) 文件核對。
+
+恢復上一版本只改變該階段選用的版本，不會呼叫模型。VAD 可恢復選取但不發布 SRT；ASR／原文矯正亦不預設發布日文 SRT。只有明確提供 `output_language` 才發布：ASR／矯正只接受 `ja`，翻譯只接受該版本的目標語言；未選輸出時回報 `publish_status: not_requested`。
 
 ## 工作 1：W1，設定檔、憑證與遷移（#11）
 

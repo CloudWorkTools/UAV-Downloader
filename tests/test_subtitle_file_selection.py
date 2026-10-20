@@ -45,8 +45,8 @@ def test_identical_selected_copies_publish_to_their_registered_files(tmp_path):
     first = files.register(str(first_path), allowed_roots=[str(root)])
     second = files.register(str(second_path), allowed_roots=[str(root)])
 
-    files.publish_result(first.video_id, result(first.video_id, 'result0001', 'first file'), 'ja')
-    files.publish_result(second.video_id, result(second.video_id, 'result0002', 'second file'), 'ja')
+    files.publish_result(first.video_id, result(first.video_id, 'result0001', 'first file', 'asr', 'ja'), 'ja')
+    files.publish_result(second.video_id, result(second.video_id, 'result0002', 'second file', 'asr', 'ja'), 'ja')
 
     assert (root / 'first.ja.srt').read_text(encoding='utf-8').endswith('first file\n')
     assert (root / 'second.ja.srt').read_text(encoding='utf-8').endswith('second file\n')
@@ -106,10 +106,12 @@ def test_registered_source_is_invalid_after_media_changes(tmp_path):
             pass
 
 
-def result(video_id, result_id, text):
+def result(video_id, result_id, text, stage='translation', language='en'):
     return SimpleNamespace(
         video_id=video_id,
         result_id=result_id,
+        stage=stage,
+        language=language,
         segments=() if text is None else (SubtitleSegment('seg-1', 0, 1, text),),
     )
 
@@ -126,7 +128,7 @@ def test_publish_preserves_unknown_srt_and_saves_unique_generated_sidecar(tmp_pa
     files = SubtitleFileManager(state_path=tmp_path / 'sources.json')
     source = files.register(str(video), allowed_roots=[str(root)])
 
-    published = files.publish_result(source.video_id, result(source.video_id, 'result1234', '新字幕'), 'zh-TW')
+    published = files.publish_result(source.video_id, result(source.video_id, 'result1234', '新字幕', language='zh-TW'), 'zh-TW')
 
     assert user_srt.read_bytes() == b'hand edited\n'
     assert published['path'] == 'movie.zh-TW.uav-result1234.srt'
@@ -145,16 +147,16 @@ def test_publish_replaces_only_unchanged_trusted_srt_or_explicitly_replaced_srt(
     files = SubtitleFileManager(state_path=tmp_path / 'sources.json')
     source = files.register(str(video), allowed_roots=[str(root)])
 
-    files.publish_result(source.video_id, result(source.video_id, 'result0001', 'first'), 'ja')
-    files.publish_result(source.video_id, result(source.video_id, 'result0002', 'second'), 'ja')
+    files.publish_result(source.video_id, result(source.video_id, 'result0001', 'first', 'asr', 'ja'), 'ja')
+    files.publish_result(source.video_id, result(source.video_id, 'result0002', 'second', 'asr', 'ja'), 'ja')
     assert canonical.read_text(encoding='utf-8').endswith('second\n')
 
     canonical.write_text('human edit', encoding='utf-8')
-    saved = files.publish_result(source.video_id, result(source.video_id, 'result0003', 'third'), 'ja')
+    saved = files.publish_result(source.video_id, result(source.video_id, 'result0003', 'third', 'asr', 'ja'), 'ja')
     assert saved['path'] == 'movie.ja.uav-result0003.srt'
     assert canonical.read_text(encoding='utf-8') == 'human edit'
 
-    replaced = files.publish_result(source.video_id, result(source.video_id, 'result0004', 'fourth'),
+    replaced = files.publish_result(source.video_id, result(source.video_id, 'result0004', 'fourth', 'asr', 'ja'),
                                     'ja', replace_existing=True)
     assert replaced['path'] == 'movie.ja.srt'
     assert canonical.read_text(encoding='utf-8').endswith('fourth\n')
