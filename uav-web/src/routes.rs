@@ -307,18 +307,47 @@ fn subtitle_method_allowed(path: &str, method: &Method) -> Option<bool> {
             && value != ".."
             && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
     }
+    fn decode_id(value: &str) -> Option<String> {
+        fn hex(byte: u8) -> Option<u8> {
+            match byte {
+                b'0'..=b'9' => Some(byte - b'0'),
+                b'a'..=b'f' => Some(byte - b'a' + 10),
+                b'A'..=b'F' => Some(byte - b'A' + 10),
+                _ => None,
+            }
+        }
+        let input = value.as_bytes();
+        let mut decoded = Vec::with_capacity(input.len());
+        let mut index = 0;
+        while index < input.len() {
+            if input[index] == b'%' {
+                let high = *input.get(index + 1)?;
+                let low = *input.get(index + 2)?;
+                decoded.push((hex(high)? << 4) | hex(low)?);
+                index += 3;
+            } else {
+                decoded.push(input[index]);
+                index += 1;
+            }
+        }
+        let decoded = String::from_utf8(decoded).ok()?;
+        is_id(&decoded).then_some(decoded)
+    }
     let segments: Vec<_> = path.strip_prefix("/api/subtitles/")?.split('/').collect();
     let allowed = match segments.as_slice() {
         ["profiles"] => &[Method::GET, Method::PUT][..],
         ["profiles", "test"] => &[Method::POST][..],
         ["videos"] => &[Method::GET][..],
         ["tasks"] => &[Method::GET, Method::POST][..],
-        ["tasks", task_id] if is_id(task_id) => &[Method::GET][..],
-        ["tasks", task_id, "action"] if is_id(task_id) => &[Method::POST][..],
-        ["videos", video_id, "results"] if is_id(video_id) => &[Method::GET][..],
-        ["videos", video_id, "results", result_id] if is_id(video_id) && is_id(result_id) => &[Method::GET][..],
-        ["videos", video_id, "results", result_id, "content"] if is_id(video_id) && is_id(result_id) => &[Method::GET][..],
-        ["videos", video_id, "results", result_id, "action"] if is_id(video_id) && is_id(result_id) => &[Method::POST][..],
+        ["tasks", task_id] if decode_id(task_id).is_some() => &[Method::GET][..],
+        ["tasks", task_id, "action"] if decode_id(task_id).is_some() => &[Method::POST][..],
+        ["videos", video_id, "results"] if decode_id(video_id).is_some() => &[Method::GET][..],
+        ["videos", video_id, "results", result_id]
+            if decode_id(video_id).is_some() && decode_id(result_id).is_some() => &[Method::GET][..],
+        ["videos", video_id, "results", result_id, "content"]
+            if decode_id(video_id).is_some() && decode_id(result_id).is_some() => &[Method::GET][..],
+        ["videos", video_id, "results", result_id, "action"]
+            if decode_id(video_id).is_some() && decode_id(result_id).is_some() => &[Method::POST][..],
         _ => return None,
     };
     Some(allowed.contains(method))
@@ -512,6 +541,28 @@ mod tests {
             assert_eq!(forwarded.method, method);
             assert_eq!(forwarded.uri.path(), uri);
         }
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn subtitle_proxy_decodes_encoded_ids_for_validation_without_widening_routes() {
+        let (daemon_url, mut seen, shutdown) = mock_daemon().await;
+        let app = app(daemon_url);
+        let encoded = "/api/subtitles/videos/source-v1%3Aabc/results/result%3A1";
+        let response = app.clone().oneshot(Request::get(encoded).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let forwarded = seen.recv().await.unwrap();
+        assert_eq!(forwarded.uri.path(), encoded);
+
+        for path in [
+            "/api/subtitles/videos/source-v1%2Fabc/results/result-1",
+            "/api/subtitles/videos/%2e%2e/results/result-1",
+            "/api/subtitles/videos/source-v1%3Aabc/results/%2e%2e",
+        ] {
+            let response = app.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        assert!(seen.try_recv().is_err(), "encoded slash/traversal IDs must not reach daemon");
         let _ = shutdown.send(());
     }
 

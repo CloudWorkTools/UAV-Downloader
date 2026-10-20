@@ -160,6 +160,24 @@ def test_model_discovery_failure_keeps_manual_model_entry_available(subtitle_htt
     assert result['manual_entry_allowed'] is True
 
 
+def test_profile_test_rejects_unknown_action_without_running_probe(subtitle_http, monkeypatch):
+    from uav_downloader.daemon import subtitle_http as api
+
+    request, _, _ = subtitle_http
+    profiles.save_profile(profiles.StageProfile(
+        profile_id='vad-unknown-action', display_name='VAD', kind='vad', provider='localai',
+        capabilities=('vad',), base_url='http://127.0.0.1:1234/v1', model='vad',
+        parameters_json='{}'))
+    calls = []
+    monkeypatch.setattr(api, '_test_profile', lambda *args, **kwargs: calls.append(args))
+    status, error = request('/api/subtitles/profiles/test', 'POST', {
+        'action': 'unexpected', 'profile_id': 'vad-unknown-action', 'stage': 'vad',
+        'confirm_external_call': True})
+    assert status == 400
+    assert error['error'] == '不支援的模型設定檔測試操作'
+    assert calls == []
+
+
 def test_lmstudio_model_discovery_uses_documented_v0_catalog_shape():
     from uav_downloader.daemon import subtitle_http as api
 
@@ -512,4 +530,3 @@ def test_profile_probe_exercises_vad_asr_and_native_text_routes(subtitle_http):
         fixture.shutdown()
         fixture.server_close()
         thread.join(timeout=2)
-

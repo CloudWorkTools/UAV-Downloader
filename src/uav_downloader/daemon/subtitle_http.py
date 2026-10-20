@@ -180,13 +180,16 @@ def _test_profile(profile, stage, *, allow_reasoning=False):
 
 def _profile_test(body):
     _keys(body, {'action', 'profile_id', 'stage', 'confirm_external_call', 'allow_reasoning'})
+    action = body.get('action')
+    if action not in (None, 'test', 'discover_models'):
+        raise ApiError(400, '不支援的模型設定檔測試操作')
     if body.get('confirm_external_call') is not True:
         raise ApiError(400, '此操作會連線至模型服務，請明確確認後再測試')
     profile_id = _id(body.get('profile_id'), r'[A-Za-z0-9_-]{1,80}', '模型設定檔 ID 格式無效')
     profile = next((item for item in profiles.load_profiles() if item.profile_id == profile_id), None)
     if profile is None:
         raise ApiError(404, '找不到字幕模型設定檔')
-    if body.get('action') == 'discover_models':
+    if action == 'discover_models':
         report = _discover_models(profile)
         report['manual_entry_allowed'] = True
         return report
