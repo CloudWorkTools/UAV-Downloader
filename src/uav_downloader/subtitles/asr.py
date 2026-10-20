@@ -68,6 +68,28 @@ def _validate(value):
     return result
 
 
+def _encrypt_secret(secret):
+    folder = _folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    key_path = folder / 'asr.key'
+    try:
+        descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(os.urandom(32))
+    cipher = AES.new(key_path.read_bytes(), AES.MODE_GCM)
+    encrypted, tag = cipher.encrypt_and_digest(secret.encode('utf-8'))
+    return base64.b64encode(cipher.nonce + tag + encrypted).decode('ascii')
+
+
+def _decrypt_secret(encoded):
+    data = base64.b64decode(encoded, validate=True)
+    cipher = AES.new((_folder() / 'asr.key').read_bytes(), AES.MODE_GCM, nonce=data[:16])
+    return cipher.decrypt_and_verify(data[32:], data[16:32]).decode('utf-8')
+
+
 def load_settings(*, secret=False):
     with _LOCK:
         raw = _read()
@@ -78,9 +100,7 @@ def load_settings(*, secret=False):
             result['api_key'] = environment_key
             if raw.get('api_key_encrypted'):
                 try:
-                    data = base64.b64decode(raw['api_key_encrypted'], validate=True)
-                    cipher = AES.new((_folder() / 'asr.key').read_bytes(), AES.MODE_GCM, nonce=data[:16])
-                    result['api_key'] = cipher.decrypt_and_verify(data[32:], data[16:32]).decode('utf-8')
+                    result['api_key'] = _decrypt_secret(raw['api_key_encrypted'])
                 except Exception:
                     raise ValueError('辨識 API 金鑰無法解密，請重新輸入') from None
         return result
@@ -101,17 +121,7 @@ def save_settings(value):
         folder = _folder()
         folder.mkdir(parents=True, exist_ok=True)
         if key and not clear:
-            key_path = folder / 'asr.key'
-            try:
-                descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                pass
-            else:
-                with os.fdopen(descriptor, 'wb') as stream:
-                    stream.write(os.urandom(32))
-            cipher = AES.new(key_path.read_bytes(), AES.MODE_GCM)
-            encrypted, tag = cipher.encrypt_and_digest(key.encode('utf-8'))
-            raw['api_key_encrypted'] = base64.b64encode(cipher.nonce + tag + encrypted).decode('ascii')
+            raw['api_key_encrypted'] = _encrypt_secret(key)
         fd, temporary = tempfile.mkstemp(dir=folder, prefix='.asr-')
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -125,33 +135,50 @@ def save_settings(value):
         return load_settings()
 
 
-def _request(settings, wav_path):
+def _request(settings, wav_path, language='ja', parameters=None, stage_errors=False):
     headers = {}
     if settings.get('api_key'):
         headers['Authorization'] = 'Bearer ' + settings['api_key']
     # Audio and credentials must not follow redirects or the download proxy.
     with requests.Session() as session:
         session.trust_env = False
-        if settings['base_url'] == DEFAULT_URL:
+        if settings['base_url'] == DEFAULT_URL and settings.get('_install_model', True):
             with session.post(
                     DEFAULT_URL + '/models/' + quote(settings['model'], safe='/'),
                     headers=headers, timeout=(10, 900), allow_redirects=False) as installed:
                 if installed.status_code not in (200, 201, 204):
                     raise ValueError(f'辨識 API 模型下載失敗 HTTP {installed.status_code}')
+        base_url = settings['base_url'].rstrip('/')
+        endpoint = (base_url if base_url.endswith('/audio/transcriptions')
+                    else base_url + '/audio/transcriptions')
+        data = {'model': settings['model'], 'language': language,
+                'response_format': 'verbose_json', 'timestamp_granularities[]': 'segment'}
+        data.update(parameters or {})
         with open(wav_path, 'rb') as audio, session.post(
-                settings['base_url'] + '/audio/transcriptions', headers=headers,
+                endpoint, headers=headers,
                 files={'file': ('audio.wav', audio, 'audio/wav')},
-                data={'model': settings['model'], 'language': 'ja',
-                      'response_format': 'verbose_json', 'timestamp_granularities[]': 'segment'},
+                data=data,
                 timeout=(10, 900), allow_redirects=False, stream=True) as response:
             if response.status_code != 200:
-                raise ValueError(f'辨識 API 回應 HTTP {response.status_code}')
+                message = f'辨識 API 回應 HTTP {response.status_code}'
+                if stage_errors:
+                    from uav_downloader.subtitles.models import StageRequestError
+                    raise StageRequestError(
+                        message, retryable=(response.status_code == 429
+                                            or 500 <= response.status_code <= 599))
+                raise ValueError(message)
             content = bytearray()
             for block in response.iter_content(65536):
                 content.extend(block)
                 if len(content) > MAX_RESPONSE_BYTES:
                     raise ValueError('辨識 API 回應過大')
-    return json.loads(content)
+    try:
+        return json.loads(content)
+    except (UnicodeError, ValueError):
+        if stage_errors:
+            from uav_downloader.subtitles.models import StageRequestError
+            raise StageRequestError('辨識 API 回應 JSON 格式無效', retryable=False) from None
+        raise
 
 
 def _segments(payload, duration):
@@ -277,7 +304,7 @@ def _recognize(source, start, stop, settings, folder, request_path, log_path,
     return segments
 
 
-def transcribe(settings, wav_path, output_base, log_path, cancel_check, progress_callback):
+def transcribe(settings, wav_path, output_base, log_path, cancel_check=None, progress_callback=None):
     from uav_downloader.subtitles import engine
 
     cache = _folder() / 'asr-cache'
@@ -326,14 +353,190 @@ def transcribe(settings, wav_path, output_base, log_path, cancel_check, progress
     return path
 
 
+def plan_transcription_chunks(audio_path, intervals):
+    """Plan resumable ASR requests with stable indices and explicit time ownership."""
+    from uav_downloader.subtitles.models import SpeechInterval, TranscriptionChunk
+    with wave.open(audio_path, 'rb') as source:
+        rate, total_frames = source.getframerate(), source.getnframes()
+        if source.getnchannels() != 1 or source.getsampwidth() != 2 or rate != 16000:
+            raise ValueError('辨識音訊必須為 16 kHz 單聲道 PCM')
+    frame_limit, overlap = CHUNK_SECONDS * rate, int(OVERLAP_SECONDS * rate)
+    chunks, index = [], 0
+    for interval_index, interval in enumerate(intervals):
+        if (not isinstance(interval, SpeechInterval) or type(interval.start) not in (int, float)
+                or type(interval.end) not in (int, float)
+                or not math.isfinite(interval.start) or not math.isfinite(interval.end)
+                or interval.start < 0 or interval.start >= interval.end
+                or interval.end > total_frames / rate):
+            raise ValueError('VAD 語音區間必須是原音訊內合法的秒單位時間')
+        first = int(interval.start * rate)
+        last = min(total_frames, int(math.ceil(interval.end * rate)))
+        for core_start in range(first, last, frame_limit):
+            core_end = min(last, core_start + frame_limit)
+            chunks.append(TranscriptionChunk(
+                index, interval_index, core_start, core_end,
+                max(first, core_start - overlap), min(last, core_end + overlap)))
+            index += 1
+    return tuple(chunks)
+
+
+def transcribe_stage(audio_path, intervals, profile_snapshot, language, cancel_check=None):
+    """Transcribe VAD intervals through the resumable one-request stage seam."""
+    result = []
+    for chunk in plan_transcription_chunks(audio_path, intervals):
+        result.extend(transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check))
+    return result
+
+
+def transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check=None):
+    """Run one planned request; IDs remain stable as chunk index plus local ordinal."""
+    from uav_downloader.subtitles import engine
+    from uav_downloader.subtitles.models import SubtitleSegment, TranscriptionChunk
+    from uav_downloader.subtitles.profiles import capability_report, resolve_credential
+    try:
+        profile = json.loads(profile_snapshot.profile_json)
+    except (TypeError, json.JSONDecodeError):
+        raise ValueError('辨識設定快照格式錯誤') from None
+    if not isinstance(profile, dict) or 'asr' not in capability_report(profile_snapshot)['stages']:
+        raise ValueError('所選設定不支援語音辨識')
+    if profile.get('provider') not in ('localai', 'openai-compatible'):
+        raise ValueError('所選模型服務不支援時間戳語音辨識')
+    parameters = validate_asr_parameters(profile.get('parameters'))
+    if not profile.get('base_url') or not profile.get('model'):
+        raise ValueError('請設定辨識模型服務與模型')
+    language = str(language or '').strip()
+    if not re.fullmatch(r'[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*', language):
+        raise ValueError('辨識來源語言格式錯誤')
+    key = resolve_credential(profile_snapshot.credential_ref, profile['base_url'])
+    stage_base = profile['base_url'].rstrip('/')
+    if not urlsplit(stage_base).path.rstrip('/').endswith('/v1'):
+        stage_base += '/v1'
+    settings = {'base_url': stage_base, 'model': profile['model'], 'api_key': key,
+                '_install_model': False}
+    with wave.open(audio_path, 'rb') as source, tempfile.TemporaryDirectory(
+            prefix='subtitle-asr-', dir=os.path.dirname(audio_path)) as folder:
+        rate, total_frames = source.getframerate(), source.getnframes()
+        if (source.getnchannels() != 1 or source.getsampwidth() != 2 or rate != 16000
+                or not isinstance(chunk, TranscriptionChunk)
+                or type(chunk.index) is not int or chunk.index < 0
+                or type(chunk.interval_index) is not int or chunk.interval_index < 0
+                or any(type(value) is not int for value in (
+                    chunk.core_start_frame, chunk.core_end_frame, chunk.start_frame, chunk.end_frame))
+                or not 0 <= chunk.start_frame <= chunk.core_start_frame < chunk.core_end_frame
+                or not chunk.core_end_frame <= chunk.end_frame <= total_frames):
+            raise ValueError('辨識分塊邊界無效')
+        engine._check_cancel(cancel_check)
+        source.setpos(chunk.start_frame)
+        audio_bytes = source.readframes(chunk.end_frame - chunk.start_frame)
+        chunk_path = os.path.join(folder, f'{chunk.index}.wav')
+        request_path = os.path.join(folder, f'{chunk.index}.json')
+        response_path = os.path.join(folder, f'{chunk.index}.response.json')
+        with wave.open(chunk_path, 'wb') as target:
+            target.setparams(source.getparams())
+            target.writeframes(audio_bytes)
+        request_settings = dict(settings, _language=language, _parameters=parameters,
+                                _stage_errors=True)
+        fd = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as request_file:
+            json.dump(request_settings, request_file)
+        engine._run_process(
+            [sys.executable, '-m', __name__, request_path, chunk_path, response_path],
+            os.path.join(folder, 'worker.log'), cancel_check,
+            timeout_seconds=1850, disk_guard_path=folder)
+        try:
+            envelope = json.loads(Path(response_path).read_bytes())
+            if not isinstance(envelope, dict) or envelope.get('ok') is not True:
+                failure = envelope.get('failure') if isinstance(envelope, dict) else None
+                if isinstance(failure, dict):
+                    from uav_downloader.subtitles.models import StageRequestError
+                    raise StageRequestError(
+                        failure.get('message', '辨識 API 回應無效'),
+                        retryable=failure.get('retryable') is True)
+                raise ValueError(envelope.get('error', '辨識 API 回應無效'))
+            duration = (chunk.end_frame - chunk.start_frame) / rate
+            segments = _stage_segments(envelope.get('payload'), duration)
+        except (OSError, ValueError, TypeError) as exc:
+            from uav_downloader.subtitles.models import StageRequestError
+            if isinstance(exc, StageRequestError):
+                raise
+            raise StageRequestError(str(exc), retryable=False) from None
+        result = []
+        for ordinal, (start, end, text) in enumerate(segments, 1):
+            absolute_start, absolute_end = chunk.start_frame / rate + start, chunk.start_frame / rate + end
+            midpoint = (absolute_start + absolute_end) / 2
+            if chunk.core_start_frame / rate <= midpoint < chunk.core_end_frame / rate:
+                result.append(SubtitleSegment(
+                    f'segment-{chunk.index:06d}-{ordinal:04d}', absolute_start, absolute_end, text))
+        return result
+
+def validate_asr_parameters(parameters):
+    """Validate the supported public ASR parameters without making a request."""
+    if not isinstance(parameters, dict) or set(parameters) - {'prompt', 'temperature'}:
+        raise ValueError('辨識模型參數不受支援')
+    prompt = parameters.get('prompt')
+    if prompt is not None and (not isinstance(prompt, str) or len(prompt) > 4096 or '\x00' in prompt):
+        raise ValueError('辨識模型參數 prompt 格式無效')
+    temperature = parameters.get('temperature')
+    if temperature is not None:
+        try:
+            valid_temperature = (type(temperature) in (int, float)
+                                 and math.isfinite(temperature) and 0 <= temperature <= 2)
+        except (OverflowError, TypeError):
+            valid_temperature = False
+        if not valid_temperature:
+            raise ValueError('辨識模型參數 temperature 格式或範圍無效')
+    return parameters
+
+
+def _stage_segments(payload, duration):
+    if not isinstance(payload, dict) or not isinstance(payload.get('segments'), list):
+        raise ValueError('辨識 API 必須回傳含時間戳的 segments')
+    if len(payload['segments']) > 10000:
+        raise ValueError('辨識 API 回應片段過多')
+    result = []
+    previous = 0.0
+    for item in payload['segments']:
+        if not isinstance(item, dict):
+            raise ValueError('辨識 API 片段格式錯誤')
+        start, end, text = item.get('start'), item.get('end'), item.get('text')
+        try:
+            finite = math.isfinite(start) and math.isfinite(end)
+        except (OverflowError, TypeError):
+            finite = False
+        if (type(start) not in (int, float) or type(end) not in (int, float)
+                or not finite
+                or not 0 <= start < end <= duration or start < previous
+                or not isinstance(text, str) or len(text) > 16384 or '\x00' in text):
+            raise ValueError('辨識 API 必須回傳合法的秒單位片段與文字')
+        previous = start
+        text = ' '.join(text.split())
+        if text:
+            result.append((float(start), float(end), text))
+    return result
+
+
 def _main():
+    from uav_downloader.subtitles.models import StageRequestError
     try:
         settings = json.loads(Path(sys.argv[1]).read_text())
-        result = {'ok': True, 'payload': _request(settings, sys.argv[2])}
+        result = {'ok': True, 'payload': _request(
+            settings, sys.argv[2], settings.get('_language', 'ja'), settings.get('_parameters'),
+            stage_errors=settings.get('_stage_errors') is True)}
+    except StageRequestError as exc:
+        result = {'ok': False, 'failure': {'retryable': exc.retryable, 'message': str(exc)}}
+    except (requests.Timeout, requests.ConnectionError):
+        if 'settings' in locals() and settings.get('_stage_errors') is True:
+            result = {'ok': False, 'failure': {
+                'retryable': True, 'message': '辨識 API 連線逾時或中斷'}}
+        else:
+            result = {'error': '辨識 API 連線或回應失敗，請確認服務、模型與金鑰'}
     except Exception as exc:
         # Provider bodies and exception URLs may expose secrets; never log them.
         message = str(exc) if isinstance(exc, ValueError) and str(exc).startswith('辨識 API') else '辨識 API 連線或回應失敗，請確認服務、模型與金鑰'
-        result = {'error': message}
+        if 'settings' in locals() and settings.get('_stage_errors') is True:
+            result = {'ok': False, 'failure': {'retryable': False, 'message': message}}
+        else:
+            result = {'error': message}
     Path(sys.argv[3]).write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
 
 

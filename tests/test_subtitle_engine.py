@@ -1571,3 +1571,433 @@ def test_translation_worker_rejects_invalid_quality(tmp_path, quality):
             'model_dir': str(tmp_path), 'texts': ['test'],
             'target_token': None, 'quality': quality,
         })
+
+
+def _stage_profile_snapshot(stage, provider='localai', base_url='http://127.0.0.1:1'):
+    import json
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    profile = {
+        'profile_id': f'{stage}-profile', 'display_name': 'Fixture',
+        'kind': 'text' if stage in ('correction', 'translation') else stage,
+        'provider': provider, 'capabilities': [stage], 'base_url': base_url,
+        'model': 'fixture-model', 'parameters': {},
+    }
+    return ProfileSnapshot(json.dumps(profile), None, f'{stage}-snapshot')
+
+
+def test_stage_runner_resumes_only_incomplete_vad_chunks_and_force_redoes(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import results, vad
+    from uav_downloader.subtitles.models import SpeechChunk, SpeechInterval
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.wav'
+    audio.write_bytes(b'fixture audio bytes')
+    chunks = (SpeechChunk(0, 0, 10, 0, 10), SpeechChunk(1, 10, 20, 10, 20))
+    monkeypatch.setattr(vad, 'plan_speech_chunks', lambda _path: chunks)
+    calls = []
+
+    def detect(_path, _snapshot, chunk, _cancel):
+        calls.append(chunk.index)
+        if calls == [0, 1]:
+            raise RuntimeError('temporary failure')
+        return [SpeechInterval(1.0, 2.0)] if chunk.index else []
+
+    monkeypatch.setattr(vad, 'detect_speech_chunk', detect)
+    profile = _stage_profile_snapshot('vad')
+
+    with pytest.raises(RuntimeError, match='temporary failure'):
+        subtitles.run_stage('video-vad', str(audio), 'vad', profile,
+                           execution_id='task-resume')
+    assert results.latest('video-vad', 'vad') is None
+
+    first = subtitles.run_stage('video-vad', str(audio), 'vad', profile,
+                                execution_id='task-resume')
+    assert calls == [0, 1, 1]
+    assert first.intervals == (SpeechInterval(1.0, 2.0),)
+    replay = subtitles.run_stage('video-vad', str(audio), 'vad', profile,
+                                 execution_id='task-resume')
+    assert calls == [0, 1, 1]
+    assert replay.result_id == first.result_id
+    second = subtitles.run_stage('video-vad', str(audio), 'vad', profile,
+                                 execution_id='task-redo')
+    assert calls == [0, 1, 1, 0, 1]
+    assert second.result_id != first.result_id
+    assert results.latest('video-vad', 'vad').result_id == second.result_id
+    assert results.previous('video-vad', 'vad').result_id == first.result_id
+
+
+def test_stage_runner_new_execution_does_not_reuse_failed_task_chunks(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import results, vad
+    from uav_downloader.subtitles.models import SpeechChunk, SpeechInterval
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.wav'
+    audio.write_bytes(b'fixture audio bytes')
+    chunks = (SpeechChunk(0, 0, 10, 0, 10), SpeechChunk(1, 10, 20, 10, 20))
+    monkeypatch.setattr(vad, 'plan_speech_chunks', lambda _path: chunks)
+    calls = []
+
+    def detect(_path, _snapshot, chunk, _cancel):
+        calls.append(chunk.index)
+        if calls == [0, 1]:
+            raise RuntimeError('temporary failure')
+        return [SpeechInterval(float(chunk.index), float(chunk.index + 1))]
+
+    monkeypatch.setattr(vad, 'detect_speech_chunk', detect)
+    profile = _stage_profile_snapshot('vad')
+    with pytest.raises(RuntimeError, match='temporary failure'):
+        subtitles.run_stage(
+            'video-task-isolation', str(audio), 'vad', profile,
+            execution_id='failed-task')
+
+    completed = subtitles.run_stage(
+        'video-task-isolation', str(audio), 'vad', profile,
+        execution_id='new-redo')
+    assert calls == [0, 1, 0, 1]
+    assert completed.intervals == (SpeechInterval(0.0, 2.0),)
+
+
+def test_stage_runner_commit_guard_can_reject_late_cancel_without_success(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import results, vad
+    from uav_downloader.subtitles.models import SpeechChunk
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.wav'
+    audio.write_bytes(b'fixture audio bytes')
+    monkeypatch.setattr(
+        vad, 'plan_speech_chunks',
+        lambda _path: (SpeechChunk(0, 0, 1, 0, 1),))
+    monkeypatch.setattr(vad, 'detect_speech_chunk', lambda *_args: [])
+    did_cancel = []
+
+    def guarded_commit(commit):
+        did_cancel.append(True)
+        raise subtitles.SubtitleCancelled('late cancel')
+
+    with pytest.raises(subtitles.SubtitleCancelled, match='late cancel'):
+        subtitles.run_stage(
+            'video-late-cancel', str(audio), 'vad',
+            _stage_profile_snapshot('vad'), execution_id='task-1',
+            commit_guard=guarded_commit)
+    assert did_cancel == [True]
+    assert results.latest('video-late-cancel', 'vad') is None
+
+
+def test_stage_runner_checks_cancel_immediately_after_adapter_returns(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import results, vad
+    from uav_downloader.subtitles.models import SpeechChunk, SpeechInterval
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.wav'
+    audio.write_bytes(b'fixture audio bytes')
+    monkeypatch.setattr(
+        vad, 'plan_speech_chunks',
+        lambda _path: (SpeechChunk(0, 0, 1, 0, 1),))
+    cancelled = []
+
+    def detect(*_args):
+        cancelled.append(True)
+        return [SpeechInterval(0.0, 1.0)]
+
+    monkeypatch.setattr(vad, 'detect_speech_chunk', detect)
+    with pytest.raises(subtitles.SubtitleCancelled):
+        subtitles.run_stage(
+            'video-cancel-after-adapter', str(audio), 'vad',
+            _stage_profile_snapshot('vad'), execution_id='task-cancelled',
+            cancel_check=lambda: bool(cancelled))
+    assert cancelled == [True]
+    assert results.latest('video-cancel-after-adapter', 'vad') is None
+
+
+def test_translation_stage_uses_http_fixture_and_only_selected_stage(
+        monkeypatch, tmp_path):
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from uav_downloader.subtitles import results
+    from uav_downloader.subtitles.models import SubtitleSegment
+
+    seen = []
+
+    class Fixture(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.path)
+            size = int(self.headers.get('Content-Length', '0'))
+            self.rfile.read(size)
+            if self.path == '/api/show':
+                payload = {'thinking': {'values': [False], 'default': False}}
+            elif self.path == '/api/chat':
+                payload = {'message': {'content': json.dumps([
+                    {'id': 'source-1', 'text': '譯文'}], ensure_ascii=False)}}
+            else:
+                payload = {'error': 'unexpected endpoint'}
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json')
+                body = json.dumps(payload).encode()
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            body = json.dumps(payload, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Fixture)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    source = results.commit_success(results.StageResult(
+        '', 'video-text', 'asr', None, (), _stage_profile_snapshot('asr'),
+        None, (SubtitleSegment('source-1', 0, 1, '原文'),)))
+
+    try:
+        translated = subtitles.run_stage(
+            'video-text', None, 'translation',
+            _stage_profile_snapshot(
+                'translation', 'ollama', f'http://127.0.0.1:{server.server_port}'),
+            target_language='zh-TW', input_result_id=source.result_id,
+            execution_id='http-translation')
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+    assert translated.segments == (SubtitleSegment('source-1', 0, 1, '譯文'),)
+    assert translated.input_result_ids == (source.result_id,)
+    assert seen == ['/api/show', '/api/chat']
+
+
+def test_asr_and_correction_dispatch_only_the_selected_stage(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import asr, llm, results
+    from uav_downloader.subtitles.models import SpeechInterval, SubtitleSegment, TranscriptionChunk
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.bin'
+    audio.write_bytes(b'fixture audio bytes')
+    vad_result = results.commit_success(results.StageResult(
+        '', 'video-dispatch', 'vad', None, (), _stage_profile_snapshot('vad'),
+        (SpeechInterval(0.0, 1.0),), None))
+    chunk = TranscriptionChunk(0, 0, 0, 16000, 0, 16000)
+    monkeypatch.setattr(asr, 'plan_transcription_chunks',
+                        lambda _audio, _intervals: (chunk,))
+    source_segments = (
+        SubtitleSegment('moan', 0.0, 0.2, '[喘ぎ声]'),
+        SubtitleSegment('laugh', 0.2, 0.4, '[笑い]'),
+        SubtitleSegment('music', 0.4, 0.6, '[音楽]'),
+        SubtitleSegment('vocalization', 0.6, 0.8, 'あっ'),
+        SubtitleSegment('sigh', 0.8, 1.0, 'ふぅ'),
+        SubtitleSegment('short', 1.0, 1.2, 'OK!'),
+    )
+    calls = []
+    monkeypatch.setattr(asr, 'transcribe_chunk', lambda *_args:
+                        calls.append('asr') or list(source_segments))
+
+    asr_result = subtitles.run_stage(
+        'video-dispatch', str(audio), 'asr', _stage_profile_snapshot('asr'),
+        input_result_id=vad_result.result_id, execution_id='dispatch-asr')
+    assert calls == ['asr']
+    assert asr_result.segments == source_segments[3:]
+
+    monkeypatch.setattr(llm, 'plan_transform_batches',
+                        lambda segments, _profile: (tuple(segments),))
+    monkeypatch.setattr(llm, 'transform_segments',
+                        lambda _operation, segments, *_args, **_kwargs:
+                        calls.append('correction') or [
+                            SubtitleSegment(item.segment_id, item.start, item.end, '校正')
+                            for item in segments])
+    corrected = subtitles.run_stage(
+        'video-dispatch', str(audio), 'correction',
+        _stage_profile_snapshot('correction'), input_result_id=asr_result.result_id,
+        allow_reasoning=True, execution_id='dispatch-correction')
+
+    assert calls == ['asr', 'correction']
+    assert corrected.input_result_ids == (asr_result.result_id,)
+    assert [(item.segment_id, item.start, item.end) for item in corrected.segments] == [
+        (item.segment_id, item.start, item.end) for item in source_segments[3:]]
+
+
+def test_asr_filters_exact_english_sound_descriptions_but_keeps_dialogue(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import asr, results
+    from uav_downloader.subtitles.models import SpeechInterval, SubtitleSegment, TranscriptionChunk
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.bin'
+    audio.write_bytes(b'fixture audio bytes')
+    vad_result = results.commit_success(results.StageResult(
+        '', 'video-english-sound-cues', 'vad', None, (), _stage_profile_snapshot('vad'),
+        (SpeechInterval(0.0, 2.4),), None))
+    chunk = TranscriptionChunk(0, 0, 0, 38400, 0, 38400)
+    monkeypatch.setattr(asr, 'plan_transcription_chunks',
+                        lambda _audio, _intervals: (chunk,))
+    source_segments = (
+        SubtitleSegment('laughter', 0.0, 0.2, '[laughter]'),
+        SubtitleSegment('laughing', 0.2, 0.4, '[laughing]'),
+        SubtitleSegment('breathing', 0.4, 0.6, '[breathing]'),
+        SubtitleSegment('panting', 0.6, 0.8, '[heavy breathing]'),
+        SubtitleSegment('moaning', 0.8, 1.0, '[moaning]'),
+        SubtitleSegment('panting-label', 1.0, 1.2, '[panting]'),
+        SubtitleSegment('groaning', 1.2, 1.4, '[groaning]'),
+        SubtitleSegment('music', 1.4, 1.6, '[music]'),
+        SubtitleSegment('dialogue', 1.6, 2.2, "I'm having trouble breathing."),
+        SubtitleSegment('quiet', 2.2, 2.4, 'はい'),
+    )
+    monkeypatch.setattr(asr, 'transcribe_chunk', lambda *_args: list(source_segments))
+
+    result = subtitles.run_stage(
+        'video-english-sound-cues', str(audio), 'asr', _stage_profile_snapshot('asr'),
+        input_result_id=vad_result.result_id, execution_id='english-sound-cues')
+
+    assert result.segments == source_segments[-2:]
+
+
+def test_explicit_old_upstream_is_allowed_but_remains_stale(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import llm, results
+    from uav_downloader.subtitles.models import SpeechInterval, SubtitleSegment
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.bin'
+    audio.write_bytes(b'fixture audio bytes')
+    old_vad = results.commit_success(results.StageResult(
+        '', 'video-old', 'vad', None, (), _stage_profile_snapshot('vad'),
+        (SpeechInterval(0.0, 1.0),), None))
+    old_asr = results.commit_success(results.StageResult(
+        '', 'video-old', 'asr', None, (old_vad.result_id,), _stage_profile_snapshot('asr'),
+        None, (SubtitleSegment('seg-1', 0, 1, '原文'),)))
+    results.commit_success(results.StageResult(
+        '', 'video-old', 'vad', None, (), _stage_profile_snapshot('vad'),
+        (SpeechInterval(1.0, 2.0),), None))
+
+    monkeypatch.setattr(llm, 'plan_transform_batches',
+                        lambda segments, _profile: (tuple(segments),))
+    monkeypatch.setattr(llm, 'transform_segments',
+                        lambda _operation, segments, *_args, **_kwargs: list(segments))
+    with pytest.raises(subtitles.SubtitleError, match='已過期'):
+        subtitles.run_stage(
+            'video-old', str(audio), 'correction', _stage_profile_snapshot('correction'),
+            allow_reasoning=True, execution_id='old-reject')
+
+    selected = subtitles.run_stage(
+        'video-old', str(audio), 'correction', _stage_profile_snapshot('correction'),
+        input_result_id=old_asr.result_id, allow_reasoning=True,
+        execution_id='old-explicit')
+    assert selected.input_result_ids == (old_asr.result_id,)
+    assert selected.stale is True
+
+
+def test_empty_vad_result_is_a_successful_version(monkeypatch, tmp_path):
+    from uav_downloader.subtitles import results, vad
+    from uav_downloader.subtitles.models import SpeechChunk
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.bin'
+    audio.write_bytes(b'fixture audio bytes')
+    monkeypatch.setattr(
+        vad, 'plan_speech_chunks',
+        lambda _path: (SpeechChunk(0, 0, 1, 0, 1),))
+    monkeypatch.setattr(vad, 'detect_speech_chunk', lambda *_args: [])
+
+    result = subtitles.run_stage(
+        'video-empty', str(audio), 'vad', _stage_profile_snapshot('vad'),
+        execution_id='empty-vad')
+
+    assert result.intervals == ()
+    assert results.latest('video-empty', 'vad').result_id == result.result_id
+
+
+def test_no_voice_asr_stage_succeeds_without_transcription_calls(
+        monkeypatch, tmp_path):
+    import wave
+
+    from uav_downloader.subtitles import asr, results
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.wav'
+    with wave.open(str(audio), 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b'\0\0' * 16000)
+    vad_result = results.commit_success(results.StageResult(
+        '', 'video-silent', 'vad', None, (), _stage_profile_snapshot('vad'),
+        (), None))
+    calls = []
+    monkeypatch.setattr(asr, 'transcribe_chunk',
+                        lambda *_args: calls.append('transcribe'))
+
+    result = subtitles.run_stage(
+        'video-silent', str(audio), 'asr', _stage_profile_snapshot('asr'),
+        input_result_id=vad_result.result_id, execution_id='silent-asr')
+
+    assert calls == []
+    assert result.segments == ()
+
+
+def test_correction_preserves_every_selected_segment_id_and_time(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import llm, results
+    from uav_downloader.subtitles.models import SubtitleSegment
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.bin'
+    audio.write_bytes(b'fixture audio bytes')
+    source_segments = (
+        SubtitleSegment('moan', 0.0, 0.2, '[喘ぎ声]'),
+        SubtitleSegment('laugh', 0.2, 0.4, '[笑い]'),
+        SubtitleSegment('music', 0.4, 0.6, '[音楽]'),
+        SubtitleSegment('vocalization', 0.6, 0.8, 'あっ'),
+        SubtitleSegment('sigh', 0.8, 1.0, 'ふぅ'),
+        SubtitleSegment('short', 1.0, 1.2, 'OK!'),
+    )
+    source = results.commit_success(results.StageResult(
+        '', 'video-short-cue', 'asr', None, (), _stage_profile_snapshot('asr'),
+        None, source_segments))
+    monkeypatch.setattr(
+        llm, 'plan_transform_batches',
+        lambda segments, _profile: (tuple(segments),))
+    calls = []
+
+    def transform(_operation, segments, *_args, **_kwargs):
+        calls.append(tuple(segment.text for segment in segments))
+        return list(segments)
+
+    monkeypatch.setattr(llm, 'transform_segments', transform)
+    result = subtitles.run_stage(
+        'video-short-cue', str(audio), 'correction',
+        _stage_profile_snapshot('correction'), input_result_id=source.result_id,
+        execution_id='short-cue')
+
+    assert calls == [tuple(item.text for item in source_segments)]
+    assert result.segments == source_segments
+
+
+def test_retry_classifier_retries_only_explicit_transient_failures():
+    from uav_downloader.subtitles import llm
+    from uav_downloader.subtitles.models import StageRequestError
+
+    assert subtitles.is_retryable_stage_error(
+        subtitles.SubtitleProcessTimeout('timeout'))
+    assert subtitles.is_retryable_stage_error(llm.LlmTranslationError('HTTP 429'))
+    assert subtitles.is_retryable_stage_error(subtitles.SubtitleError('HTTP 503'))
+    assert not subtitles.is_retryable_stage_error(llm.LlmTranslationError('HTTP 401'))
+    assert not subtitles.is_retryable_stage_error(llm.LlmTranslationError('回應格式無效'))
+    assert not subtitles.is_retryable_stage_error(
+        subtitles.SubtitleCancelled('cancelled'))
+    assert subtitles.is_retryable_stage_error(
+        StageRequestError('HTTP 503', retryable=True))
+    assert not subtitles.is_retryable_stage_error(
+        StageRequestError('HTTP 503', retryable=False))

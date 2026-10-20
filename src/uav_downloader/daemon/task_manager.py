@@ -57,6 +57,7 @@ class DownloadTask:
     paused_event: threading.Event = field(default_factory=threading.Event)
     staging_dir: str = ''
     folder_policy: str = ''
+    subtitle_request: Optional[dict] = field(default=None, repr=False)
 
     def set_phase(self, message, done=0, total=0):
         self.phase, self.phase_done, self.phase_total = message, done, total
@@ -109,7 +110,7 @@ class DownloadTask:
 class TaskManager:
     """Manages queue, concurrency, and execution of video downloads."""
 
-    def __init__(self, max_concurrent: int = 2, state_path=None):
+    def __init__(self, max_concurrent: int = 2, state_path=None, subtitle_task_manager=None):
         self._lock = threading.RLock()
         self._state_path = Path(state_path) if state_path is not None else None
         self._last_snapshot = None
@@ -120,6 +121,7 @@ class TaskManager:
         self._active: Dict[str, DownloadTask] = {}  # task_id -> task
         self._worker_thread: Optional[threading.Thread] = None
         self._running = True
+        self._subtitle_task_manager = subtitle_task_manager
         if self._state_path is not None and self._state_path.exists():
             with self._state_path.open(encoding="utf-8") as source:
                 records = json.load(source)
@@ -168,6 +170,7 @@ class TaskManager:
                 record['dest'] = task.dest
                 record['nas_settings'] = {key: value for key, value in task.nas_settings.items()
                                           if key not in ('password', 'password_encrypted', 'password_saved')}
+                record['subtitle_request'] = task.subtitle_request
                 if isinstance(task.files, DownloadFiles):
                     record['files'] = task.files.snapshot()
                 records.append(record)
@@ -193,6 +196,10 @@ class TaskManager:
                 )
                 self._worker_thread.start()
 
+    def set_subtitle_task_manager(self, manager) -> None:
+        """Attach the daemon's shared subtitle queue manager."""
+        self._subtitle_task_manager = manager
+
     def stop_dispatcher(self) -> None:
         """Preserve partial downloads when the service stops."""
         with self._lock:
@@ -217,6 +224,7 @@ class TaskManager:
         batch_destination=None,
         folder_policy="",
         defer_start=False,
+        subtitle_request=None,
     ) -> DownloadTask:
         subtitle_mode = config.get_subtitle_pref() if subtitle_mode is None else subtitle_mode
         if subtitle_mode not in config.VALID_SUBTITLE_PREFS:
@@ -225,6 +233,36 @@ class TaskManager:
             raise ValueError("字幕開關必須為開啟或關閉")
         if download_cover is not None and not isinstance(download_cover, bool):
             raise ValueError("下載封面必須為開啟或關閉")
+        if subtitle_request is not None:
+            if not isinstance(subtitle_request, dict):
+                raise ValueError('字幕工作要求格式無效')
+            from uav_downloader.subtitles.profiles import ProfileSnapshot
+            snapshots = subtitle_request.get('profile_snapshots')
+            stages = subtitle_request.get('selected_stages')
+            if (('video_id' in subtitle_request and subtitle_request['video_id'] is not None
+                 and (not isinstance(subtitle_request['video_id'], str) or not subtitle_request['video_id']))
+                    or not isinstance(stages, (list, tuple)) or not stages
+                    or any(stage not in ('vad', 'asr', 'correction', 'translation') for stage in stages)
+                    or not isinstance(snapshots, dict)):
+                raise ValueError('字幕工作要求缺少設定快照')
+            subtitle_request = dict(subtitle_request)
+            if not isinstance(subtitle_request.get('allow_reasoning', False), bool):
+                raise ValueError('推理模式選項無效')
+            subtitle_request['profile_snapshots'] = {
+                key: ({'profile_json': value.profile_json,
+                       'credential_ref': value.credential_ref,
+                       'snapshot_id': value.snapshot_id}
+                      if isinstance(value, ProfileSnapshot) else value)
+                for key, value in snapshots.items()
+            }
+            subtitle_request = {key: subtitle_request[key] for key in (
+                'video_id', 'selected_stages', 'target_languages', 'output_languages',
+                'profile_snapshots', 'input_result_id', 'allow_reasoning') if key in subtitle_request}
+            try:
+                subtitle_request = json.loads(json.dumps(
+                    subtitle_request, ensure_ascii=False, allow_nan=False))
+            except (TypeError, ValueError):
+                raise ValueError('字幕工作要求格式無效') from None
         enable_subtitles = subtitle_mode != "none" if enable_subtitles is None else enable_subtitles
         download_cover = config.get_download_cover() if download_cover is None else download_cover
         staging_dir = self._staging_directory(config._load_prefs().get('staging_dir', '') if staging_dir is None else staging_dir)
@@ -269,6 +307,7 @@ class TaskManager:
             enable_subtitles=enable_subtitles,
             download_cover=download_cover,
             subtitle_mode=subtitle_mode if enable_subtitles else "none",
+            subtitle_request=subtitle_request,
         )
 
         with self._lock:
@@ -787,7 +826,7 @@ class TaskManager:
                 task.status = 'publishing'
 
             # Check for AI subtitles if enabled (default false)
-            if task.enable_subtitles and task.subtitle_mode != "none":
+            if task.enable_subtitles and task.subtitle_mode != "none" and not task.subtitle_request:
                 task.status = "subtitles"
                 task.set_phase('處理影片字幕')
                 task.updated_at = datetime.now(timezone.utc).isoformat()
@@ -819,6 +858,8 @@ class TaskManager:
             self._finish_task(task, "completed")
             if task.status != "completed":
                 return
+
+            self._submit_subtitle_request(task)
 
             # Record to history manager
             try:
@@ -902,6 +943,90 @@ class TaskManager:
         except Exception as exc:
             # Subtitle error does not fail the whole download if MP4 succeeded
             task.error = f"影片已完成，但字幕生成失敗: {exc}"
+
+    def _submit_subtitle_request(self, task: DownloadTask) -> None:
+        request = task.subtitle_request
+        if not request:
+            return
+        try:
+            from uav_downloader.subtitles.profiles import ProfileSnapshot
+            if self._subtitle_task_manager is None:
+                raise RuntimeError('字幕工作佇列尚未接入')
+            snapshots = {
+                key: ProfileSnapshot(value['profile_json'], value.get('credential_ref'), value['snapshot_id'])
+                for key, value in request['profile_snapshots'].items()
+            }
+            video_path = os.path.join(task.dest, f'{task.name}.mp4')
+            from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+            manager = getattr(self, '_subtitle_file_manager', None)
+            if manager is None:
+                manager = self._subtitle_file_manager = SubtitleFileManager()
+            settings = task.nas_settings or {}
+            if settings.get('enabled') and settings.get('mode') == 'smb':
+                current = self._subtitle_nas_settings(settings, manager)
+                source = manager.register_smb(video_path, storage_root=task.dest,
+                                              nas_settings=current, output_mode='smb',
+                                              batch_relative_path=settings.get('_subtitle_relative_path', ''))
+            elif settings.get('enabled') and settings.get('mode') == 'upload':
+                current = self._subtitle_nas_settings(settings, manager)
+                upload_settings = dict(current, directory=settings.get('directory', ''))
+                root = nas.smb_destination()
+                with nas.open_smb_storage(upload_settings, root):
+                    remote_video = os.path.join(root, os.path.basename(video_path))
+                    source = manager.register_upload(
+                        video_path, allowed_roots=[task.dest], nas_settings=current,
+                        remote_root=root, remote_video_path=remote_video,
+                        batch_relative_path=settings.get('_subtitle_relative_path', ''))
+            else:
+                roots = [task.dest]
+                if task.staging_dir:
+                    roots.append(task.staging_dir)
+                source = manager.register(video_path, allowed_roots=roots,
+                                          output_mode='local')
+            self._subtitle_task_manager.submit(
+                source.video_id, request.get('selected_stages'), snapshots,
+                request.get('target_languages', []), video_path=video_path,
+                input_result_id=request.get('input_result_id'),
+                allow_reasoning=request.get('allow_reasoning', False),
+                output_languages=request.get('output_languages', []))
+        except Exception:
+            logging.exception('影片已下載完成，但無法提交字幕工作')
+            task.error = '影片完成，字幕未能加入佇列'
+            try:
+                self._save_tasks()
+            except Exception:
+                logging.exception('影片已完成，但字幕佇列警告無法保存')
+
+    @staticmethod
+    def _subtitle_nas_settings(settings, manager):
+        """Revalidate base NAS identity while retaining the exact batch folder."""
+        current = nas.load_settings(secret=True)
+        relative = settings.get('_subtitle_relative_path')
+        if relative is None:
+            if manager._nas_identity(current) != manager._nas_identity(settings):
+                raise ValueError('NAS 設定已變更，無法註冊字幕影片來源')
+            return current
+
+        base_directory = settings.get('_subtitle_base_directory')
+        if not isinstance(base_directory, str) or not isinstance(relative, str):
+            raise ValueError('NAS 批次儲存位置無效，無法註冊字幕影片來源')
+        normalized_base = base_directory.replace('\\', '/').strip('/')
+        normalized_relative = relative.replace('\\', '/').strip('/')
+        components = normalized_base.split('/') if normalized_base else []
+        suffix = normalized_relative.split('/') if normalized_relative else []
+        if (not suffix or any(part in ('', '.', '..') for part in components + suffix)
+                or any(ord(char) < 32 for char in normalized_relative)):
+            raise ValueError('NAS 批次儲存位置無效，無法註冊字幕影片來源')
+        expected_directory = '/'.join(components + suffix)
+        if settings.get('directory', '').replace('\\', '/').strip('/') != expected_directory:
+            raise ValueError('NAS 批次儲存位置已變更，無法註冊字幕影片來源')
+        current_base = current.get('directory', '')
+        if not isinstance(current_base, str) or current_base.replace('\\', '/').strip('/') != normalized_base:
+            raise ValueError('NAS 設定已變更，無法註冊字幕影片來源')
+        base_settings = dict(settings, directory=current_base)
+        if manager._nas_identity(current) != manager._nas_identity(base_settings):
+            raise ValueError('NAS 設定已變更，無法註冊字幕影片來源')
+        return current
 
     def _finish_task(self, task: DownloadTask, status: str) -> None:
         with self._lock:

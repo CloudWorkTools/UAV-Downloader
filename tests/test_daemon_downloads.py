@@ -752,6 +752,53 @@ def test_staging_keeps_sources_after_publish_failure_and_retries_owned_outputs(m
     assert not list(Path(staging).iterdir())
 
 
+def test_new_subtitle_request_failure_keeps_download_completed(manager, monkeypatch, tmp_path):
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    request = {
+        'video_id': 'downloaded-video',
+        'selected_stages': ['vad'],
+        'target_languages': [],
+        'profile_snapshots': {'vad': ProfileSnapshot(
+            '{"capabilities":["vad"],"profile_id":"vad"}', None, 'snapshot')},
+        'video_path': '/tmp/untrusted-video.mp4',
+        'allow_reasoning': True,
+        'api_key': 'must-not-persist',
+    }
+    task = manager.add_task('https://missav.ai/mimk-290', enable_subtitles=True,
+                            subtitle_mode='ja', subtitle_request=request)
+    calls = []
+    def download(job):
+        calls.append('download')
+        Path(job.dest_folder()).mkdir(parents=True, exist_ok=True)
+        (Path(job.dest_folder()) / 'MIMK-290.mp4').write_bytes(b'completed-video')
+        return True
+    class FailingSubtitleQueue:
+        arguments = None
+        def submit(self, *args, **kwargs):
+            self.arguments = (args, kwargs)
+            raise OSError('subtitle queue unavailable')
+
+    queue = FailingSubtitleQueue()
+    manager._subtitle_task_manager = queue
+    monkeypatch.setattr(manager, '_run_subtitles', lambda *_: pytest.fail('new request must use the independent queue'))
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+
+    assert task.status == 'completed'
+    assert task.error == '影片完成，字幕未能加入佇列'
+    assert (Path(task.dest) / 'MIMK-290.mp4').read_bytes() == b'completed-video'
+    assert calls == ['download']
+    assert queue.arguments[1]['video_path'] == str(Path(task.dest) / 'MIMK-290.mp4')
+    assert queue.arguments[1]['allow_reasoning'] is True
+    assert queue.arguments[0][0].startswith('source-v1:')
+    assert queue.arguments[0][0] != 'downloaded-video'
+    with manager._subtitle_file_manager.resolve(queue.arguments[0][0]) as registered:
+        assert registered.video_path == queue.arguments[1]['video_path']
+    assert 'api_key' not in task.subtitle_request
+    assert 'video_path' not in task.subtitle_request
+
+
 @pytest.mark.parametrize('policy,expected', [('merge', 'skipped'), ('overwrite', 'completed'), ('new', 'completed')])
 def test_batch_policy_controls_existing_video_and_history(manager, monkeypatch, tmp_path, policy, expected):
     from uav_downloader.daemon import download_batch

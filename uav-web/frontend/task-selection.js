@@ -2,6 +2,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
   const selected = new Set();
   let eligible = new Set();
   let busy = false;
+  let selecting = false;
   const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'paused', 'failed'].includes(task?.status);
   let tasksById = new Map();
   const canAction = (task, action) => ({
@@ -10,6 +11,18 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     retry: ['failed', 'cancelled'], remove: ['completed', 'skipped', 'cancelled', 'failed']
   }[action] || []).includes(task?.status);
   function update() {
+    const mode = document.getElementById('queue-selection-mode');
+    if (mode) {
+      mode.disabled = busy || (!eligible.size && !selecting);
+      mode.textContent = selecting ? '完成' : '選取';
+      mode.setAttribute?.('aria-pressed', String(selecting));
+    }
+    const bar = document.getElementById('queue-batch-actions');
+    if (bar) bar.hidden = !selecting;
+    const count = document.getElementById('queue-selection-count');
+    if (count) count.textContent = `已選 ${selected.size} 項`;
+    document.getElementById('tasks-container')?.classList?.toggle('selecting', selecting);
+
     const all = eligible.size > 0 && [...eligible].every(id => selected.has(id));
     const toggle = document.getElementById('select-tasks-button');
     toggle.disabled = busy || !eligible.size;
@@ -41,14 +54,14 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
   }
   function toggle(id, checked) {
     if (busy || !eligible.has(id)) return;
-    if (checked) selected.add(id);
+    if (checked) { selecting = true; selected.add(id); }
     else selected.delete(id);
     update();
   }
   function toggleAll() {
     if (busy) return;
     if (eligible.size && [...eligible].every(id => selected.has(id))) selected.clear();
-    else for (const id of eligible) selected.add(id);
+    else { selecting = true; for (const id of eligible) selected.add(id); }
     update();
   }
   async function cancel(ids = [...selected]) {
@@ -195,5 +208,11 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     } catch (error) { status.textContent = error.message; }
     finally { busy = false; save.disabled = false; update(); }
   }
-  return {setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, update, edit, saveEdit, updateEditStorage};
+  function toggleMode() {
+    if (busy) return;
+    selecting = !selecting;
+    if (!selecting) selected.clear();
+    update();
+  }
+  return {toggleMode, setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, update, edit, saveEdit, updateEditStorage};
 };

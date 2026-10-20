@@ -13,6 +13,10 @@ try {
     const check = (condition, message) => {if (!condition) throw Error(message);};
     const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     const field = id => document.getElementById('batch-' + id);
+    const encodedPath = 'smb://nas/videos/%E4%B8%AD%E6%96%87%20folder';
+    if (window.formatStoragePath(encodedPath) !== 'smb://nas/videos/中文 folder') throw Error('SMB path must display readable text');
+    if (window.formatStoragePath('/downloads/100%20literal') !== '/downloads/100%20literal') throw Error('Local path must stay literal');
+    if (window.formatStoragePath('smb://nas/100%folder') !== 'smb://nas/100%folder') throw Error('Malformed escapes must remain visible');
     const dialog = document.getElementById('download-batch-dialog');
     const requests = [];
     let fail = false, lost = false, slow, query = '台北空拍', received;

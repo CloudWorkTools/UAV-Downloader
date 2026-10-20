@@ -11,12 +11,20 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'uav-task-menu-'));
 try {
   const page = path.join(temporary, 'test.html');
   fs.writeFileSync(page, fixture + '<script>' +
+    fs.readFileSync('uav-web/frontend/download-batch.js', 'utf8') +
     fs.readFileSync('uav-web/frontend/video-selection.js', 'utf8') +
     fs.readFileSync('uav-web/frontend/task-selection.js', 'utf8') + script + `
     const check = (condition, message) => { if (!condition) throw new Error(message); };
     (async () => {
       const task = {task_id:'menu-test', status:'downloading', name:'Test video', progress:10, total_segments:100};
       renderTasks([task]);
+      check(document.getElementById('queue-batch-actions').hidden, 'Batch actions must start hidden');
+      document.getElementById('queue-selection-mode').click();
+      check(!document.getElementById('queue-batch-actions').hidden, 'Selection mode must expose batch controls');
+      document.getElementById('select-tasks-button').click();
+      check(document.getElementById('queue-selection-count').textContent === '已選 1 項', 'Selected count must update');
+      document.getElementById('queue-selection-mode').click();
+      check(document.getElementById('queue-batch-actions').hidden && !document.querySelector('#tasks-container input').checked, 'Leaving selection must clear checks');
       const menu = document.querySelector('#tasks-container details');
       menu.querySelector('summary').click();
       await new Promise(resolve => setTimeout(resolve, 0));

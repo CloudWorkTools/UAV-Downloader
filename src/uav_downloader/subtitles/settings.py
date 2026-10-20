@@ -27,12 +27,18 @@ OPENAI = "openai"
 ANTHROPIC = "anthropic"
 GEMINI = "gemini"
 OPENAI_COMPATIBLE = "openai-compatible"
+LOCALAI = "localai"
+OLLAMA = "ollama"
+LMSTUDIO = "lmstudio"
 PROVIDERS = (
     LOCAL,
     OPENAI,
     ANTHROPIC,
     GEMINI,
     OPENAI_COMPATIBLE,
+    LOCALAI,
+    OLLAMA,
+    LMSTUDIO,
 )
 
 # Models remain editable in the UI.  These are conservative starting values,
@@ -52,6 +58,9 @@ PROVIDER_DEFAULTS = {
         "model": "gemini-3.5-flash-lite",
     },
     OPENAI_COMPATIBLE: {"base_url": "", "model": ""},
+    LOCALAI: {"base_url": "", "model": ""},
+    OLLAMA: {"base_url": "", "model": ""},
+    LMSTUDIO: {"base_url": "", "model": ""},
 }
 
 _SCHEMA = 1
@@ -59,7 +68,6 @@ _MAX_SECRET_LENGTH = 4096
 _MAX_MODEL_LENGTH = 160
 _MAX_URL_LENGTH = 2048
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # Keep the original entropy bytes forever: changing them would make existing
 # DPAPI-protected API keys undecryptable after the UAV rename.
 _DPAPI_ENTROPY = b"JableTV.translation-api.v1"
@@ -86,7 +94,8 @@ class TranslationSettings:
 
     @property
     def credential_available(self) -> bool:
-        return bool(self.api_key) or self.provider == OPENAI_COMPATIBLE
+        return bool(self.api_key) or self.provider in {
+            OPENAI_COMPATIBLE, LOCALAI, OLLAMA, LMSTUDIO}
 
 def _settings_path() -> str:
     return str(product_data_dir() / "translation_api.json")
@@ -121,13 +130,9 @@ def _normalize_base_url(value: object, provider: str) -> str:
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise TranslationSettingsError(
             "Translation API URLs cannot contain credentials, query, or fragment")
-    if parsed.scheme == "http":
-        if host not in _LOOPBACK_HOSTS:
-            raise TranslationSettingsError(
-                "Translation API URLs must use HTTPS except on this computer")
-    elif parsed.scheme != "https":
+    if parsed.scheme not in ("http", "https"):
         raise TranslationSettingsError(
-            "Translation API URLs must use HTTPS except on this computer")
+            "Translation API URLs must use HTTP or HTTPS")
     if not host:
         raise TranslationSettingsError("A valid translation API URL is required")
     path = parsed.path.rstrip("/")

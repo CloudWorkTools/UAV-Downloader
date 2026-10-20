@@ -22,10 +22,22 @@ fn test_download_request_serialization() {
         enable_subtitles: Some(false),
         download_cover: Some(true),
         subtitle_mode: Some("none".to_string()),
+        subtitle_request: Some(serde_json::json!({
+            "selected_stages": ["asr"],
+            "profile_ids": {"asr": "asr-one"},
+            "target_languages": [],
+            "output_languages": ["ja"]
+        })),
     };
 
     let serialized = serde_json::to_string(&req).expect("Failed to serialize");
     assert!(serialized.contains("https://jable.tv/videos/test/"));
     assert!(serialized.contains("1080"));
     assert!(serialized.contains("/downloads/.staging"));
+    assert!(serialized.contains("\"subtitle_request\""));
+
+    let mut legacy = req;
+    legacy.subtitle_request = None;
+    let legacy_json = serde_json::to_value(legacy).unwrap();
+    assert!(legacy_json.get("subtitle_request").is_none());
 }

@@ -50,6 +50,22 @@
     #category-groups button { width: 100%; text-align: left; height: auto; min-height: 40px; padding: 6px 8px; overflow-wrap: anywhere; }
     #video-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); }
     #category-sidebar { max-height: 45dvh; overflow-y: auto; }
+    [hidden] { display: none !important; }
+    #tab-queue { min-width: 0; overflow-wrap: anywhere; }
+    #tasks-container > div { min-width: 0; max-width: 100%; }
+    #tasks-container input[type="checkbox"] { display: none; }
+    #tasks-container.selecting input[type="checkbox"] { display: block; }
+    .task-info-popup { overflow-wrap: anywhere; max-height: 60dvh; overflow-y: auto; }
+    .storage-path { white-space: normal; overflow-wrap: anywhere; }
+    @media (max-width: 639px) {
+      #tab-browse .browse-toolbar { padding: 12px; gap: 8px; }
+      .browse-toolbar .browse-search { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .browse-search #category-select { width: 100%; min-width: 0; max-width: none; padding-inline: 8px; }
+      .browse-search #search-input { grid-column: span 2; width: 100%; min-width: 0; }
+      .browse-search button { width: 100%; min-width: 0; padding-inline: 6px; }
+      #tasks-container .task-info-popup { position: fixed; left: 16px; right: 16px; top: 25%; width: auto; max-width: none; }
+      #download-batch-dialog { padding: 16px; }
+    }
     @media (min-width: 900px) {
       .browse-layout { grid-template-columns: 180px minmax(0, 1fr); }
       .category-sidebar { position: sticky; top: 128px; min-width: 0; }
@@ -78,6 +94,7 @@
         <button onclick="switchTab('browse')" id="tab-btn-browse" class="tab-btn h-10 shrink-0 px-3.5 rounded-lg text-sm font-medium transition bg-brand-600 text-white shadow-sm shadow-brand-600/30">
           🔍 瀏覽
         </button>
+        <button onclick="switchTab('subtitles')" id="tab-btn-subtitles" data-testid="subtitle-tab" class="tab-btn h-10 shrink-0 px-3.5 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832]">字幕工作</button>
         <button onclick="switchTab('queue')" id="tab-btn-queue" class="tab-btn h-10 shrink-0 px-3.5 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-[#282832] relative">
           ⬇️ 下載佇列
           <span id="queue-badge" class="hidden ml-1 px-1.5 py-0.2 text-[10px] bg-brand-600 text-white rounded-full">0</span>
@@ -107,7 +124,7 @@
     <!-- TAB 1: BROWSE -->
     <section id="tab-browse" class="tab-content space-y-6">
       <!-- Site Switcher & Search Bar -->
-      <div class="bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] flex flex-col xl:flex-row gap-4 justify-between items-center shadow-lg">
+      <div class="browse-toolbar bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a] flex flex-col xl:flex-row gap-4 justify-between items-center shadow-lg">
         <!-- Site Buttons -->
         <div class="flex items-center gap-2 overflow-x-auto w-full xl:w-auto pb-1 xl:pb-0">
           <button onclick="selectSite('JableTV')" class="site-btn h-10 shrink-0 whitespace-nowrap px-4 rounded-lg text-sm font-medium bg-brand-600 text-white" data-site="JableTV">JableTV</button>
@@ -117,7 +134,7 @@
         </div>
 
         <!-- Category Dropdown & Search -->
-        <div class="flex flex-wrap items-center gap-2 w-full xl:w-auto">
+        <div class="browse-search flex flex-wrap items-center gap-2 w-full xl:w-auto">
           <select id="category-select" aria-label="影片分類" onchange="onCategoryChange()" class="h-10 shrink-0 bg-[#282832] border border-[#3e3e4e] text-sm text-gray-200 rounded-lg px-3 outline-none focus:border-brand-500 max-w-[180px]">
             <option value="">載入分類中...</option>
           </select>
@@ -164,34 +181,79 @@
       </div>
     </section>
 
+    <section id="tab-subtitles" data-testid="subtitle-panel" class="tab-content hidden space-y-5">
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="min-w-0 flex-1"><h2 class="text-lg font-bold text-white">字幕工作</h2><p class="mt-1 text-sm text-gray-400">選擇影片、設定各階段模型並追蹤獨立字幕佇列。送出前會顯示設定檔快照摘要。</p></div>
+        <button id="subtitle-refresh" type="button" class="h-10 rounded border border-[#3e3e4e] px-3 text-sm">重新整理</button>
+      </div>
+      <p id="subtitle-error" data-testid="subtitle-error" role="status" class="break-words text-sm text-amber-300"></p>
+      <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <section class="space-y-4 rounded-xl border border-[#2e2e3a] bg-[#1a1a22] p-4" aria-labelledby="subtitle-model-title">
+          <div class="flex items-center justify-between gap-2"><h3 id="subtitle-model-title" class="font-semibold text-white">模型設定檔</h3><button type="button" id="subtitle-profile-new" class="h-10 rounded border border-[#3e3e4e] px-3 text-sm">新增</button></div>
+          <div id="subtitle-profile-list" data-testid="subtitle-profile-list" class="space-y-2"></div>
+          <form id="subtitle-profile-form" data-testid="subtitle-profile-form" class="space-y-3 border-t border-[#3e3e4e] pt-4" onsubmit="return false">
+            <input id="subtitle-profile-id" type="hidden">
+            <label class="block text-sm">顯示名稱<input id="subtitle-profile-name" data-testid="subtitle-profile-name" class="mt-1 h-10 w-full rounded border border-[#3e3e4e] bg-[#282832] px-3" autocomplete="off"></label>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label class="block text-sm">設定類型<select id="subtitle-profile-kind" data-testid="subtitle-profile-kind" class="mt-1 h-10 w-full rounded border border-[#3e3e4e] bg-[#282832] px-2"><option value="text">文字模型</option><option value="asr">語音辨識</option><option value="vad">語音活動偵測</option></select></label>
+              <label class="block text-sm">服務<select id="subtitle-profile-provider" data-testid="subtitle-profile-provider" class="mt-1 h-10 w-full rounded border border-[#3e3e4e] bg-[#282832] px-2"><option value="localai">LocalAI</option><option value="openai-compatible">OpenAI 相容</option><option value="ollama">Ollama</option><option value="lmstudio">LM Studio</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option></select></label>
+            </div>
+            <label class="block text-sm">服務網址<input id="subtitle-profile-url" data-testid="subtitle-profile-base-url" inputmode="url" class="mt-1 h-10 w-full rounded border border-[#3e3e4e] bg-[#282832] px-3" autocomplete="url"></label>
+            <label class="block text-sm">模型名稱<input id="subtitle-profile-model" data-testid="subtitle-profile-model" list="subtitle-discovered-models" class="mt-1 h-10 w-full rounded border border-[#3e3e4e] bg-[#282832] px-3" autocomplete="off"><datalist id="subtitle-discovered-models"></datalist></label>
+            <div class="flex flex-wrap gap-2"><button type="button" id="subtitle-discover-models" data-testid="subtitle-discover-models" class="min-h-10 rounded border border-[#3e3e4e] px-3 text-sm">確認後查詢模型清單</button><label class="flex min-h-10 items-center gap-2 text-sm"><input id="subtitle-test-allow-reasoning" type="checkbox" class="h-5 w-5 accent-brand-600">測試時允許額外思考</label></div>
+            <div class="flex flex-wrap items-end gap-2"><label class="block flex-1 text-sm">相容性測試階段<select id="subtitle-test-stage" class="mt-1 h-10 w-full rounded border border-[#3e3e4e] bg-[#282832] px-2"><option value="vad">VAD</option><option value="asr">ASR</option><option value="correction">原文後矯正</option><option value="translation">翻譯</option></select></label><button type="button" id="subtitle-test-profile" data-testid="subtitle-test-profile" class="h-10 rounded border border-[#3e3e4e] px-3 text-sm">確認後測試</button></div>
+            <label class="block text-sm">API 金鑰（不會回填保存值）<input id="subtitle-profile-key" data-testid="subtitle-profile-api-key" type="password" class="mt-1 h-10 w-full rounded border border-[#3e3e4e] bg-[#282832] px-3" autocomplete="new-password"></label>
+            <label class="block text-sm">模型參數 JSON<textarea id="subtitle-profile-parameters" rows="3" class="mt-1 w-full rounded border border-[#3e3e4e] bg-[#282832] p-3 font-mono text-xs">{}</textarea></label><p id="subtitle-profile-protocol-help" data-testid="subtitle-profile-protocol-help" class="text-xs text-gray-400" aria-live="polite"></p>
+            <fieldset><legend class="mb-2 text-sm">可執行階段</legend><div class="flex flex-wrap gap-3 text-sm">
+              <label class="flex items-center gap-2"><input id="subtitle-profile-cap-vad" data-testid="subtitle-profile-capabilities" type="checkbox" class="h-5 w-5 accent-brand-600">VAD</label><label class="flex items-center gap-2"><input id="subtitle-profile-cap-asr" data-testid="subtitle-profile-capabilities" type="checkbox" class="h-5 w-5 accent-brand-600">ASR</label><label class="flex items-center gap-2"><input id="subtitle-profile-cap-correction" data-testid="subtitle-profile-capabilities" type="checkbox" class="h-5 w-5 accent-brand-600">原文後矯正</label><label class="flex items-center gap-2"><input id="subtitle-profile-cap-translation" data-testid="subtitle-profile-capabilities" type="checkbox" class="h-5 w-5 accent-brand-600">翻譯</label>
+            </div></fieldset>
+            <button id="subtitle-profile-save" data-testid="subtitle-profile-save" type="button" class="h-11 w-full rounded bg-brand-600 px-4 font-semibold text-white">保存設定檔</button>
+            <p id="subtitle-settings-status" role="status" class="break-words text-xs text-gray-400"></p>
+          </form>
+        </section>
+        <section class="space-y-4 rounded-xl border border-[#2e2e3a] bg-[#1a1a22] p-4" aria-labelledby="subtitle-run-title">
+          <h3 id="subtitle-run-title" class="font-semibold text-white">建立字幕任務</h3>
+          <p id="subtitle-local-vad-status" data-testid="subtitle-vad-capability" class="text-sm text-amber-300">讀取部署能力中…</p><p id="subtitle-quality-status" data-testid="subtitle-quality-status" class="text-xs text-gray-400">模型格式測試不代表字幕品質已驗收；字幕結果需人工檢查。</p>
+          <fieldset><legend class="mb-2 text-sm">字幕階段</legend><div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label class="flex min-h-11 items-center gap-2 rounded border border-[#3e3e4e] p-2 text-sm"><input id="subtitle-stage-enabled-vad" type="checkbox" checked class="h-5 w-5 accent-brand-600"><span class="flex-1">獨立 VAD</span><select id="subtitle-stage-profile-vad" aria-label="VAD 設定檔" class="min-w-0 max-w-36 rounded bg-[#282832] p-2"></select></label>
+            <label class="flex min-h-11 items-center gap-2 rounded border border-[#3e3e4e] p-2 text-sm"><input id="subtitle-stage-enabled-asr" type="checkbox" checked class="h-5 w-5 accent-brand-600"><span class="flex-1">語音辨識</span><select id="subtitle-stage-profile-asr" aria-label="ASR 設定檔" class="min-w-0 max-w-36 rounded bg-[#282832] p-2"></select></label>
+            <label class="flex min-h-11 items-center gap-2 rounded border border-[#3e3e4e] p-2 text-sm"><input id="subtitle-stage-enabled-correction" type="checkbox" class="h-5 w-5 accent-brand-600"><span class="flex-1">原文後矯正</span><select id="subtitle-stage-profile-correction" aria-label="矯正設定檔" class="min-w-0 max-w-36 rounded bg-[#282832] p-2"></select></label>
+            <label class="flex min-h-11 items-center gap-2 rounded border border-[#3e3e4e] p-2 text-sm"><input id="subtitle-stage-enabled-translation" type="checkbox" class="h-5 w-5 accent-brand-600"><span class="flex-1">翻譯</span><select id="subtitle-stage-profile-translation" aria-label="翻譯設定檔" class="min-w-0 max-w-36 rounded bg-[#282832] p-2"></select></label>
+          </div></fieldset>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2"><fieldset><legend class="mb-2 text-sm">翻譯目標語言（辨識來源：日文）</legend><label class="flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-target-language" value="zh-TW" checked class="h-5 w-5 accent-brand-600">繁體中文</label><label class="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-target-language" value="en" class="h-5 w-5 accent-brand-600">英文</label></fieldset><fieldset><legend class="mb-2 text-sm">輸出字幕</legend><label class="flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-output-language" value="ja" checked class="h-5 w-5 accent-brand-600">日文</label><label class="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-output-language" value="zh-TW" class="h-5 w-5 accent-brand-600">繁體中文</label><label class="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-output-language" value="en" class="h-5 w-5 accent-brand-600">英文</label></fieldset></div>
+          <label class="flex min-h-11 items-center gap-2 text-sm"><input id="subtitle-allow-reasoning" type="checkbox" class="h-5 w-5 accent-brand-600">允許模型使用額外思考（可能增加費用）</label>
+          <h4 class="font-medium">可用影片</h4><div id="subtitle-video-errors" class="space-y-1 text-xs text-amber-300"></div><div id="subtitle-videos" data-testid="subtitle-videos" class="max-h-72 space-y-2 overflow-auto rounded border border-[#3e3e4e] p-2"><p class="text-sm text-gray-400">讀取影片清單中…</p></div>
+          <button id="subtitle-submit" data-testid="subtitle-submit" type="button" class="h-11 w-full rounded bg-brand-600 px-4 font-semibold text-white">檢視摘要並提交</button>
+        </section>
+      </div>
+      <section class="space-y-3 rounded-xl border border-[#2e2e3a] bg-[#1a1a22] p-4"><h3 class="font-semibold text-white">字幕佇列</h3><div id="subtitle-task-list" data-testid="subtitle-task-list" class="space-y-2"><p class="text-sm text-gray-400">尚無字幕任務。</p></div></section>
+      <section class="space-y-3 rounded-xl border border-[#2e2e3a] bg-[#1a1a22] p-4"><h3 class="font-semibold text-white">發布紀錄</h3><div id="subtitle-publications" class="space-y-2"><p class="text-sm text-gray-400">尚無字幕發布紀錄。</p></div></section>
+      <section class="space-y-3 rounded-xl border border-[#2e2e3a] bg-[#1a1a22] p-4"><div class="flex flex-wrap items-center gap-2"><h3 class="flex-1 font-semibold text-white">字幕版本</h3><select id="subtitle-result-video" aria-label="選擇影片查看字幕版本" class="min-h-10 min-w-0 rounded bg-[#282832] p-2"></select><button id="subtitle-load-results" data-testid="subtitle-load-results" type="button" class="min-h-10 rounded border border-[#3e3e4e] px-3 text-sm">載入版本</button></div><div id="subtitle-results" data-testid="subtitle-results" class="space-y-2"><p class="text-sm text-gray-400">尚無保存的字幕版本。</p></div><a id="subtitle-download" data-testid="subtitle-download" hidden class="inline-flex min-h-10 items-center rounded bg-brand-600 px-3 text-sm text-white">下載字幕</a><pre id="subtitle-preview" data-testid="subtitle-preview" class="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-[#121217] p-3 text-xs text-gray-200"></pre></section>
+    </section>
+
     <!-- TAB 2: DOWNLOAD QUEUE -->
     <section id="tab-queue" class="tab-content hidden space-y-6">
-      <div class="flex flex-wrap gap-3 justify-between items-center bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a]">
-        <div>
-          <h2 class="text-base font-bold text-white">任務佇列管理</h2>
-          <p class="text-xs text-gray-400">暫停保留片段；取消會清除該任務檔案；移除紀錄保留完成的影片</p>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button>
-          <button id="edit-tasks-button" hidden onclick="taskSelection.edit()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">修改所選設定</button>
-          <button id="resume-unfinished-button" onclick="resumeUnfinishedTasks()" disabled title="不用勾選，繼續等待中、已暫停或失敗的任務；執行中的任務不會重複啟動" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg disabled:opacity-40">續傳未完成</button>
-          <button id="pause-tasks-button" hidden onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button>
-          <button id="resume-tasks-button" hidden onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button>
-          <button id="retry-tasks-button" hidden onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重新開始所選</button>
+      <div class="queue-toolbar bg-[#1a1a22] p-3 rounded-xl border border-[#2e2e3a]">
+        <div class="flex items-center gap-2">
+          <h2 id="queue-title" class="min-w-0 flex-1 text-base font-bold text-white">下載佇列</h2>
+          <button id="queue-selection-mode" onclick="taskSelection.toggleMode()" disabled class="h-11 px-3 text-xs rounded-lg bg-[#282832] border border-[#3e3e4e] disabled:opacity-40">選取</button>
+          <button onclick="openQuickDownloadModal()" class="h-11 px-3 text-xs whitespace-nowrap rounded-lg bg-brand-600 text-white">＋ 新增</button>
           <details class="relative">
-            <summary class="h-10 px-3.5 flex items-center cursor-pointer bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg">更多操作</summary>
-            <div class="absolute right-0 top-full mt-2 z-30 w-48 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
-          <button id="remove-duplicate-tasks-button" onclick="removeDuplicateTasks()" disabled title="移除已略過及同番號的多餘清單紀錄，保留檔案、歷史及可續傳任務" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">移除重複番號</button>
+            <summary class="h-10 px-3.5 flex items-center cursor-pointer bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg"><span aria-hidden="true">⋯</span><span class="sr-only">更多操作</span></summary>
+            <div onclick="if (event.target.closest('button')) this.closest('details').open = false" class="absolute right-0 top-full mt-2 z-30 w-48 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
+          <button id="resume-unfinished-button" onclick="resumeUnfinishedTasks()" disabled title="不用勾選，繼續等待中、已暫停或失敗的任務；執行中的任務不會重複啟動" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg disabled:opacity-40">續傳未完成</button>
+<button id="remove-duplicate-tasks-button" onclick="removeDuplicateTasks()" disabled title="移除已略過及同番號的多餘清單紀錄，保留檔案、歷史及可續傳任務" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">移除重複番號</button>
           <button id="clear-completed-button" onclick="clearCompletedTasks()" disabled title="只從下載清單移除已完成紀錄，保留影片及下載歷史" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">清除已完成項目</button>
           <button onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
             </div>
           </details>
-          <button id="cancel-tasks-button" hidden onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消下載 (0)</button>
-          <button onclick="openQuickDownloadModal()" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
-            ➕ 新增網址
-          </button>
+        </div>
+        <div id="queue-batch-actions" hidden class="mt-3 flex flex-wrap items-center gap-2" aria-label="所選任務操作">
+<button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button><span id="queue-selection-count" role="status" class="text-xs text-gray-300">已選 0 項</span><button id="pause-tasks-button" hidden onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button><button id="resume-tasks-button" hidden onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button><button id="retry-tasks-button" hidden onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重新開始所選</button><button id="edit-tasks-button" hidden onclick="taskSelection.edit()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">修改所選設定</button>
+          <details class="relative"><summary class="h-11 px-3 flex items-center text-xs cursor-pointer">更多 ▾</summary><div class="absolute right-0 top-full z-30 w-48 p-2 rounded-lg bg-[#282832] border border-[#3e3e4e]"><button id="cancel-tasks-button" hidden onclick="if(confirm('取消所選下載將清除這些任務的下載檔案；若要保留片段，請改用暫停。確定取消？')) taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消下載 (0)</button></div></details>
         </div>
       </div>
+      <details class="text-xs text-gray-400"><summary class="cursor-pointer py-1">操作說明 ⓘ</summary><p class="mt-2">暫停保留片段；取消會清除該任務檔案；移除紀錄保留完成的影片。</p></details>
 
       <div id="nas-space-queue" class="hidden space-y-2 bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-4">
         <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="text-sm font-semibold text-white">NAS 空間</h3><button type="button" onclick="NasSettings.refreshSpace()" class="text-xs text-brand-500 hover:text-white">更新容量</button></div>
@@ -462,6 +524,12 @@
   </div>
 
   <script src="/nas-settings.js"></script>
+  <dialog id="subtitle-confirm-dialog" aria-labelledby="subtitle-confirm-title" class="bg-[#1a1a22] text-gray-100 rounded-xl border border-[#3e3e4e] p-5 w-[min(95vw,36rem)] backdrop:bg-black/70">
+    <form method="dialog" class="space-y-4"><h2 id="subtitle-confirm-title" class="text-lg font-semibold">確認字幕任務</h2><p id="subtitle-submit-summary" class="break-words text-sm text-gray-300"></p><p id="subtitle-confirm-error" data-testid="subtitle-confirm-error" role="status" class="break-words text-sm text-amber-300" aria-live="polite"></p><div class="flex justify-end gap-3"><button id="subtitle-confirm-cancel" type="button" class="min-h-10 px-3">返回修改</button><button id="subtitle-confirm-submit" data-testid="subtitle-confirm-submit" type="submit" class="min-h-10 rounded bg-brand-600 px-4 font-semibold">確認提交</button></div></form>
+  </dialog>
+  <dialog id="subtitle-redo-dialog" aria-labelledby="subtitle-redo-title" class="bg-[#1a1a22] text-gray-100 rounded-xl border border-[#3e3e4e] p-5 w-[min(95vw,36rem)] backdrop:bg-black/70">
+    <form method="dialog" class="space-y-4"><h2 id="subtitle-redo-title" class="text-lg font-semibold">重做字幕階段</h2><label class="block text-sm">階段<select id="subtitle-redo-stage" class="mt-1 min-h-10 w-full rounded bg-[#282832] p-2"><option value="vad">VAD</option><option value="asr">ASR</option><option value="correction">原文後矯正</option><option value="translation">翻譯</option></select></label><label class="block text-sm">模型設定檔<select id="subtitle-redo-profile" class="mt-1 min-h-10 w-full rounded bg-[#282832] p-2"></select></label><label class="block text-sm">上游字幕版本（ASR／矯正／翻譯必須明確選擇）<select id="subtitle-redo-input" class="mt-1 min-h-10 w-full rounded bg-[#282832] p-2"><option value="">請明確選擇上游版本</option></select></label><p id="subtitle-redo-warning" role="status" class="text-sm text-amber-300"></p><p id="subtitle-redo-summary" class="break-words text-xs text-gray-400"></p><p id="subtitle-redo-error" data-testid="subtitle-redo-error" role="status" class="break-words text-sm text-amber-300" aria-live="polite"></p><label class="block text-sm">翻譯語言<input id="subtitle-redo-language" value="zh-TW" class="mt-1 min-h-10 w-full rounded bg-[#282832] p-2"></label><div class="flex justify-end gap-3"><button id="subtitle-redo-cancel" type="button" class="min-h-10 px-3">返回</button><button id="subtitle-redo-confirm" type="submit" class="min-h-10 rounded bg-brand-600 px-4">確認重做</button></div></form>
+  </dialog>
   <dialog id="task-edit-dialog" aria-labelledby="task-edit-title" class="bg-[#1a1a22] text-gray-100 rounded-xl border border-[#3e3e4e] p-6 w-full max-w-lg backdrop:bg-black/70">
     <form onsubmit="taskSelection.saveEdit(event)" class="space-y-4">
       <h2 id="task-edit-title" class="font-bold">修改所選設定（<span id="task-edit-count">0</span> 個任務）</h2>
@@ -510,7 +578,7 @@
         <p class="text-xs text-gray-400">此瀏覽器會記住上次選擇，下次自動預選。</p>
         <label class="block rounded-lg border border-[#3e3e4e] p-3 cursor-pointer">
           <span class="flex items-center gap-2"><input id="batch-storage-settings" type="radio" name="batch-storage" value="settings" class="accent-brand-600">使用目前設定的下載路徑</span>
-          <output id="batch-base-destination" class="block mt-2 text-sm text-gray-400 break-all">讀取設定中…</output>
+          <output id="batch-base-destination" class="block mt-2 text-sm text-gray-400 storage-path">讀取設定中…</output>
         </label>
         <div class="rounded-lg border border-[#3e3e4e] p-3">
           <label class="flex items-center gap-2 cursor-pointer"><input id="batch-storage-query" type="radio" name="batch-storage" value="query" checked class="accent-brand-600">以搜尋條件建立資料夾</label>
@@ -519,11 +587,17 @@
           <p id="batch-name-help" class="text-xs text-gray-400 mt-2">已預填搜尋條件，可直接確認或修改名稱。資料夾會建立在上方下載路徑內。</p>
         </div>
       </fieldset>
-      <p class="text-sm break-all">本次儲存位置：<output id="batch-destination"></output></p>
+      <p class="text-sm storage-path">本次儲存位置：<output id="batch-destination"></output></p>
       <fieldset id="batch-conflict" hidden class="space-y-3 border border-[#3e3e4e] rounded p-3">
         <legend>同名資料夾已存在</legend>
         <label class="block">處理方式<select id="batch-policy" class="block w-full bg-[#282832] rounded p-2 mt-1"><option value="new">建立新資料夾（建議）</option><option value="merge">存入既有資料夾，略過已有影片</option><option value="overwrite">覆寫同名檔案，保留其他檔案</option></select></label>
         <label id="batch-naming-row" class="block">命名方式<select id="batch-naming" class="block w-full bg-[#282832] rounded p-2 mt-1"><option value="date">日期後綴</option><option value="number">流水號</option><option value="custom">自行修改上方名稱</option></select></label>
+      </fieldset>
+      <fieldset class="space-y-2 rounded border border-[#3e3e4e] p-3">
+        <legend class="px-1">下載後的字幕流程</legend>
+        <label class="flex min-h-10 items-center gap-2 text-sm"><input id="batch-subtitles" type="checkbox" class="h-5 w-5 accent-brand-600">完成下載後，依字幕工作目前設定自動排入所選階段</label>
+        <p id="batch-subtitle-summary" class="text-xs text-gray-400">未啟用獨立字幕工作；沿用既有下載字幕設定。</p>
+        <a href="#" onclick="switchTab('subtitles'); return false" class="inline-block min-h-10 py-2 text-xs text-brand-500">前往字幕工作設定</a>
       </fieldset>
       <p id="batch-status" role="status" class="text-sm text-amber-300"></p>
       <div class="flex justify-end gap-3"><button id="batch-cancel" type="button" class="h-10 px-3">取消</button><button id="batch-submit" type="submit" disabled class="h-10 px-4 bg-brand-600 rounded disabled:opacity-40">開始下載</button></div>
@@ -533,6 +607,8 @@
   <script src="/video-selection.js"></script>
   <script src="/task-selection.js"></script>
   <script src="/category-browser.js"></script>
+  <script src="/subtitle-settings.js"></script>
+  <script src="/subtitle-tasks.js"></script>
 
   <!-- Client-side Logic -->
   <script>
@@ -550,6 +626,7 @@
     let batchController;
     const downloadBatch = {open: urls => {
       batchController ||= createDownloadBatch({getQuery: () => displayedSearchQuery,
+        getSubtitleRequest: () => window.subtitleSettings.downloadRequest(),
         onTasks: tasks => { latestDownloadTasks = [...tasks, ...latestDownloadTasks.filter(task => !tasks.some(item => item.task_id === task.task_id))]; renderTasks(latestDownloadTasks); }});
       return batchController.open(urls);
     }};
@@ -615,6 +692,7 @@
       if (tabId === 'history') loadHistory();
       if (tabId === 'settings') loadSettings();
       if (tabId === 'watcher') loadWatcherTargets();
+      if (tabId === 'subtitles') window.subtitleTasks?.refresh({scanVideos:true});
     }
 
     if (window.matchMedia) {
@@ -990,9 +1068,9 @@
             <div class="flex flex-wrap sm:flex-nowrap justify-between items-center gap-2">
               ${taskSelection.canCancel(t) || taskSelection.canAction(t, 'retry') ? `<input type="checkbox" data-task-id="${t.task_id}" aria-label="選取 ${safe(t.name || t.url)}" onchange="taskSelection.toggle('${t.task_id}', this.checked)" ${taskSelection.has(t.task_id) ? 'checked' : ''} class="mt-1 w-4 h-4 shrink-0 accent-brand-600">` : ''}
               <div class="flex-1 min-w-0 flex items-center gap-2">
-                <h4 title="${safe(downloadInfo)}" class="text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
+                <h4 title="${safe(downloadInfo)}" class="min-w-0 flex-1 text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
                 ${/^https?:\/\//i.test(t.url || '') ? `<a href="${safe(t.url)}" target="_blank" rel="noopener noreferrer" class="shrink-0 text-xs px-2 py-1 bg-[#282832] hover:bg-brand-600 hover:text-white rounded border border-[#3e3e4e] transition text-gray-200" aria-label="開啟原片：${safe(t.name || t.url)}（另開分頁）">原片連結 ↗</a>` : ''}
-                <span class="relative inline-block group shrink-0"><button type="button" aria-label="${safe(downloadInfo)}" class="text-xs text-brand-500 px-1" title="下載資訊">ⓘ</button><span role="tooltip" class="hidden group-hover:block group-focus-within:block absolute left-0 top-full mt-1 z-50 w-72 max-w-[75vw] p-3 bg-[#282832] border border-[#3e3e4e] rounded-lg shadow-xl text-xs text-gray-200 whitespace-pre-wrap break-words">${safe(downloadInfo)}</span></span>
+                <span class="relative inline-block group shrink-0"><button type="button" aria-label="${safe(downloadInfo)}" class="text-xs text-brand-500 px-1" title="下載資訊">ⓘ</button><span role="tooltip" class="task-info-popup hidden group-hover:block group-focus-within:block absolute left-0 top-full mt-1 z-50 w-72 max-w-[75vw] p-3 bg-[#282832] border border-[#3e3e4e] rounded-lg shadow-xl text-xs text-gray-200 whitespace-pre-wrap break-words">${safe(downloadInfo)}</span></span>
               </div>
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
@@ -1008,8 +1086,8 @@
                 </details>
               </div>
             </div>
-            ${t.folder_policy ? `<p class="text-xs text-gray-400 truncate" title="${safe(t.final_dest || t.dest)}">儲存至：${safe(t.final_dest || t.dest)}</p>` : ''}
-            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 truncate">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 truncate">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
+            ${t.folder_policy ? `<p class="text-xs text-gray-400 storage-path" title="${safe(t.final_dest || t.dest)}">儲存至：${safe(window.formatStoragePath(t.final_dest || t.dest))}</p>` : ''}
+            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 whitespace-pre-wrap break-words">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
             <!-- Progress Bar -->
             ${t.total_segments > 0 && !['completed', 'skipped', 'cancelled'].includes(t.status) ? `<div class="space-y-1">
               <div class="w-full bg-[#282832] h-1 rounded-full overflow-hidden">
@@ -1175,7 +1253,7 @@
               <span class="text-brand-500 font-bold mr-1.5">${e.code || ''}</span>${e.title}
             </td>
             <td class="px-4 py-3 text-xs text-gray-400">${e.site || ''}</td>
-            <td class="px-4 py-3 text-xs text-gray-400 max-w-xs truncate">${e.dest_dir || ''}</td>
+            <td class="px-4 py-3 text-xs text-gray-400 max-w-xs storage-path">${window.formatStoragePath(e.dest_dir).replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]))}</td>
             <td class="px-4 py-3 text-xs text-gray-500">${e.downloaded_at ? e.downloaded_at.slice(0, 10) : ''}</td>
           </tr>
         `).join('');
@@ -1340,6 +1418,11 @@
     window.addEventListener('DOMContentLoaded', () => {
       initWebSocket();
       selectSite('JableTV');
+      window.subtitleSettings = window.createSubtitleSettings();
+      window.subtitleSettings.renderDom();
+      window.subtitleTasks = window.createSubtitleTasks({settings:window.subtitleSettings});
+      window.subtitleTasks.bind();
+      Promise.all([window.subtitleSettings.load(),window.subtitleTasks.refresh({scanVideos:true})]).catch(error => { const status=document.getElementById('subtitle-error'); if(status){status.textContent=error.message;status.setAttribute('role','alert');} });
       NasSettings.refreshSpace();
       setInterval(() => { if (!document.hidden) NasSettings.refreshSpace(); }, 60000);
     });

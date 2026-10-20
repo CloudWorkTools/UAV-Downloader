@@ -1,12 +1,15 @@
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import socket
 import threading
 import wave
 
 import pytest
 
 from uav_downloader.subtitles import asr, engine
+from uav_downloader.subtitles.models import SpeechInterval, SubtitleSegment
+from uav_downloader.subtitles.profiles import ProfileSnapshot
 
 
 @pytest.fixture(autouse=True)
@@ -82,7 +85,7 @@ def api_server():
             if payload == 'wait':
                 release.wait(5)
                 payload = {'segments': []}
-            encoded = json.dumps(payload).encode()
+            encoded = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
             self.send_response(status)
             self.end_headers()
             try:
@@ -133,6 +136,210 @@ def test_real_http_worker_merges_chunks_in_video_time(tmp_path, monkeypatch, api
         assert path == '/v1/audio/transcriptions' and auth == 'Bearer test-token'
         assert b'verbose_json' in body and b'test-model' in body and b'ja' in body
     assert not list(tmp_path.glob('asr-api-*'))
+
+
+def test_stage_asr_uses_vad_intervals_and_rejects_out_of_range_seconds(tmp_path, api_server):
+    settings, responses, requests, _ = api_server
+    responses.append((200, {'segments': [segment(.2, .8, '台詞')]}))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 3)
+    snapshot = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'],
+        'parameters': {},
+    }), None, 'snapshot')
+    result = asr.transcribe_stage(str(wav), [SpeechInterval(1, 2)], snapshot, 'ja', lambda: False)
+    assert result == [SubtitleSegment('segment-000000-0001', 1.2, 1.8, '台詞')]
+    assert [request[0] for request in requests] == ['/v1/audio/transcriptions']
+
+
+def test_stage_asr_does_not_clamp_invalid_seconds(tmp_path, api_server):
+    settings, responses, _, _ = api_server
+    responses.append((200, {'segments': [segment(.8, 1.2, '越界')]}))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 2)
+    snapshot = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'],
+        'parameters': {},
+    }), None, 'snapshot')
+    from uav_downloader.subtitles.models import StageRequestError
+    with pytest.raises(StageRequestError, match='秒單位'):
+        asr.transcribe_stage(str(wav), [SpeechInterval(1, 2)], snapshot, 'ja', lambda: False)
+
+
+@pytest.mark.parametrize(('status', 'retryable'), [(429, True), (503, True), (401, False)])
+def test_stage_asr_classifies_http_failures_without_exposing_provider_body(
+        tmp_path, api_server, status, retryable):
+    from uav_downloader.subtitles.models import StageRequestError
+    settings, responses, _, _ = api_server
+    responses.append((status, {'error': 'private-provider-body'}))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 1)
+    profile = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'], 'base_url': settings['base_url'],
+        'model': settings['model'], 'parameters': {},
+    }), None, 'snapshot')
+    chunk = asr.plan_transcription_chunks(str(wav), [SpeechInterval(0, 1)])[0]
+    with pytest.raises(StageRequestError) as error:
+        asr.transcribe_chunk(str(wav), chunk, profile, 'ja')
+    assert error.value.retryable is retryable
+    assert 'private-provider-body' not in str(error.value)
+
+
+def test_stage_asr_invalid_json_is_permanent(tmp_path, api_server):
+    from uav_downloader.subtitles.models import StageRequestError
+    settings, responses, _, _ = api_server
+    responses.append((200, b'{not-json'))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 1)
+    profile = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'], 'base_url': settings['base_url'],
+        'model': settings['model'], 'parameters': {},
+    }), None, 'snapshot')
+    chunk = asr.plan_transcription_chunks(str(wav), [SpeechInterval(0, 1)])[0]
+    with pytest.raises(StageRequestError) as error:
+        asr.transcribe_chunk(str(wav), chunk, profile, 'ja')
+    assert error.value.retryable is False
+    assert 'JSONDecodeError' not in str(error.value)
+
+
+def test_stage_asr_connection_failure_is_retryable(tmp_path):
+    from uav_downloader.subtitles.models import StageRequestError
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        port = listener.getsockname()[1]
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 1)
+    profile = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'], 'base_url': f'http://127.0.0.1:{port}/v1',
+        'model': 'model', 'parameters': {},
+    }), None, 'snapshot')
+    chunk = asr.plan_transcription_chunks(str(wav), [SpeechInterval(0, 1)])[0]
+    with pytest.raises(StageRequestError) as error:
+        asr.transcribe_chunk(str(wav), chunk, profile, 'ja')
+    assert error.value.retryable is True
+    assert '127.0.0.1' not in str(error.value)
+
+
+def test_stage_asr_invalid_segments_schema_is_permanent(tmp_path, api_server):
+    from uav_downloader.subtitles.models import StageRequestError
+    settings, responses, _, _ = api_server
+    responses.append((200, {'segments': 'not-a-list'}))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 1)
+    profile = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'], 'base_url': settings['base_url'],
+        'model': settings['model'], 'parameters': {},
+    }), None, 'snapshot')
+    chunk = asr.plan_transcription_chunks(str(wav), [SpeechInterval(0, 1)])[0]
+    with pytest.raises(StageRequestError) as error:
+        asr.transcribe_chunk(str(wav), chunk, profile, 'ja')
+    assert error.value.retryable is False
+
+
+@pytest.mark.parametrize('parameters', [
+    {'prompt': {'unexpected': 'object'}},
+    {'prompt': 'x' * 4097},
+    {'prompt': 'contains\x00nul'},
+    {'temperature': True},
+    {'temperature': '0.4'},
+    {'temperature': {'value': 0.4}},
+    {'temperature': float('nan')},
+    {'temperature': -0.1},
+    {'temperature': 2.1},
+])
+def test_stage_asr_rejects_invalid_multipart_parameter_values_before_request(
+        tmp_path, api_server, parameters):
+    settings, _, requests, _ = api_server
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 2)
+    profile = json.loads(ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'],
+        'parameters': parameters,
+    }), None, 'snapshot').profile_json)
+    snapshot = ProfileSnapshot(json.dumps(profile), None, 'snapshot')
+    chunk = asr.plan_transcription_chunks(str(wav), [SpeechInterval(0, 2)])[0]
+    with pytest.raises(ValueError, match='參數'):
+        asr.transcribe_chunk(str(wav), chunk, snapshot, 'ja')
+    assert requests == []
+
+
+def test_stage_asr_overlap_preserves_context_without_duplicate_boundary_segments(
+        tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'CHUNK_SECONDS', 2)
+    monkeypatch.setattr(asr, 'OVERLAP_SECONDS', 0.5)
+    responses.extend((200, {'segments': items}) for items in [
+        [segment(.5, 1, '首段'), segment(1.5, 2.5, '接縫上下文')],
+        [segment(.5, 1, '接縫上下文'), segment(2.2, 2.8, '次段接縫')],
+        [segment(.7, 1.3, '尾段')],
+    ])
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 5)
+    snapshot = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'], 'parameters': {},
+    }), None, 'snapshot')
+    result = asr.transcribe_stage(str(wav), [SpeechInterval(0, 5)], snapshot, 'ja', lambda: False)
+    assert [item.text for item in result] == ['首段', '接縫上下文', '尾段']
+    assert [(item.start, item.end) for item in result] == [(.5, 1.0), (2.0, 2.5), (4.2, 4.8)]
+    assert len(requests) == 3
+
+
+def test_asr_chunk_plan_exposes_stable_keys_offsets_and_one_request_executor(
+        tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'CHUNK_SECONDS', 2)
+    monkeypatch.setattr(asr, 'OVERLAP_SECONDS', 0.5)
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 5)
+    chunks = asr.plan_transcription_chunks(str(wav), [SpeechInterval(0, 5)])
+    assert [(chunk.index, chunk.interval_index, chunk.core_start_frame,
+             chunk.core_end_frame, chunk.start_frame, chunk.end_frame) for chunk in chunks] == [
+        (0, 0, 0, 32000, 0, 40000),
+        (1, 0, 32000, 64000, 24000, 72000),
+        (2, 0, 64000, 80000, 56000, 80000),
+    ]
+    responses.append((200, {'segments': [segment(.5, 1, '第一個可保存片段')]}))
+    profile = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'], 'parameters': {},
+    }), None, 'snapshot')
+    saved = asr.transcribe_chunk(str(wav), chunks[0], profile, 'ja', lambda: False)
+    assert saved == [SubtitleSegment('segment-000000-0001', .5, 1.0, '第一個可保存片段')]
+    assert len(requests) == 1
+
+
+def test_stage_asr_never_posts_model_install_endpoint(tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'DEFAULT_URL', settings['base_url'])
+    responses.append((200, {'segments': []}))
+    wav = tmp_path / 'chunk.wav'
+    audio(wav, 1)
+    result = asr._request(dict(settings, _install_model=False), str(wav))
+    assert result == {'segments': []}
+    assert [request[0] for request in requests] == ['/v1/audio/transcriptions']
+
+
+def test_legacy_asr_keeps_custom_prefix_endpoint_contract(tmp_path, api_server):
+    settings, responses, requests, _ = api_server
+    responses.append((200, {'segments': []}))
+    wav = tmp_path / 'chunk.wav'
+    audio(wav, 1)
+    asr._request(dict(settings, base_url=settings['base_url'].replace('/v1', '/api')),
+                 str(wav))
+    assert requests[-1][0] == '/api/audio/transcriptions'
 
 
 def test_http_failure_hides_provider_body(tmp_path, api_server):
