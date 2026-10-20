@@ -1,5 +1,6 @@
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socket
 import threading
 import time
 
@@ -98,8 +99,9 @@ def test_transform_rejects_returned_text_outside_subtitle_contract(text):
     thread.start()
     try:
         profile = snapshot('lmstudio', f'http://127.0.0.1:{server.server_port}')
-        with pytest.raises(llm.LlmTranslationError, match='回傳'):
+        with pytest.raises(llm.LlmTranslationError, match='回傳') as error:
             llm.transform_segments('correction', [SubtitleSegment('a', 1, 2, '原文')], profile)
+        assert error.value.retryable is False
     finally:
         server.shutdown()
         server.server_close()
@@ -108,6 +110,70 @@ def test_transform_rejects_returned_text_outside_subtitle_contract(text):
 
 def test_transform_allows_normal_newline_and_punctuation_in_returned_text():
     assert llm._valid_subtitle_text('第一行，。\n第二行！')
+
+
+@pytest.mark.parametrize(('status', 'retryable'), [(429, True), (503, True), (401, False)])
+def test_text_stage_classifies_http_failures_without_provider_body(status, retryable):
+    from uav_downloader.subtitles.models import StageRequestError
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            body = b'{"error":"private-provider-body"}'
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        profile = snapshot('lmstudio', f'http://127.0.0.1:{server.server_port}')
+        with pytest.raises(StageRequestError) as error:
+            llm.transform_segments('correction', [SubtitleSegment('a', 1, 2, '原文')], profile)
+        assert error.value.retryable is retryable
+        assert 'private-provider-body' not in str(error.value)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_text_stage_invalid_json_is_permanent():
+    from uav_downloader.subtitles.models import StageRequestError
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            self.send_response(200)
+            self.send_header('Content-Length', '9')
+            self.end_headers()
+            self.wfile.write(b'{not-json')
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        profile = snapshot('lmstudio', f'http://127.0.0.1:{server.server_port}')
+        with pytest.raises(StageRequestError) as error:
+            llm.transform_segments('correction', [SubtitleSegment('a', 1, 2, '原文')], profile)
+        assert error.value.retryable is False
+        assert 'JSONDecodeError' not in str(error.value)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_text_stage_connection_failure_is_retryable():
+    from uav_downloader.subtitles.models import StageRequestError
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        port = listener.getsockname()[1]
+    profile = snapshot('lmstudio', f'http://127.0.0.1:{port}')
+    with pytest.raises(StageRequestError) as error:
+        llm.transform_segments('correction', [SubtitleSegment('a', 1, 2, '原文')], profile)
+    assert error.value.retryable is True
+    assert '127.0.0.1' not in str(error.value)
 
 
 def test_ollama_requires_thinking_capability_metadata_then_sends_think_false():

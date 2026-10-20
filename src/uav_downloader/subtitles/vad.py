@@ -137,10 +137,19 @@ def detect_speech_chunk(audio_path: str, profile_snapshot: ProfileSnapshot,
                 timeout_seconds=900, disk_guard_path=folder)
             envelope = json.loads(Path(response_path).read_bytes())
             if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+                failure = envelope.get("failure") if isinstance(envelope, dict) else None
+                if isinstance(failure, dict):
+                    from uav_downloader.subtitles.models import StageRequestError
+                    raise StageRequestError(
+                        failure.get("message", "VAD API 回應無效"),
+                        retryable=failure.get("retryable") is True)
                 raise ValueError(envelope.get("error", "VAD API 回應無效"))
             intervals = _validate_intervals(envelope.get("payload"), chunk_duration)
         except (OSError, ValueError, TypeError) as exc:
-            raise engine.SubtitleError(str(exc)) from None
+            from uav_downloader.subtitles.models import StageRequestError
+            if isinstance(exc, StageRequestError):
+                raise
+            raise StageRequestError(str(exc), retryable=False) from None
     return [SpeechInterval(item.start + chunk.start_frame / SAMPLE_RATE,
                            item.end + chunk.start_frame / SAMPLE_RATE)
             for item in intervals]
@@ -164,22 +173,36 @@ def _request(settings_path: str):
                           json={"model": request["model"], "audio": request["audio"]},
                           timeout=(10, 900), allow_redirects=False, stream=True) as response:
             if response.status_code != 200:
-                raise ValueError(f"VAD API 回應 HTTP {response.status_code}")
+                from uav_downloader.subtitles.models import StageRequestError
+                raise StageRequestError(
+                    f"VAD API 回應 HTTP {response.status_code}",
+                    retryable=(response.status_code == 429
+                               or 500 <= response.status_code <= 599))
             content = bytearray()
             for block in response.iter_content(65536):
                 content.extend(block)
                 if len(content) > MAX_RESPONSE_BYTES:
                     raise ValueError("VAD API 回應過大")
-    return json.loads(content)
+    try:
+        return json.loads(content)
+    except (UnicodeError, ValueError):
+        from uav_downloader.subtitles.models import StageRequestError
+        raise StageRequestError("VAD API 回應 JSON 格式無效", retryable=False) from None
 
 
 def _main():
+    from uav_downloader.subtitles.models import StageRequestError
     try:
         result = {"ok": True, "payload": _request(sys.argv[1])}
+    except StageRequestError as exc:
+        result = {"ok": False, "failure": {"retryable": exc.retryable, "message": str(exc)}}
+    except (requests.Timeout, requests.ConnectionError):
+        result = {"ok": False, "failure": {
+            "retryable": True, "message": "VAD API 連線逾時或中斷"}}
     except Exception as exc:
         message = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("VAD API") else (
-            "VAD API 連線或回應失敗，請確認服務、模型與金鑰")
-        result = {"ok": False, "error": message}
+            "VAD API 回應無效或服務設定錯誤")
+        result = {"ok": False, "failure": {"retryable": False, "message": message}}
     Path(sys.argv[2]).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
 
 

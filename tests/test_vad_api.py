@@ -1,5 +1,6 @@
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socket
 import threading
 import wave
 
@@ -153,6 +154,79 @@ def test_cancellation_terminates_pending_vad_request(tmp_path):
         assert len(failures) == 1 and isinstance(failures[0], SubtitleCancelled)
     finally:
         release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.mark.parametrize(('status', 'retryable'), [(429, True), (503, True), (401, False)])
+def test_vad_stage_classifies_http_failures_without_provider_body(tmp_path, status, retryable):
+    from uav_downloader.subtitles.models import StageRequestError
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            body = b'{"error":"private-provider-body"}'
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        wav = tmp_path / 'audio.wav'
+        make_wav(wav, 1)
+        profile = snapshot(f'http://127.0.0.1:{server.server_port}/v1')
+        chunk = vad.plan_speech_chunks(str(wav))[0]
+        with pytest.raises(StageRequestError) as error:
+            vad.detect_speech_chunk(str(wav), profile, chunk)
+        assert error.value.retryable is retryable
+        assert 'private-provider-body' not in str(error.value)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_vad_stage_connection_failure_is_retryable(tmp_path):
+    from uav_downloader.subtitles.models import StageRequestError
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        port = listener.getsockname()[1]
+    wav = tmp_path / 'audio.wav'
+    make_wav(wav, 1)
+    profile = snapshot(f'http://127.0.0.1:{port}/v1')
+    chunk = vad.plan_speech_chunks(str(wav))[0]
+    with pytest.raises(StageRequestError) as error:
+        vad.detect_speech_chunk(str(wav), profile, chunk)
+    assert error.value.retryable is True
+    assert '127.0.0.1' not in str(error.value)
+
+
+def test_vad_invalid_segments_schema_is_permanent(tmp_path):
+    from uav_downloader.subtitles.models import StageRequestError
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            body = b'{"segments":"not-a-list"}'
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        wav = tmp_path / 'audio.wav'
+        make_wav(wav, 1)
+        profile = snapshot(f'http://127.0.0.1:{server.server_port}/v1')
+        chunk = vad.plan_speech_chunks(str(wav))[0]
+        with pytest.raises(StageRequestError) as error:
+            vad.detect_speech_chunk(str(wav), profile, chunk)
+        assert error.value.retryable is False
+    finally:
         server.shutdown()
         server.server_close()
         thread.join()

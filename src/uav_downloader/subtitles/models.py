@@ -2,6 +2,16 @@
 from dataclasses import dataclass
 
 
+class StageRequestError(ValueError):
+    """Safe external-stage failure with an explicit retry classification."""
+
+    def __init__(self, message: str, *, retryable: bool):
+        super().__init__(message)
+        if not isinstance(retryable, bool):
+            raise TypeError('retryable must be bool')
+        self.retryable = retryable
+
+
 @dataclass(frozen=True)
 class SpeechInterval:
     start: float
