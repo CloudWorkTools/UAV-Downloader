@@ -17,7 +17,7 @@ CloudWorkTools 版本以繁體中文 Web 操作與 NAS 擴充為主：
 
 ## 規格與審閱資料
 
-- [影匣 Web 外部 API 字幕正式規格](https://github.com/CloudWorkTools/UAV-Downloader/issues/10)：四階段模型設定、結果保留、指定重做與瀏覽器操作驗收，尚未實作。
+- [影匣 Web 外部 API 字幕正式規格](https://github.com/CloudWorkTools/UAV-Downloader/issues/10)：四階段模型設定、結果保留、指定重做與瀏覽器操作；功能已在整合 PR 實作，最終正式映像及環境驗收仍由 [#18](https://github.com/CloudWorkTools/UAV-Downloader/issues/18) 追蹤。
 - [功能規格審閱快照](superpowers/specs/2026-10-20-external-subtitles-design.md)：保留發布前的設計討論，正式需求以 GitHub Issue 為準。
 - [實作工作拆分審閱快照](superpowers/specs/2026-10-20-external-subtitles-work-breakdown.md)：保留依賴順序與模組接點，執行計畫依正式規格建立。
 
