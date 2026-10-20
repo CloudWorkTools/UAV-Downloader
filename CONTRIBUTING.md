@@ -14,7 +14,16 @@
 
 ## 開發檢查
 
-安裝與 Web 測試指令以[專案首頁](README.md#開發與檢查)為準。修改核心時，另執行受影響的原有測試；修改 UI 時，檢查窄畫面、按鈕高度、空資料、重複送出與失敗後重試。
+Web 回歸測試與 CI 使用同一入口：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-docker.txt pytest PySocks customtkinter Pillow
+PYTHON=.venv/bin/python bash scripts/check_web.sh
+```
+
+另需 Node.js 與 Chrome／Chromium。測試預設執行 `google-chrome`；其他位置可用 `CHROME_BIN` 指定。
+修改核心時，另執行受影響的原有測試；修改 UI 時，檢查窄畫面、按鈕高度、空資料、重複送出與失敗後重試。
 
 依修改功能選擇既有測試介面：
 
@@ -28,7 +37,15 @@
 
 新增 Web Python 回歸測試時，將模組接入 `scripts/check_web.sh` 的集中清單；新增前端 `.cjs` 測試會由入口自動納入。CI 直接使用此入口，文件只保留功能導航。
 
-共用入口的安裝與執行方式以[專案首頁](README.md#開發與檢查)為準。實際 NAS、ASR、模型品質與遠端容器掛載的驗證需要專用環境，離線回歸測試無法代替這些檢查。
+容器檢查使用下列命令：
+
+```bash
+docker build -f Dockerfile.web -t uav-downloader:local .
+bash scripts/check_web_container.sh uav-downloader:local
+bash scripts/check_smb_batch_container.sh uav-downloader:local
+```
+
+SMB 檢查另以隔離 Samba 驗證同批多任務的並行儲存。實際 NAS、ASR、模型品質與遠端容器掛載的驗證需要專用環境，離線回歸測試無法代替這些檢查。
 
 SMB 測試使用獨立的測試帳號與共享目錄，勿使用正式影片目錄作為測試資料。保留本機檔案、未經使用者明確選擇不覆寫遠端既有檔案、錯誤不包含密碼，均為 NAS 擴充的必要行為。
 

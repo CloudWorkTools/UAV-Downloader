@@ -31,7 +31,7 @@ docker run --rm \
 
 The shared `docker-compose.yml` includes the CLI as an optional `cli` profile.
 Set `FIRECRAWL_POSTGRES_PASSWORD` in `.env` as described in the
-[Web setup](../README.md#本機啟動), then run:
+[Web setup](../README.md#人類安裝), then run:
 
 ```bash
 docker compose run --rm uav "https://jable.tv/videos/example/"
