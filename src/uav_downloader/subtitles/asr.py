@@ -135,7 +135,7 @@ def save_settings(value):
         return load_settings()
 
 
-def _request(settings, wav_path, language='ja', parameters=None):
+def _request(settings, wav_path, language='ja', parameters=None, stage_errors=False):
     headers = {}
     if settings.get('api_key'):
         headers['Authorization'] = 'Bearer ' + settings['api_key']
@@ -160,13 +160,25 @@ def _request(settings, wav_path, language='ja', parameters=None):
                 data=data,
                 timeout=(10, 900), allow_redirects=False, stream=True) as response:
             if response.status_code != 200:
-                raise ValueError(f'辨識 API 回應 HTTP {response.status_code}')
+                message = f'辨識 API 回應 HTTP {response.status_code}'
+                if stage_errors:
+                    from uav_downloader.subtitles.models import StageRequestError
+                    raise StageRequestError(
+                        message, retryable=(response.status_code == 429
+                                            or 500 <= response.status_code <= 599))
+                raise ValueError(message)
             content = bytearray()
             for block in response.iter_content(65536):
                 content.extend(block)
                 if len(content) > MAX_RESPONSE_BYTES:
                     raise ValueError('辨識 API 回應過大')
-    return json.loads(content)
+    try:
+        return json.loads(content)
+    except (UnicodeError, ValueError):
+        if stage_errors:
+            from uav_downloader.subtitles.models import StageRequestError
+            raise StageRequestError('辨識 API 回應 JSON 格式無效', retryable=False) from None
+        raise
 
 
 def _segments(payload, duration):
@@ -436,7 +448,8 @@ def transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check
         with wave.open(chunk_path, 'wb') as target:
             target.setparams(source.getparams())
             target.writeframes(audio_bytes)
-        request_settings = dict(settings, _language=language, _parameters=parameters)
+        request_settings = dict(settings, _language=language, _parameters=parameters,
+                                _stage_errors=True)
         fd = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w', encoding='utf-8') as request_file:
             json.dump(request_settings, request_file)
@@ -447,11 +460,20 @@ def transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check
         try:
             envelope = json.loads(Path(response_path).read_bytes())
             if not isinstance(envelope, dict) or envelope.get('ok') is not True:
+                failure = envelope.get('failure') if isinstance(envelope, dict) else None
+                if isinstance(failure, dict):
+                    from uav_downloader.subtitles.models import StageRequestError
+                    raise StageRequestError(
+                        failure.get('message', '辨識 API 回應無效'),
+                        retryable=failure.get('retryable') is True)
                 raise ValueError(envelope.get('error', '辨識 API 回應無效'))
             duration = (chunk.end_frame - chunk.start_frame) / rate
             segments = _stage_segments(envelope.get('payload'), duration)
         except (OSError, ValueError, TypeError) as exc:
-            raise engine.SubtitleError(str(exc)) from None
+            from uav_downloader.subtitles.models import StageRequestError
+            if isinstance(exc, StageRequestError):
+                raise
+            raise StageRequestError(str(exc), retryable=False) from None
         result = []
         for ordinal, (start, end, text) in enumerate(segments, 1):
             absolute_start, absolute_end = chunk.start_frame / rate + start, chunk.start_frame / rate + end
@@ -489,14 +511,27 @@ def _stage_segments(payload, duration):
 
 
 def _main():
+    from uav_downloader.subtitles.models import StageRequestError
     try:
         settings = json.loads(Path(sys.argv[1]).read_text())
         result = {'ok': True, 'payload': _request(
-            settings, sys.argv[2], settings.get('_language', 'ja'), settings.get('_parameters'))}
+            settings, sys.argv[2], settings.get('_language', 'ja'), settings.get('_parameters'),
+            stage_errors=settings.get('_stage_errors') is True)}
+    except StageRequestError as exc:
+        result = {'ok': False, 'failure': {'retryable': exc.retryable, 'message': str(exc)}}
+    except (requests.Timeout, requests.ConnectionError):
+        if 'settings' in locals() and settings.get('_stage_errors') is True:
+            result = {'ok': False, 'failure': {
+                'retryable': True, 'message': '辨識 API 連線逾時或中斷'}}
+        else:
+            result = {'error': '辨識 API 連線或回應失敗，請確認服務、模型與金鑰'}
     except Exception as exc:
         # Provider bodies and exception URLs may expose secrets; never log them.
         message = str(exc) if isinstance(exc, ValueError) and str(exc).startswith('辨識 API') else '辨識 API 連線或回應失敗，請確認服務、模型與金鑰'
-        result = {'error': message}
+        if 'settings' in locals() and settings.get('_stage_errors') is True:
+            result = {'ok': False, 'failure': {'retryable': False, 'message': message}}
+        else:
+            result = {'error': message}
     Path(sys.argv[3]).write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
 
 

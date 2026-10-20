@@ -25,6 +25,7 @@ from urllib.parse import quote, urlsplit
 import requests
 
 from uav_downloader.core.ssl import SharedSSLAdapter
+from uav_downloader.subtitles.models import StageRequestError
 
 
 SUPPORTED_PROVIDERS = frozenset({
@@ -38,6 +39,13 @@ _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 class LlmTranslationError(RuntimeError):
     """A safe, user-facing external translation failure."""
+
+
+class LlmStageRequestError(LlmTranslationError, StageRequestError):
+    """Text-stage request failure with retryability for the owning job."""
+
+    def __init__(self, message, *, retryable):
+        StageRequestError.__init__(self, message, retryable=retryable)
 
 
 class LlmTranslationCancelled(LlmTranslationError):
@@ -526,7 +534,7 @@ def _parse_response(
 
 def _read_response_json(
         response, provider: str,
-        cancel_check: Optional[CancelCheck] = None):
+        cancel_check: Optional[CancelCheck] = None, *, stage_errors=False):
     """Decode a bounded provider envelope without retaining response text."""
     headers = getattr(response, 'headers', {}) or {}
     try:
@@ -562,9 +570,15 @@ def _read_response_json(
             object_pairs_hook=_unique_object)
     except LlmTranslationError:
         raise
-    except requests.RequestException:
+    except (requests.Timeout, requests.ConnectionError):
         raise _LlmTransportError(
             f'{provider} response was interrupted')
+    except requests.RequestException:
+        if not stage_errors:
+            raise _LlmTransportError(
+                f'{provider} response was interrupted')
+        raise LlmTranslationError(
+            f'{provider} returned an invalid response structure')
     except (UnicodeError, TypeError, ValueError):
         raise LlmTranslationError(
             f'{provider} returned an invalid response structure')
@@ -719,20 +733,25 @@ def transform_segments(operation, segments, profile_snapshot, target_language=No
             except (OSError, ValueError, TypeError) as exc:
                 raise LlmTranslationError(str(exc)) from None
         if not isinstance(envelope, dict) or envelope.get('ok') is not True:
+            failure = envelope.get('failure') if isinstance(envelope, dict) else None
+            if isinstance(failure, dict):
+                raise LlmStageRequestError(
+                    failure.get('message', '文字模型服務請求失敗'),
+                    retryable=failure.get('retryable') is True)
             message = envelope.get('error', '文字模型服務請求失敗') if isinstance(envelope, dict) else '文字模型服務回應無效'
-            raise LlmTranslationError(message)
+            raise LlmStageRequestError(message, retryable=False)
         try:
             content = _stage_content(
                 provider, envelope['payload'], require_reasoning_disabled and not allow_reasoning)
             decoded = json.loads(content, object_pairs_hook=_unique_object)
         except (AttributeError, IndexError, KeyError, TypeError, ValueError):
-            raise LlmTranslationError(f'{provider} 回傳格式無效') from None
+            raise LlmStageRequestError(f'{provider} 回傳格式無效', retryable=False) from None
         if (not isinstance(decoded, list) or len(decoded) != len(batch_segments)
                 or any(not isinstance(value, dict) or set(value) != {'id', 'text'}
                        or value['id'] != segment.segment_id
                        or not _valid_subtitle_text(value['text'])
                        for value, segment in zip(decoded, batch_segments))):
-            raise LlmTranslationError(f'{provider} 回傳片段 ID 或字幕文字無效')
+            raise LlmStageRequestError(f'{provider} 回傳片段 ID 或字幕文字無效', retryable=False)
         output.extend(SubtitleSegment(segment.segment_id, segment.start, segment.end, value['text'].strip())
                       for segment, value in zip(batch_segments, decoded))
     return output
@@ -859,8 +878,11 @@ def _send_json(session, url, headers, payload, timeout, proxies=None):
                             {'proxies': proxies} if proxies is not None else {})
     try:
         if not 200 <= int(response.status_code) < 300:
-            raise LlmTranslationError(f'模型服務拒絕請求 (HTTP {response.status_code})')
-        return _read_response_json(response, '模型服務')
+            status = int(response.status_code)
+            raise StageRequestError(
+                f'模型服務拒絕請求 (HTTP {status})',
+                retryable=(status == 429 or 500 <= status <= 599))
+        return _read_response_json(response, '模型服務', stage_errors=True)
     finally:
         _close_response(response)
 
@@ -891,10 +913,18 @@ def _stage_worker(request_path, response_path):
                     raise LlmTranslationError('Ollama 未確認此模型支援 thinking 控制；請明確允許思考')
             envelope = _send_json(session, request['url'], request['headers'], request['payload'], (10, 180))
             result = {'ok': True, 'payload': envelope}
+        except StageRequestError as exc:
+            result = {'ok': False, 'failure': {'retryable': exc.retryable, 'message': str(exc)}}
+        except _LlmTransportError:
+            result = {'ok': False, 'failure': {
+                'retryable': True, 'message': '文字模型服務連線逾時或中斷'}}
+        except (requests.Timeout, requests.ConnectionError):
+            result = {'ok': False, 'failure': {
+                'retryable': True, 'message': '文字模型服務連線逾時或中斷'}}
         except Exception as exc:
-            message = str(exc)
-            result = {'ok': False, 'error': message if message.startswith(('模型服務', 'Ollama '))
-                      else f'{provider} 無法連線或回應無效'}
+            message = str(exc) if isinstance(exc, LlmTranslationError) else (
+                f'{provider} 無法連線或回應無效')
+            result = {'ok': False, 'failure': {'retryable': False, 'message': message}}
     _write_private_json(response_path, result)
 
 
