@@ -61,6 +61,7 @@ ProfileKind = Literal["vad", "asr", "text"]
 @dataclass(frozen=True)
 class StageProfile:
     profile_id: str
+    display_name: str  # user-visible name for a named profile
     kind: ProfileKind  # one text profile may serve correction and translation
     provider: str
     capabilities: tuple[Stage, ...]
