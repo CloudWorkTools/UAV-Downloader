@@ -11,6 +11,15 @@ CloudWorkTools 版本以繁體中文 Web 操作與 NAS 擴充為主：
 - [代理任務追蹤](agents/issue-tracker.md)
 - [代理分流標籤](agents/triage-labels.md)
 - [領域文件讀取規則](agents/domain.md)
+- [領域詞彙表](../GLOSSARY.md)
+- [字幕階段結果與指定重做決策](adr/0001-retain-subtitle-stage-results.md)
+- [四個字幕階段使用外部 API 決策](adr/0002-external-api-for-every-subtitle-stage.md)
+
+## 規格與審閱資料
+
+- [影匣 Web 外部 API 字幕正式規格](https://github.com/CloudWorkTools/UAV-Downloader/issues/10)：四階段模型設定、結果保留、指定重做與瀏覽器操作驗收，尚未實作。
+- [功能規格審閱快照](superpowers/specs/2026-10-20-external-subtitles-design.md)：保留發布前的設計討論，正式需求以 GitHub Issue 為準。
+- [實作工作拆分審閱快照](superpowers/specs/2026-10-20-external-subtitles-work-breakdown.md)：保留依賴順序與模組接點，執行計畫依正式規格建立。
 
 ## 原有桌面與核心文件
 
@@ -24,6 +33,7 @@ CloudWorkTools 版本以繁體中文 Web 操作與 NAS 擴充為主：
 
 - [AI subtitles](./ai-subtitles.md)
 - [Docker 字幕與外接 ASR API 研究](./docker-subtitles-research.md)：現有限制、Linux 引擎與外接模型方案。
+- [字幕模型與外部 API 相容性研究](./subtitle-model-api-research.md)：LocalAI、Ollama、LM Studio 的階段能力、非思考設定與候選模型。
 - [Architecture and source layout](./architecture.md)
 - [Migrating to UAV Downloader](./migration-to-uav.md)
 - [Windows download verification](../WINDOWS_SECURITY.md)
