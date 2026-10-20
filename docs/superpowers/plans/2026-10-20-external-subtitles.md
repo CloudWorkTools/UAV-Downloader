@@ -188,8 +188,8 @@ LM Studio 模型清單使用官方 REST `GET /api/v0/models` 的 `{object: "list
 - [x] 執行離線回歸及此功能專屬的正式映像整合流程，涵蓋階段重做、重啟／續跑、取消、安全 SRT 發布及儲存重試。
 - [x] 僅在服務與模型版本已確認時記錄真實 LocalAI VAD／ASR 與 LocalAI／Ollama／LM Studio 文字服務相容性；否則列為未驗證。模型品質須使用固定代表音訊及參考文字，fixture 結果不能作為品質驗收。
 - [x] 更新使用說明，並從執行中的版本擷取畫面；隱去私人媒體、位址、路徑與憑證。
-- [ ] 生產環境部署驗證尚未執行；隔離候選主機計畫待核准，不能取代 live 驗證。若之後執行，只透過 `python3 scripts/deploy_remote.py`，並獨立記錄結果；不得以離線或容器測試取代。
-- [ ] Standards／Spec 與整體程式審查的發現已處理；PR #19 仍是 draft，issue #18 尚未關閉。整合 PR 保持可供審查，不合併至預設分支。
+- [ ] 生產環境部署驗證尚未執行。已完成隔離候選主機驗證，包含正式唯讀測試映像、瀏覽器流程、Web health/assets/settings 端點及 Samba 來源與發布檢查；此結果不代表 live 驗證。若之後部署，只透過 `python3 scripts/deploy_remote.py`，並獨立記錄結果。
+- [x] Standards、Spec 與整體程式審查發現均已處理。整合 PR #19 維持 draft，合併後關聯 issue #18 才會關閉。
 
 ## 自我檢查
 
@@ -201,8 +201,8 @@ LM Studio 模型清單使用官方 REST `GET /api/v0/models` 的 `{object: "list
 
 ### 最終驗收證據（2026-10-20）
 
-- 來源 SHA：`f4ef4b195d6224955937e80820b3dd5b8f562bec`；正式產品映像 `sha256:769bb7b4400318680aa19287af605028b89aa319c4b7e30e38a867214d2ea80e`；正式唯讀 CI 測試映像 `sha256:a4745463c5d21fdcc837d91c3b0887fb93c4726b3d37ce01af222197f0056843`。
+- 最終來源與文件快照 SHA：`c8d7e474f609025c00c8757fc62108ca229d927e`；產品程式碼映像以已審核的 `f4ef4b195d6224955937e80820b3dd5b8f562bec` 建置，後續差異只有本計畫與兩張截圖。正式產品映像 ID 為 `sha256:769bb7b4400318680aa19287af605028b89aa319c4b7e30e38a867214d2ea80e`；正式唯讀 CI 測試映像 ID 為 `sha256:a4745463c5d21fdcc837d91c3b0887fb93c4726b3d37ce01af222197f0056843`。
 - `scripts/check_web.sh` 主機與唯讀來源正式映像各通過 866 個 Python 測試（3 個略過），且所有 CJS／Chrome 流程通過。正式流程包含成功的 legacy startup migration fixture 請求、`retry_wait` 取消、發布重試清除舊錯誤。
-- `scripts/check_web_container.sh` 通過；`scripts/check_smb_batch_container.sh` 以真實 Samba LIST 來源、直接發布及 upload alias 發布通過，且保留 staging。未掛載真實 NAS。
+- 本機 `scripts/check_web_container.sh` 通過；本機及隔離候選的 `scripts/check_smb_batch_container.sh` 以真實 Samba LIST 來源、直接發布及 upload alias 發布通過，且保留 staging。隔離候選主機沒有 `curl`，因此未將其 shell Web checker 記為通過；已用 Python 標準函式庫對相同 health、資產與設定端點執行等價檢查並通過。未掛載真實 NAS。
 - 新截圖：`docs/assets/web-independent-subtitles-desktop.png`、`docs/assets/web-independent-subtitles-mobile.png`。實際 LocalAI／Ollama／LM Studio 服務及模型品質尚未驗證。
-- 生產 live rollout 尚未執行；隔離部署主機候選計畫仍待核准。PR #19 維持 draft，issue #18 未關閉。
+- 隔離候選驗證已完成，臨時映像標籤、容器、Samba 測試映像及暫存目錄均已清除。未執行生產 live rollout，未變更生產服務。實際模型服務／模型品質與真實 NAS mount 尚未驗證。PR #19 維持 draft，issue #18 未關閉。
