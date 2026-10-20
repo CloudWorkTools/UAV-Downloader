@@ -1,10 +1,14 @@
 """No mounts: exercise the storage seam, seekable media bridge and NAS isolation."""
 import errno
+from contextlib import contextmanager
 import io
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
+import time
 from types import SimpleNamespace
 import urllib.error
 import urllib.request
@@ -50,6 +54,11 @@ def smb(monkeypatch, tmp_path):
         return open(path(name), mode, **{k:v for k,v in kwargs.items() if k not in ('connection_cache', 'share_access')})
     monkeypatch.setattr(smbclient, 'open_file', open_file)
     monkeypatch.setattr(smbclient, 'listdir', lambda name, **kw: os.listdir(path(name)))
+    @contextmanager
+    def scandir(name, **_kwargs):
+        with os.scandir(path(name)) as entries:
+            yield entries
+    monkeypatch.setattr(smbclient, 'scandir', scandir)
     monkeypatch.setattr(smbclient, 'stat', lambda name, **kw: path(name).stat(follow_symlinks=kw.get('follow_symlinks', True)))
     monkeypatch.setattr(smbclient, 'makedirs', lambda name, **kw: path(name).mkdir(parents=True, exist_ok=kw.get('exist_ok', False)))
     monkeypatch.setattr(smbclient, 'mkdir', lambda name, **kw: path(name).mkdir())
@@ -76,6 +85,22 @@ def test_virtual_paths_never_fall_back_to_local_disk():
     assert not Path(path).exists()
 
 
+def test_smb_scandir_normalizes_client_errors_without_exposing_details(smb, monkeypatch):
+    import smbclient
+
+    def denied(*_args, **_kwargs):
+        raise RuntimeError('STATUS_ACCESS_DENIED at \\\\private-host\\private-share')
+
+    monkeypatch.setattr(smbclient, 'scandir', denied)
+    with pytest.raises(OSError) as caught:
+        with smb.backend.scandir(smb.root):
+            pass
+
+    assert 'NAS SMB' in str(caught.value)
+    assert 'private-host' not in str(caught.value)
+    assert 'STATUS_ACCESS_DENIED' not in str(caught.value)
+
+
 def test_smb_writes_seek_and_exclusive_publish(smb):
     temporary = os.path.join(smb.root, 'video.part')
     target = os.path.join(smb.root, 'video.mp4')
@@ -96,6 +121,7 @@ def test_smb_writes_seek_and_exclusive_publish(smb):
 def test_subtitle_publication_uses_virtual_smb_root_and_one_sidecar(smb, tmp_path, monkeypatch, mode):
     from types import SimpleNamespace
     from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+    from uav_downloader.core.smb_storage import SmbStorage
     from uav_downloader.subtitles.models import SubtitleSegment
     settings = {**smb.settings, 'mode': mode}
     monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(settings))
@@ -182,6 +208,106 @@ def test_upload_subtitle_uses_registered_remote_relative_locator(smb, tmp_path, 
     with pytest.raises(ValueError, match='NAS 影片已變更'):
         manager.publish_result(source.video_id, result, 'en')
     assert not (smb.folder / 'category' / 'movie.zh-TW.srt').exists()
+
+
+def test_active_upload_task_blocks_manual_publish_through_smb_alias(smb, tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+    from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+    from uav_downloader.subtitles import engine, results
+    from uav_downloader.subtitles.models import SubtitleSegment
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    upload_settings = {**smb.settings, 'mode': 'upload'}
+    remote_video = os.path.join(smb.root, 'category', 'batch-7', 'movie.mp4')
+    smb.backend.makedirs(os.path.dirname(remote_video), exist_ok=True)
+    with storage_open(remote_video, 'wb') as stream:
+        stream.write(b'shared physical video')
+    local_root = tmp_path / 'staging'
+    local_root.mkdir()
+    local_video = local_root / 'movie.mp4'
+    local_video.write_bytes(b'shared physical video')
+    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(upload_settings))
+    monkeypatch.setattr(nas, 'smb_destination', lambda: smb.root)
+    monkeypatch.setattr(nas, 'open_smb_storage', lambda *_args: nullcontext(smb.backend))
+    files = SubtitleFileManager(state_path=tmp_path / 'sources.json')
+    smb_source = files.register_smb(remote_video, storage_root=smb.root,
+                                    nas_settings=upload_settings)
+    upload_source = files.register_upload(
+        str(local_video), allowed_roots=[str(local_root)], nas_settings=upload_settings,
+        remote_root=smb.root, remote_video_path=remote_video)
+    monkeypatch.setattr(SubtitleTaskManager, 'start_dispatcher', lambda _self: None)
+    tasks = SubtitleTaskManager(state_path=tmp_path / 'tasks.json', source_manager=files)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def active_stage(*_args, commit_guard, **_kwargs):
+        entered.set()
+        assert release.wait(5), 'test must release the active stage'
+        return commit_guard(lambda: SimpleNamespace(result_id='active-vad-result'))
+
+    monkeypatch.setattr(engine, 'run_stage', active_stage)
+    task = tasks.submit(upload_source.video_id, ['vad'], {'vad': ProfileSnapshot(
+        '{"capabilities":["vad"]}', None, 'active-vad')}, [],
+        audio_path=str(tmp_path / 'audio.wav'))
+    active = threading.Thread(target=tasks._run_task, args=(task['task_id'],))
+    active.start()
+    assert entered.wait(2), 'the upload alias task must enter its stage while holding the video lock'
+
+    manual_result = SimpleNamespace(
+        video_id=smb_source.video_id, result_id='manual-result', stage='asr', language='ja',
+        segments=(SubtitleSegment('line-1', 0, 1, '手動發布'),))
+    lookup_started = threading.Event()
+    monkeypatch.setattr(results, 'get', lambda *_args: lookup_started.set() or manual_result)
+    published = []
+    manual = threading.Thread(target=lambda: published.append(
+        tasks.publish_result(smb_source.video_id, 'manual-result', 'ja', replace_existing=False)))
+    manual.start()
+    assert lookup_started.wait(2)
+    target = smb.folder / 'category' / 'batch-7' / 'movie.ja.srt'
+    manifest = smb.folder / 'category' / 'batch-7' / 'movie.uav-subtitles.json'
+    time.sleep(0.1)
+    assert manual.is_alive(), 'manual SMB-alias publication waits for active upload-alias processing'
+    assert not target.exists() and not manifest.exists(), 'publication has made no sidecar or manifest change while waiting'
+
+    release.set()
+    active.join(5); manual.join(5)
+    assert not active.is_alive() and not manual.is_alive()
+    assert tasks.get_task(task['task_id'])['status'] == 'completed'
+    assert published[0]['publish_status'] == 'published'
+    assert target.read_text(encoding='utf-8').endswith('手動發布\n')
+    saved_manifest = json.loads(manifest.read_text(encoding='utf-8'))
+    assert saved_manifest['tracks']['ja']['result_id'] == 'manual-result'
+
+
+def test_smb_video_listing_uses_bounded_stream_and_reports_partial(smb, tmp_path, monkeypatch):
+    from contextlib import contextmanager, nullcontext
+    from types import SimpleNamespace
+    from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+
+    manager = SubtitleFileManager(state_path=tmp_path / 'sources.json')
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [])
+    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(smb.settings, enabled=True, mode='smb'))
+    monkeypatch.setattr(nas, 'smb_destination', lambda: smb.root)
+    monkeypatch.setattr(nas, 'open_smb_storage', lambda *_args: nullcontext(smb.backend))
+    consumed = []
+    entries = [SimpleNamespace(name=f'item-{index}.txt', is_symlink=lambda: False,
+                               is_dir=lambda **_kw: False, is_file=lambda **_kw: True)
+               for index in range(20)]
+
+    @contextmanager
+    def bounded_scandir(_self, _path):
+        def values():
+            for entry in entries:
+                consumed.append(entry.name)
+                yield entry
+        yield values()
+
+    monkeypatch.setattr(SmbStorage, 'scandir', bounded_scandir)
+    listed = manager.list_videos(max_entries=3)
+    assert listed == []
+    assert consumed == ['item-0.txt', 'item-1.txt', 'item-2.txt'], manager.list_errors
+    assert manager.list_partial is True
 
 
 def test_subtitle_queue_extracts_from_its_live_resolved_smb_context(smb, tmp_path, monkeypatch):

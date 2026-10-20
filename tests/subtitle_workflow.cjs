@@ -554,7 +554,7 @@ async function B2() {
   await cdp.until(`document.getElementById('subtitle-confirm-dialog')?.open`);
   const summary = await cdp.evaluate(`document.getElementById('subtitle-submit-summary')?.textContent || ''`);
   assert.match(summary, /影片：subtitle-fixture-a\.mp4/);
-  assert.match(summary, /vad.*asr.*correction.*translation/i);
+  assert.match(summary, /語音區間.*語音辨識.*字幕校正.*字幕翻譯/);
   await click('subtitle-confirm-submit');
   await click('subtitle-confirm-submit');
   await cdp.until(`document.querySelectorAll('[data-testid^="subtitle-task-subtitle_"]').length === 1`);
@@ -591,8 +591,13 @@ async function legacyStartupMigration() {
   await cdp.setChecked('subtitle-test-allow-reasoning', true);
   cdp.respondToNextDialog({accept: true});
   await click('subtitle-test-profile');
-  await cdp.until(`document.getElementById('subtitle-settings-status')?.textContent.includes('格式未確認')`);
-  assert.equal((await fixtureRecords()).length, 0, 'the browser reports the known migration failure before sending an external request');
+  await cdp.until(`document.getElementById('subtitle-settings-status')?.textContent.includes('格式符合')`);
+  const migrationProbeRecords = await fixtureRecords();
+  assert.equal(migrationProbeRecords.length, 1, 'the migrated profile performs one real correction probe');
+  assert.equal(migrationProbeRecords[0].kind, 'correction');
+  assert.equal(migrationProbeRecords[0].maxTokenField, 'max_tokens');
+  assert.equal(migrationProbeRecords[0].qualitySent, false,
+    'legacy quality metadata is preserved without sending an unsupported provider field');
   const profilesResponse = await fetch(new URL('/api/subtitles/profiles', runtime.url));
   assert.equal(profilesResponse.status, 200, 'legacy startup profile migration is exposed through the browser API');
   const profiles = (await profilesResponse.json()).profiles;
@@ -610,12 +615,13 @@ async function legacyStartupMigration() {
   const probe = await fetch(new URL('/api/subtitles/profiles/test', runtime.url), {method: 'POST',
     headers: {'content-type': 'application/json'}, body: JSON.stringify({action: 'test', profile_id: migratedText.profile_id,
       stage: 'correction', confirm_external_call: true, allow_reasoning: true})}).then(response => response.json());
-  assert.equal(probe.success, false, 'current known legacy quality incompatibility remains visible instead of being called compatible');
-  assert.equal(probe.test_status, 'failed', 'the migrated profile probe reports the known quality incompatibility as a failed probe');
-  assert.equal((await fixtureRecords()).length, 0, 'the known migration failure is rejected before sending an external request');
+  assert.equal(probe.success, true, 'the migrated legacy profile passes its correction probe');
+  assert.equal(probe.format_pass, true);
+  assert.equal((await fixtureRecords()).length, 2, 'the API probe also reaches the real model fixture');
   await cdp.setChecked('subtitle-test-allow-reasoning', false);
   scenarioDetails.Migration = {legacyFilesPreserved: true, migratedProfiles: ['legacy-asr', migratedText.profile_id],
-    legacyTextProbe: 'KNOWN_PRODUCT_FAILURE: migrated quality=balanced is rejected by the new text parameter validator before the fixture request'};
+    legacyTextProbe: 'passed correction probe and parsed fixture response', requests: migrationProbeRecords.length + 1,
+    legacyQualitySent: false};
 }
 
 async function B3() {
@@ -717,7 +723,7 @@ async function B4() {
   assert.equal(await cdp.evaluate('document.activeElement?.dataset.testid'), cancelTestId,
     `focused task action remains focused after visible update: ${JSON.stringify(liveAfterFocusPoll)}`);
   await waitTaskStatus(runningId, 'completed');
-  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${runningId}"] [data-task-live-title]')?.textContent.includes('completed')`);
+  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${runningId}"] [data-task-live-title]')?.textContent.includes('已完成')`);
   assert.equal(await cdp.evaluate('document.activeElement?.dataset.testid'), cancelTestId,
     'focus remains on the original row action after the delayed task completes');
   await cdp.evaluate(`document.querySelector('[data-testid="subtitle-refresh"]')?.focus()`);
@@ -774,6 +780,28 @@ async function B4() {
     'explicit resume allows one final bounded retry without duplicating successful siblings');
   retryEvidence.retry503 = {initialAttempts: initialPermanentFailures, explicitResumeAttempts: 1,
     observedCalls: (await fixtureRecords()).filter(item => item.kind === 'vad').map(item => ({kind: item.kind, model: item.model, status: item.status}))};
+
+  await fixture.reset();
+  await fixture.control({failPath: '/v1/vad', failStatus: 503});
+  await clearVideoSelection();
+  const beforeRetryCancelIds = await appTaskIds();
+  await setPipeline({stages: ['vad'], outputs: [], target: []});
+  await selectVideoByName('subtitle-fixture-d.mp4');
+  await submitSelected();
+  await cdp.until(`window.subtitleTasks.state.tasks.length === ${beforeRetryCancelIds.length + 1}`);
+  const retryCancelId = (await appTaskIds()).find(id => !beforeRetryCancelIds.includes(id));
+  await waitTaskStatus(retryCancelId, 'retry_wait');
+  const retryCancelTestId = `subtitle-action-cancel-${retryCancelId}`;
+  assert.equal((await cdp.selector(retryCancelTestId)).hidden, false,
+    'retry_wait exposes an enabled cancellation action');
+  await click(retryCancelTestId);
+  await waitTaskStatus(retryCancelId, 'cancelled');
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  const cancelledRetryRequests = (await fixtureRecords()).filter(item => item.kind === 'vad');
+  assert.equal(cancelledRetryRequests.length, 1,
+    'cancelling during the bounded retry wait prevents the next upstream request');
+  assert.equal(cancelledRetryRequests[0].status, 503);
+  retryEvidence.retryWaitCancel = {status: 'cancelled', observedRequests: cancelledRetryRequests.length};
 
   await fixture.reset();
   await fixture.control({failPath: '/v1/vad', failStatus: 401});
@@ -991,13 +1019,18 @@ async function B6() {
     fs.chmodSync(downloadsDir, downloadsOriginalMode);
     downloadsReadOnly = false;
   }
-  await cdp.until(`document.getElementById('subtitle-publications')?.textContent.includes('failed')`);
+  await cdp.until(`document.getElementById('subtitle-publications')?.textContent.includes('儲存失敗')`);
   const publicationFailureText = await cdp.evaluate(`document.getElementById('subtitle-publications')?.textContent || ''`);
   const retryTestId = await cdp.evaluate(`document.querySelector('[data-testid^="subtitle-publication-retry-"]')?.dataset.testid || null`);
   assert.ok(retryTestId, 'failed publication exposes a storage-only retry in the visible publication history');
   assert.equal((await cdp.selector(retryTestId)).disabled, false, 'storage-only retry is enabled after publication failure');
+  const retryPublicationId = retryTestId.slice('subtitle-publication-retry-'.length);
   await click(retryTestId);
-  await cdp.until(`document.getElementById('subtitle-publications')?.textContent.includes('published')`);
+  await cdp.until(`document.getElementById('subtitle-publications')?.textContent.includes('已發布')`);
+  const clearedRetry = await cdp.evaluate(`window.subtitleTasks.state.publications.find(item=>item.publication_id===${JSON.stringify(retryPublicationId)})||null`);
+  assert.equal(clearedRetry.publish_status, 'published');
+  assert.equal(Object.hasOwn(clearedRetry, 'error'), false,
+    'successful publication retry clears the persisted failure from the live UI model');
   assert.equal((await fixtureRecords()).length, beforeStorageRetry,
     'publication retry uses the saved result for storage and makes no model request');
   assert.ok(fs.existsSync(blockedVersionedPath) && fs.statSync(blockedVersionedPath).isFile(),
@@ -1161,7 +1194,8 @@ const runPromise = (async () => {
   await assertStyledFrontend();
   currentCase = 'LegacyStartupMigration';
   await legacyStartupMigration();
-  evidence.push({case: currentCase, result: 'PASS_WITH_KNOWN_PRODUCT_FAILURE', fixture: [], details: scenarioDetails.Migration});
+  const migrationRecords = await fixtureRecords();
+  evidence.push({case: currentCase, result: 'PASS', fixture: migrationRecords.map(({method, path, kind, model, status}) => ({method, path, kind, model, status})), details: scenarioDetails.Migration});
   const scenarios = [B1, B2, B3, B4, B5, B6, B7, B8];
   for (const scenario of scenarios) {
     currentCase = scenario.name;

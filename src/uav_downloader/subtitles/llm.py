@@ -775,9 +775,15 @@ def _validate_text_parameters(provider, parameters):
         'lmstudio': {'temperature', 'top_p', 'top_k', 'min_p', 'repeat_penalty',
                      'max_output_tokens', 'context_length'},
     }.get(provider)
-    if allowed is None or not isinstance(parameters, dict) or set(parameters) - allowed:
+    if (allowed is None or not isinstance(parameters, dict)
+            or set(parameters) - allowed - {'quality'}
+            or ('quality' in parameters and parameters['quality'] not in ('fast', 'balanced', 'quality'))):
         raise LlmTranslationError('模型參數不受支援')
     for name, value in parameters.items():
+        # ``quality`` is legacy metadata. It remains in migrated profiles but
+        # has no remote-provider equivalent and is omitted from wire payloads.
+        if name == 'quality':
+            continue
         integer = name in {'max_output_tokens', 'context_length', 'top_k', 'num_predict'}
         if (type(value) not in ((int,) if integer else (int, float))
                 or (not integer and not math.isfinite(value))):
@@ -812,13 +818,16 @@ def _segment_batches(segments, parameters):
 
 
 def _stage_payload(provider, model, key, parameters, prompt, system, disable_reasoning):
+    parameters = {name: value for name, value in parameters.items() if name != 'quality'}
     headers = {'Content-Type': 'application/json'}
     if key:
         headers['Authorization'] = 'Bearer ' + key
     if provider in ('openai', 'openai-compatible', 'localai'):
+        token_limit = parameters.get('max_output_tokens', 4096)
+        token_field = 'max_completion_tokens' if provider == 'openai' else 'max_tokens'
         payload = {'model': model, 'messages': [{'role': 'system', 'content': system},
                   {'role': 'user', 'content': prompt}], 'stream': False,
-                  'max_tokens': parameters.get('max_output_tokens', 4096)}
+                  token_field: token_limit}
         payload.update({name: value for name, value in parameters.items() if name == 'temperature'})
         if provider == 'localai' and disable_reasoning:
             payload.update({'reasoning_effort': 'none', 'metadata': {'enable_thinking': 'false'}})
@@ -844,9 +853,12 @@ def _stage_payload(provider, model, key, parameters, prompt, system, disable_rea
             payload['temperature'] = parameters['temperature']
         return headers, payload
     headers = {'Content-Type': 'application/json', 'x-goog-api-key': key}
+    generation_config = {'maxOutputTokens': parameters.get('max_output_tokens', 4096)}
+    if 'temperature' in parameters:
+        generation_config['temperature'] = parameters['temperature']
     return headers, {'systemInstruction': {'parts': [{'text': system}]},
                      'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
-                     'generationConfig': {'maxOutputTokens': parameters.get('max_output_tokens', 4096)}}
+                     'generationConfig': generation_config}
 
 
 def _stage_content(provider, envelope, disable_reasoning):
@@ -909,7 +921,7 @@ def _stage_worker(request_path, response_path):
                 metadata = _send_json(session, request['show_url'], request['headers'],
                                       {'model': request['model']}, (10, 30))
                 values = metadata.get('thinking', {}).get('values')
-                if not isinstance(values, list) or False not in values:
+                if not isinstance(values, list) or not any(value is False for value in values):
                     raise LlmTranslationError('Ollama 未確認此模型支援 thinking 控制；請明確允許思考')
             envelope = _send_json(session, request['url'], request['headers'], request['payload'], (10, 180))
             result = {'ok': True, 'payload': envelope}

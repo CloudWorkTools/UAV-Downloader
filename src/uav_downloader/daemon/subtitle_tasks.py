@@ -85,6 +85,8 @@ def _safe_error(stage, error):
     lowered = message.casefold()
     if '缺少' in message or '缺明確' in message:
         return f'{prefix}：缺少必要的上游字幕結果，請先完成或指定上游階段'
+    if isinstance(error, ValueError) and any(term in message for term in ('API 金鑰', 'API 憑證', 'credential')):
+        return f'{prefix}：模型服務憑證無法使用，請重新輸入 API 金鑰後續跑'
     if any(term in lowered for term in ('已過期', '過期', 'stale', 'outdated')):
         return f'{prefix}：上游字幕結果已過期，請更新結果或明確選擇舊版本'
     if any(term in lowered for term in (
@@ -172,6 +174,12 @@ class SubtitleTaskManager:
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
+
+    def _video_lock(self, video_id):
+        key_resolver = getattr(self._source_manager, 'publication_lock_key', None)
+        key = key_resolver(video_id) if key_resolver else video_id
+        with self._lock:
+            return self._video_locks.setdefault(key, threading.Lock())
 
     def _save(self):
         with self._lock:
@@ -523,7 +531,7 @@ class SubtitleTaskManager:
                 logging.warning('字幕工作狀態無法保存；已停止自動重試，請手動續跑')
                 return
             task = self._copy(task)
-        video_lock = self._video_locks.setdefault(task['video_id'], threading.Lock())
+        video_lock = self._video_lock(task['video_id'])
         video_locked = False
         try:
             while not video_lock.acquire(timeout=0.1):
@@ -736,7 +744,7 @@ class SubtitleTaskManager:
                 raise ValueError('字幕發布目前無法重試')
             video_id, result_id = task['video_id'], entry['result_id']
         from uav_downloader.subtitles import results
-        with self._video_locks.setdefault(video_id, threading.Lock()):
+        with self._video_lock(video_id):
             result = results.get(video_id, result_id)
             if result is None:
                 raise ValueError('字幕結果不存在')
@@ -766,7 +774,7 @@ class SubtitleTaskManager:
             raise ValueError('字幕結果階段與輸出語言不符')
         if not isinstance(replace_existing, bool):
             raise ValueError('字幕替換選項無效')
-        with self._video_locks.setdefault(video_id, threading.Lock()):
+        with self._video_lock(video_id):
             restored = results.restore_previous(video_id, stage, language)
             if output_language is None:
                 return {'publication_id': None, 'video_id': video_id,
@@ -804,6 +812,8 @@ class SubtitleTaskManager:
             status = {'publish_status': 'failed', 'error': _safe_error('publish', exc)}
         with self._lock:
             current = self._publications[publication['publication_id']]
+            if status['publish_status'] == 'published':
+                current.pop('error', None)
             current.update(status)
             current['updated_at'] = time.time()
             self._save_locked()
@@ -828,7 +838,7 @@ class SubtitleTaskManager:
             'restore_status': 'not_requested', 'publish_status': 'publishing',
             'created_at': time.time(),
         }
-        with self._video_locks.setdefault(video_id, threading.Lock()):
+        with self._video_lock(video_id):
             with self._lock:
                 self._publications[publication_id] = publication
                 self._save_locked()
@@ -848,7 +858,7 @@ class SubtitleTaskManager:
                     or publication.get('publish_status') != 'failed'):
                 raise ValueError('字幕發布目前無法重試')
             publication = copy.deepcopy(publication)
-        with self._video_locks.setdefault(publication['video_id'], threading.Lock()):
+        with self._video_lock(publication['video_id']):
             status = self._publish_restored_locked(publication)
         return {'publication_id': publication_id, 'video_id': publication['video_id'],
                 'result_id': publication['result_id'], 'language': publication['language'],

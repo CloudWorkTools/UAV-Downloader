@@ -186,6 +186,7 @@ def test_restore_publish_failure_is_persisted_and_retried_after_restart(manager,
     assert writes == ['write', 'write']
     persisted = json.loads(manager._state_path.read_text())
     assert persisted['publications'][failed['publication_id']]['publish_status'] == 'published'
+    assert 'error' not in persisted['publications'][failed['publication_id']]
 
 
 @pytest.mark.parametrize('stage', ['vad', 'asr'])
@@ -313,6 +314,69 @@ def test_permanent_stage_error_is_not_retried(manager, monkeypatch):
     assert manager.get_task(task['task_id'])['status'] == 'failed'
 
 
+def test_manual_resume_refills_pinned_vad_credential_after_partial_checkpoint(
+        manager, monkeypatch, tmp_path):
+    import wave
+    from array import array
+    from uav_downloader.subtitles import profiles, results, vad
+    from uav_downloader.subtitles.models import SpeechChunk, SpeechInterval, StageRequestError
+
+    profiles_path = tmp_path / 'profiles.json'
+    monkeypatch.setattr(profiles, '_profiles_path', lambda: profiles_path)
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    profile = profiles.StageProfile(
+        profile_id='resume-vad', display_name='Resume VAD', kind='vad', provider='localai',
+        capabilities=('vad',), base_url='http://127.0.0.1:1234/v1', model='vad-model',
+        parameters_json='{}')
+    saved = profiles.save_profile(profile, api_key='old-key')
+    snapshot = profiles.snapshot('resume-vad', 'vad')
+    audio = tmp_path / 'audio.wav'
+    with wave.open(str(audio), 'wb') as stream:
+        stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(16000)
+        stream.writeframes(array('h', [0] * (16000 * 20)).tobytes())
+    chunks = (SpeechChunk(0, 0, 160000, 0, 160000),
+              SpeechChunk(1, 160000, 320000, 160000, 320000))
+    monkeypatch.setattr(vad, 'plan_speech_chunks', lambda _path: chunks)
+    calls = []
+
+    def request_chunk(_path, pinned, chunk, _cancel):
+        key = profiles.resolve_credential(pinned.credential_ref, profile.base_url)
+        calls.append((chunk.index, key))
+        if key == 'old-key' and chunk.index == 1:
+            raise StageRequestError('HTTP 401', retryable=False)
+        return [SpeechInterval(float(chunk.index), float(chunk.index + 1))]
+
+    monkeypatch.setattr(vad, 'detect_speech_chunk', request_chunk)
+    task = manager.submit('video-resume', ['vad'], {'vad': snapshot}, [], audio_path=str(audio))
+    manager._run_task(task['task_id'])
+    first_failure = manager.get_task(task['task_id'])
+    assert first_failure['status'] == 'failed'
+    assert first_failure['completed'] == []
+    assert calls == [(0, 'old-key'), (1, 'old-key')]
+    checkpoint = json.loads(next((tmp_path / 'results').glob('*.json')).read_text())
+    assert sum(len(items) for items in checkpoint['checkpoints'].values()) == 1
+
+    state = json.loads(profiles_path.read_text())
+    state['credentials'].pop(saved.credential_ref)
+    profiles_path.write_text(json.dumps(state))
+    manager.resume(task['task_id'])
+    manager._run_task(task['task_id'])
+    missing_key = manager.get_task(task['task_id'])
+    assert missing_key['status'] == 'failed'
+    assert '重新輸入 API 金鑰' in missing_key['error']
+    assert calls == [(0, 'old-key'), (1, 'old-key')]
+
+    replaced = profiles.save_profile(profile, api_key='new-key')
+    assert replaced.credential_ref == snapshot.credential_ref
+    manager.resume(task['task_id'])
+    manager._run_task(task['task_id'])
+    completed = manager.get_task(task['task_id'])
+    assert completed['status'] == 'completed'
+    assert completed['completed'] == ['vad:']
+    assert calls == [(0, 'old-key'), (1, 'old-key'), (1, 'new-key')]
+    assert profiles.resolve_credential(snapshot.credential_ref, profile.base_url) == 'new-key'
+
+
 def test_allow_reasoning_is_persisted_and_passed_to_runner(manager, monkeypatch):
     from uav_downloader.subtitles import engine
 
@@ -417,6 +481,8 @@ def test_http_auth_error_is_specific_and_does_not_echo_url_or_secret(manager, mo
     ('value', '字幕上游結果已過期，請先更新', '上游字幕結果已過期'),
     ('llm', '此模型服務停用思考能力未確認，請明確允許思考 at https://private/?token=secret',
      '尚未確認思考控制'),
+    ('value', '模型服務 API 金鑰無法解密，請重新輸入: secret https://private.example',
+     '請重新輸入 API 金鑰'),
 ])
 def test_known_domain_errors_are_specific_and_sanitized(manager, monkeypatch, error_kind, message, expected):
     from uav_downloader.subtitles import engine, llm
@@ -429,6 +495,7 @@ def test_known_domain_errors_are_specific_and_sanitized(manager, monkeypatch, er
     assert expected in message
     assert 'private' not in message
     assert 'secret' not in message
+    assert 'private.example' not in message
 
 
 def test_retry_deadline_crossing_never_sleeps_for_negative_time(monkeypatch):
@@ -697,3 +764,60 @@ def test_completed_task_cleans_only_its_generated_audio(manager, monkeypatch, tm
     assert not generated.parent.exists()
     assert provided_audio.read_bytes() == b'audio'
     assert video.read_bytes() == b'video'
+
+
+def test_active_local_task_blocks_publication_through_different_allowed_root(tmp_path, monkeypatch):
+    from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+    from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+    from uav_downloader.subtitles import engine, results
+    from uav_downloader.subtitles.models import SubtitleSegment
+
+    root = tmp_path / 'downloads'
+    nested = root / 'batch-7'
+    nested.mkdir(parents=True)
+    video = nested / 'movie.mp4'
+    video.write_bytes(b'video')
+    files = SubtitleFileManager(state_path=tmp_path / 'sources.json')
+    batch_source = files.register(str(video), allowed_roots=[str(nested)])
+    history_source = files.register(str(video), allowed_roots=[str(root)])
+    assert batch_source.video_id != history_source.video_id
+    assert files.publication_lock_key(batch_source.video_id) == files.publication_lock_key(history_source.video_id)
+    monkeypatch.setattr(SubtitleTaskManager, 'start_dispatcher', lambda _self: None)
+    tasks = SubtitleTaskManager(state_path=tmp_path / 'tasks.json', source_manager=files)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def active_stage(*_args, commit_guard, **_kwargs):
+        entered.set()
+        assert release.wait(5), 'test must release the active stage'
+        return commit_guard(lambda: SimpleNamespace(result_id='active-vad-result'))
+
+    monkeypatch.setattr(engine, 'run_stage', active_stage)
+    task = tasks.submit(batch_source.video_id, ['vad'], {'vad': SNAPSHOT}, [],
+                        audio_path=str(tmp_path / 'audio.wav'))
+    active = threading.Thread(target=tasks._run_task, args=(task['task_id'],))
+    active.start()
+    assert entered.wait(2), 'the local-source task must hold the per-video lock during its stage'
+
+    manual_result = SimpleNamespace(
+        video_id=history_source.video_id, result_id='manual-result', stage='asr', language='ja',
+        segments=(SubtitleSegment('line-1', 0, 1, '手動發布'),))
+    lookup_started = threading.Event()
+    monkeypatch.setattr(results, 'get', lambda *_args: lookup_started.set() or manual_result)
+    published = []
+    manual = threading.Thread(target=lambda: published.append(
+        tasks.publish_result(history_source.video_id, 'manual-result', 'ja', replace_existing=False)))
+    manual.start()
+    assert lookup_started.wait(2)
+    target = nested / 'movie.ja.srt'
+    manifest = nested / 'movie.uav-subtitles.json'
+    time.sleep(0.1)
+    assert manual.is_alive(), 'publication through the parent-root alias waits for active processing'
+    assert not target.exists() and not manifest.exists()
+
+    release.set()
+    active.join(5); manual.join(5)
+    assert not active.is_alive() and not manual.is_alive()
+    assert tasks.get_task(task['task_id'])['status'] == 'completed'
+    assert published[0]['publish_status'] == 'published'
+    assert target.read_text(encoding='utf-8').endswith('手動發布\n')

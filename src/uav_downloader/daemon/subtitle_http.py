@@ -213,8 +213,11 @@ def _profile_test(body):
     except Exception as exc:
         reason = 'unsupported' if ('思考' in str(exc) or 'reasoning control' in str(exc).casefold()
                                    or 'ignored reasoning' in str(exc).casefold()) else 'unknown'
-        format_pass = False if ('response format' in str(exc).casefold()
-                                or '回應格式無效' in str(exc) or '回傳格式無效' in str(exc)) else None
+        message = str(exc)
+        format_pass = False if ('response format' in message.casefold()
+                                or any(term in message for term in (
+                                    '回應格式無效', '回傳格式無效', '必須回傳', '必須回傳合法',
+                                    '回應 JSON 格式無效', '片段格式錯誤'))) else None
         return {'success': False, 'test_status': 'failed', 'format_pass': format_pass,
                 'reasoning_control': reason, 'quality': 'unverified',
                 'message': ('模型回應格式不符合要求。' if format_pass is False else
@@ -303,7 +306,15 @@ def _submission(body, files, manager):
         _id(input_result, r'[A-Za-z0-9_-]{1,128}', '字幕上游結果識別碼格式無效')
     try:
         source = files.register_history(video_id)
-        return manager.submit(video_id, stages, snapshots, languages, video_path=getattr(source, 'video_path', None),
+    except ApiError:
+        raise
+    except ValueError as exc:
+        raise ApiError(400, str(exc)[:240]) from None
+    except OSError:
+        raise ApiError(503, '字幕影片來源離線或無讀取權限，請確認下載或 NAS 目錄') from None
+    try:
+        return manager.submit(video_id, stages, snapshots, languages,
+                              video_path=getattr(source, 'video_path', None),
                               output_languages=outputs, input_result_id=input_result,
                               allow_reasoning=reasoning)
     except ApiError:
@@ -362,6 +373,8 @@ def route(handler, method, path, body):
             errors = [{'source': item.get('source'), 'error': item.get('error')}
                       for item in files.list_errors[:100]]
             return 200, {'videos': videos, 'errors': errors,
+                         'partial': files.list_partial,
+                         'notice': ('影片清單已達掃描上限，可能仍有未列出的影片。' if files.list_partial else None),
                          'capabilities': {'local_vad': _local_vad_capability()}}
         if segments == ['api', 'subtitles', 'tasks']:
             if method == 'GET':

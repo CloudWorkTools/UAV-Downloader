@@ -1,11 +1,70 @@
 # coding: utf-8
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import requests
 
 from uav_downloader.subtitles import llm
 from uav_downloader.core.ssl import SharedSSLAdapter
+
+
+@pytest.mark.parametrize(('provider', 'parameters', 'expected'), [
+    ('openai', {'max_output_tokens': 123}, {'max_completion_tokens': 123}),
+    ('openai-compatible', {'max_output_tokens': 123}, {'max_tokens': 123}),
+    ('gemini', {'temperature': 0.25, 'max_output_tokens': 123},
+     {'generationConfig': {'temperature': 0.25, 'maxOutputTokens': 123}}),
+])
+def test_stage_requests_match_legacy_wire_contract(provider, parameters, expected, monkeypatch):
+    from uav_downloader.subtitles import profiles
+    from uav_downloader.subtitles.models import SubtitleSegment
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    requests_seen = []
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args): pass
+        def do_POST(self):
+            requests_seen.append((self.path, json.loads(self.rfile.read(int(self.headers['Content-Length']))),
+                                  self.headers.get('x-goog-api-key'), self.headers.get('Authorization')))
+            content = json.dumps([{'id': 'segment-1', 'text': 'output'}])
+            reply = ({'candidates': [{'content': {'parts': [{'text': content}]}}]}
+                     if provider == 'gemini' else
+                     {'choices': [{'finish_reason': 'stop', 'message': {'content': content}}]})
+            raw = json.dumps(reply).encode()
+            self.send_response(200); self.send_header('Content-Length', str(len(raw)))
+            self.end_headers(); self.wfile.write(raw)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = {'openai': 'https://api.openai.com/v1',
+            'gemini': 'https://generativelanguage.googleapis.com/v1beta'}.get(
+                provider, f'http://127.0.0.1:{server.server_port}/v1')
+    endpoint = f'http://127.0.0.1:{server.server_port}/chat/completions'
+    monkeypatch.setattr(llm, '_provider_endpoint', lambda _settings: endpoint)
+    monkeypatch.setattr(profiles, 'resolve_credential', lambda *_args: 'fixture-key')
+    profile = {'kind': 'text', 'provider': provider, 'base_url': base, 'model': 'fixture-model',
+               'capabilities': ['correction'], 'parameters': parameters}
+    snapshot = ProfileSnapshot(json.dumps(profile), 'fixture-ref', 'snapshot')
+    try:
+        result = llm.transform_segments('correction', [SubtitleSegment('segment-1', 1, 2, 'input')],
+                                        snapshot, allow_reasoning=True)
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    assert result == [SubtitleSegment('segment-1', 1, 2, 'output')]
+    assert len(requests_seen) == 1
+    _, sent, gemini_key, authorization = requests_seen[0]
+    for key, value in expected.items():
+        assert sent[key] == value
+    if provider == 'openai':
+        assert 'max_tokens' not in sent
+        assert authorization == 'Bearer fixture-key'
+    if provider == 'openai-compatible':
+        assert authorization == 'Bearer fixture-key'
+    if provider == 'gemini':
+        assert gemini_key == 'fixture-key'
 
 
 class FakeResponse:

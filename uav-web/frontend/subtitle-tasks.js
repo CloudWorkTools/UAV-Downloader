@@ -4,7 +4,7 @@
       const response=await fetch(path,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});
       const data=await response.json(); if(!response.ok||data.success===false)throw new Error(data.error||'字幕操作失敗'); return data;
     });
-    const state={videos:[],videoErrors:[],tasks:[],publications:[],results:[],selected:new Set(),activeVideo:null,preview:null};
+    const state={videos:[],videoErrors:[],videoPartial:false,videoNotice:null,tasks:[],publications:[],results:[],selected:new Set(),activeVideo:null,preview:null};
     let submitting=false,resultsRequest=0,refreshInFlight=null;
     let pendingTaskRender=false,pendingResultsRender=false;
     const byId=id=>root.getElementById(id), el=(tag,text='',cls='')=>{const node=root.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;};
@@ -17,13 +17,20 @@
     const status=(message,error=false)=>{const node=byId('subtitle-error');if(node){node.textContent=message;node.setAttribute('role',error?'alert':'status');}const dialogNode=byId('subtitle-redo-dialog')?.open?byId('subtitle-redo-error'):byId('subtitle-confirm-dialog')?.open?byId('subtitle-confirm-error'):null;if(dialogNode){dialogNode.textContent=message;dialogNode.setAttribute('role',error?'alert':'status');}};
     const requestBody=()=>settings.downloadRequest();
     const busyActions=new Set();
+    const stageLabels={vad:'語音區間',asr:'語音辨識',correction:'字幕校正',translation:'字幕翻譯'};
+    const statusLabels={queued:'排隊中',running:'處理中',retry_wait:'等待重試',cancelling:'取消中',waiting_for_resume:'等待手動續跑',completed:'已完成',failed:'失敗',cancelled:'已取消'};
+    const languageLabels={ja:'日文',en:'英文','zh-TW':'繁體中文'};
+    const sourceLabels={history:'下載歷史',configured:'影片目錄',smb:'NAS'};
+    const publicationLabels={published:'已發布',failed:'儲存失敗',publishing:'發布中',not_requested:'未要求發布'};
+    const label=(map,value,fallback='')=>map[value]||fallback||value||'—';
+    function readableDate(value){const numeric=typeof value==='number'?value:Number(value);if(!Number.isFinite(numeric)||numeric<=0)return '';try{return new Intl.DateTimeFormat('zh-TW',{dateStyle:'medium',timeStyle:'short'}).format(new Date(numeric*1000));}catch{return '';}}
     function restoreFailedDialogActionFocus(dialogId,button,wasFocused){
       const dialog=byId(dialogId);if(!wasFocused||!button||!dialog?.open)return;
       const active=root.activeElement;
       if(active===root.body||active===dialog||active===button)button.focus();
     }
-    function liveTaskTitle(task){const source=state.videos.find(video=>video.video_id===task.video_id);const profile=task.profile_snapshots?.[task.current_stage]?.profile;return `${source?.title||source?.name||task.video_id} · ${task.status||'未知狀態'} · ${task.current_stage||'等待階段'}${task.current_language?` / ${task.current_language}`:''}${profile?` · ${profile.display_name?`${profile.display_name} · `:''}${profile.provider||'未知服務'} / ${profile.model||'未知模型'}`:''}`;}
-    function updateFocusedTaskFields(){const box=byId('subtitle-task-list');if(!box)return;for(const task of state.tasks){const row=[...box.querySelectorAll('article[data-task-id]')].find(item=>item.dataset.taskId===task.task_id);if(!row)continue;const title=row.querySelector('[data-task-live-title]'),progress=row.querySelector('[data-task-live-progress]'),error=row.querySelector('[data-task-live-error]');if(title)title.textContent=liveTaskTitle(task);if(progress)progress.textContent=task.progress!=null?`進度 ${task.progress}%`:'排隊等待';if(error){error.textContent=task.error?`錯誤：${task.error}`:'';error.hidden=!task.error;}for(const line of row.querySelectorAll('[data-task-publication-language]')){const entry=task.publish_status?.[line.dataset.taskPublicationLanguage];if(entry)line.textContent=`輸出 ${line.dataset.taskPublicationLanguage}：${entry.status}${entry.error?` · ${entry.error}`:''}`;}}}
+    function liveTaskTitle(task){const source=state.videos.find(video=>video.video_id===task.video_id);const profile=task.profile_snapshots?.[task.current_stage]?.profile;const stage=task.current_stage?label(stageLabels,task.current_stage):(['completed','failed','cancelled'].includes(task.status)?'':'等待階段');return `${source?.title||source?.name||task.video_id} · ${label(statusLabels,task.status,'未知狀態')}${stage?` · ${stage}`:''}${task.current_language?` / ${label(languageLabels,task.current_language)}`:''}${profile?` · ${profile.display_name?`${profile.display_name} · `:''}${profile.provider||'未知服務'} / ${profile.model||'未知模型'}`:''}`;}
+    function updateFocusedTaskFields(){const box=byId('subtitle-task-list');if(!box)return;for(const task of state.tasks){const row=[...box.querySelectorAll('article[data-task-id]')].find(item=>item.dataset.taskId===task.task_id);if(!row)continue;const title=row.querySelector('[data-task-live-title]'),progress=row.querySelector('[data-task-live-progress]'),error=row.querySelector('[data-task-live-error]');if(title)title.textContent=liveTaskTitle(task);if(progress)progress.textContent=task.progress!=null?`進度 ${task.progress}%`:'排隊等待';if(error){error.textContent=task.error?`錯誤：${task.error}`:'';error.hidden=!task.error;}for(const line of row.querySelectorAll('[data-task-publication-language]')){const entry=task.publish_status?.[line.dataset.taskPublicationLanguage];if(entry)line.textContent=`輸出 ${label(languageLabels,line.dataset.taskPublicationLanguage)}：${label(publicationLabels,entry.status)}${entry.error?` · ${entry.error}`:''}`;}}}
     function renderVideos(){
       const box=byId('subtitle-videos'); if(!box||box.contains(root.activeElement))return;
       box.replaceChildren();
@@ -32,10 +39,10 @@
         const row=el('label','', 'flex items-start gap-3 rounded-lg border border-[#3e3e4e] p-3');
         const check=el('input');check.type='checkbox';check.value=video.video_id;check.dataset.testid=`subtitle-video-${video.video_id}`;check.checked=state.selected.has(video.video_id);check.className='mt-1 h-5 w-5 accent-brand-600';
         check.addEventListener('change',()=>{check.checked?state.selected.add(video.video_id):state.selected.delete(video.video_id);});
-        const text=el('span',`${video.title || video.name || '未命名影片'} · ${video.source || '影片'}`,'min-w-0 break-words text-sm');row.append(check,text);box.append(row);
+        const text=el('span',`${video.title || video.name || '未命名影片'} · ${label(sourceLabels,video.source,'影片')}`,'min-w-0 break-words text-sm');row.append(check,text);box.append(row);
       }
     }
-    function renderVideoErrors(){const box=byId('subtitle-video-errors');if(!box)return;box.replaceChildren();for(const error of state.videoErrors){box.append(el('p',`${error.source||'影片來源'}：${error.error||'目前無法讀取'}`));}}
+    function renderVideoErrors(){const box=byId('subtitle-video-errors');if(!box)return;box.replaceChildren();if(state.videoNotice)box.append(el('p',state.videoNotice));for(const error of state.videoErrors){box.append(el('p',`${label(sourceLabels,error.source,'影片來源')}：${error.error||'目前無法讀取'}`));}}
     function renderTasks(preserveFocus=false){
       const box=byId('subtitle-task-list');if(!box)return;
       if(byId('subtitle-redo-dialog')?.open||box.querySelector('details[open]')){pendingTaskRender=true;return;}
@@ -51,13 +58,13 @@
         const title=el('h3',liveTaskTitle(task),'break-all text-sm font-semibold');title.dataset.taskLiveTitle='true';
         const progress=el('p',task.progress!=null?`進度 ${task.progress}%`:'排隊等待','text-xs text-gray-400');progress.dataset.taskLiveProgress='true';const errorLine=el('p',task.error?`錯誤：${task.error}`:'','break-words text-xs text-rose-300');errorLine.dataset.taskLiveError='true';errorLine.hidden=!task.error;row.append(title,progress,errorLine);
         const snapshots=Object.entries(task.profile_snapshots||{});
-        if(snapshots.length){row.append(el('p',`已保存階段設定：${snapshots.map(([stage,snapshot])=>`${stage} · ${snapshot.profile?.provider||'未知服務'} / ${snapshot.profile?.model||'未知模型'}`).join('；')}`,'break-words text-xs text-gray-400'));addSnapshotDetails(row,snapshots);}
+        if(snapshots.length){row.append(el('p',`已保存階段設定：${snapshots.map(([stage,snapshot])=>`${label(stageLabels,stage)} · ${snapshot.profile?.provider||'未知服務'} / ${snapshot.profile?.model||'未知模型'}`).join('；')}`,'break-words text-xs text-gray-400'));addSnapshotDetails(row,snapshots);}
         const actions=el('div','','flex flex-wrap gap-2');
         const publications=Object.entries(task.publish_status||{});
-        if(publications.length)for(const [language,entry] of publications){const line=el('p',`輸出 ${language}：${entry.status}${entry.error?` · ${entry.error}`:''}`,'break-words text-xs text-gray-400');line.dataset.taskPublicationLanguage=language;row.append(line);if(entry.status==='failed')addPublishRetry(task,language,actions);}
+        if(publications.length)for(const [language,entry] of publications){const line=el('p',`輸出 ${label(languageLabels,language)}：${label(publicationLabels,entry.status)}${entry.error?` · ${entry.error}`:''}`,'break-words text-xs text-gray-400');line.dataset.taskPublicationLanguage=language;row.append(line);if(entry.status==='failed')addPublishRetry(task,language,actions);}
         const addAction=(action,label,handler)=>{const button=el('button',label,'min-h-10 rounded border border-[#3e3e4e] px-3 text-xs');button.type='button';button.dataset.testid=`subtitle-action-${action}-${task.task_id}`;button.addEventListener('click',async()=>{const key=`${task.task_id}:${action}`;if(busyActions.has(key))return;busyActions.add(key);button.disabled=true;try{await handler();}finally{busyActions.delete(key);if(button.isConnected)button.disabled=false;}});actions.append(button);};
         if(['waiting_for_resume','failed'].includes(task.status))addAction('resume','繼續',()=>act(task,'resume'));
-        if(['queued','running','cancelling'].includes(task.status))addAction('cancel','取消',()=>act(task,'cancel'));
+        if(['queued','running','retry_wait','cancelling'].includes(task.status))addAction('cancel','取消',()=>act(task,'cancel'));
         if(['queued','waiting_for_resume'].includes(task.status)){
           addAction('up','往前',()=>act(task,'reorder',{position:Math.max(0,index-1)}));
           addAction('down','往後',()=>act(task,'reorder',{position:index+1}));
@@ -75,7 +82,7 @@
     let redoTask=null,redoResults=[],redoTriggerTestId=null;
     async function openRedo(task){
       redoTriggerTestId=root.activeElement?.dataset?.testid||null;redoTask=task;const dialog=byId('subtitle-redo-dialog'),stage=byId('subtitle-redo-stage'),profile=byId('subtitle-redo-profile'),input=byId('subtitle-redo-input'),warning=byId('subtitle-redo-warning');const errorNode=byId('subtitle-redo-error');if(errorNode)errorNode.textContent='';
-      stage.replaceChildren(...['vad','asr','correction','translation'].map(value=>{const option=el('option',value.toUpperCase());option.value=value;return option;}));
+      stage.replaceChildren(...['vad','asr','correction','translation'].map(value=>{const option=el('option',label(stageLabels,value));option.value=value;return option;}));
       try{const data=await api('GET',`/api/subtitles/videos/${encodeURIComponent(task.video_id)}/results`);redoResults=data.results||[];}catch(error){redoResults=[];status(error.message,true);}
       let populatedStage=null;
       function updateRedoChoices(){
@@ -87,7 +94,7 @@
           if([...profile.options].some(option=>option.value===previousProfile))profile.value=previousProfile;
           const upstream=selected==='asr'?redoResults.filter(item=>item.stage==='vad'):selected==='translation'?redoResults.filter(item=>['asr','correction'].includes(item.stage)):selected==='correction'?redoResults.filter(item=>item.stage==='asr'):[];
           const available=upstream.filter(item=>item.content_available);
-          for(const result of available){const option=el('option',`${result.stage} · ${result.language||'原文'} · ${result.created_at||''}${result.stale?' · 過期':''}`);option.value=result.result_id;option.dataset.stale=String(!!result.stale);input.append(option);}
+          for(const result of available){const option=el('option',`${label(stageLabels,result.stage)} · ${label(languageLabels,result.language,'原文')} · ${readableDate(result.created_at)}${result.stale?' · 過期':''}`);option.value=result.result_id;option.dataset.stale=String(!!result.stale);input.append(option);}
           populatedStage=selected;
         }
         const upstream=selected==='asr'?redoResults.filter(item=>item.stage==='vad'):selected==='translation'?redoResults.filter(item=>['asr','correction'].includes(item.stage)):selected==='correction'?redoResults.filter(item=>item.stage==='asr'):[];
@@ -97,7 +104,7 @@
         byId('subtitle-redo-language').disabled=selected!=='translation';
         const confirm=byId('subtitle-redo-confirm');if(confirm)confirm.disabled=!profile.value||(needs&&!input.value);
         const summary=byId('subtitle-redo-summary'),chosen=redoResults.find(item=>item.result_id===input.value),chosenProfile=settings.state.profiles.find(item=>item.profile_id===profile.value);
-        if(summary)summary.textContent=`將只重做 ${selected} (${chosenProfile?.provider||'服務'} / ${chosenProfile?.model||'模型'})${chosen?`，使用 ${chosen.stage} 版本 ${chosen.result_id}${chosen.stale?'（已過期）':''}`:''}；既有下游版本可能標為過期，不會自動重跑。`;
+        if(summary)summary.textContent=`將只重做 ${label(stageLabels,selected)} (${chosenProfile?.provider||'服務'} / ${chosenProfile?.model||'模型'})${chosen?`，使用 ${label(stageLabels,chosen.stage)} 版本 ${chosen.result_id}${chosen.stale?'（已過期）':''}`:''}；既有下游版本可能標為過期，不會自動重跑。`;
       }
       stage.onchange=updateRedoChoices;profile.onchange=updateRedoChoices;input.onchange=updateRedoChoices;updateRedoChoices();dialog?.showModal();
     }
@@ -118,7 +125,8 @@
       const stagePosition=new Map();
       const resultVideoId=state.activeVideo;
       for(const result of state.results){const key=`${result.stage}:${result.language||''}`,position=stagePosition.get(key)||0;stagePosition.set(key,position+1);const row=el('article','', 'space-y-2 rounded-lg border border-[#3e3e4e] p-3');row.dataset.testid=`subtitle-result-${result.result_id}`;
-        row.append(el('h3',`${position===0?'最新版本 · ':position===1?'上一版本 · ':''}${result.stage} · ${result.language || '—'} · ${result.created_at || ''}${result.stale?' · 上游版本已更新':''}${result.adopted?' · 已採用':''}${result.content_available?'':' · 內容已清理'}`,'break-all text-sm font-semibold'));
+        const source=state.videos.find(video=>video.video_id===resultVideoId);const sourceName=source?.title||source?.name||resultVideoId;
+        row.append(el('h3',`${position===0?'最新版本 · ':position===1?'上一版本 · ':''}${sourceName} · ${label(stageLabels,result.stage)} · ${label(languageLabels,result.language)} · ${readableDate(result.created_at)}${result.stale?' · 上游版本已更新':''}${result.adopted?' · 已採用':''}${result.content_available?'':' · 內容已清理'}`,'break-words text-sm font-semibold'));
         const profile=result.profile_snapshot?.profile;row.append(el('p',`不可變模型快照：${profile?.display_name?`${profile.display_name} · `:''}${profile?.provider||'未知服務'} / ${profile?.model||'未知模型'}；上游版本：${result.input_result_ids?.join('、')||'影片來源'}`,'break-words text-xs text-gray-400'));addSnapshotDetails(row,[[result.stage,result.profile_snapshot]]);
         const actions=el('div','','flex flex-wrap gap-2');const button=(label,run)=>{const b=el('button',label,'min-h-10 rounded border border-[#3e3e4e] px-3 text-xs');b.type='button';b.addEventListener('click',()=>runOnce(`${resultVideoId}:${result.result_id}:${label}`,b,run));actions.append(b);};
         button('查看版本',async()=>{try{const data=await api('GET',`/api/subtitles/videos/${encodeURIComponent(resultVideoId)}/results/${encodeURIComponent(result.result_id)}`);if(state.activeVideo!==resultVideoId)return;const content=await api('GET',`/api/subtitles/videos/${encodeURIComponent(resultVideoId)}/results/${encodeURIComponent(result.result_id)}/content`);if(state.activeVideo!==resultVideoId)return;const current=typeof content.content==='string'?content.content:JSON.stringify(content.content,null,2);let display=current;if(['correction','translation'].includes(result.stage)&&data.inputs?.length){const parents=await Promise.all(data.inputs.map(parent=>api('GET',`/api/subtitles/videos/${encodeURIComponent(resultVideoId)}/results/${encodeURIComponent(parent.result_id)}/content`)));if(state.activeVideo!==resultVideoId)return;display=`上游版本\n${parents.map(parent=>typeof parent.content==='string'?parent.content:JSON.stringify(parent.content,null,2)).join('\n---\n')}\n\n目前版本\n${current}`;}state.preview=data;const preview=byId('subtitle-preview');if(preview)preview.textContent=display;const download=byId('subtitle-download');if(download.dataset.objectUrl)URL.revokeObjectURL(download.dataset.objectUrl);download.dataset.objectUrl=URL.createObjectURL(new Blob([current],{type:content.content_type}));download.href=download.dataset.objectUrl;download.download=content.filename;download.textContent=result.stage==='vad'?'下載 VAD 區間 JSON':'下載字幕 SRT';download.hidden=false;}catch(error){if(state.activeVideo===resultVideoId)status(error.message,true);}});
@@ -132,7 +140,8 @@
       if(!state.publications.length){box.append(el('p','尚無字幕發布紀錄。','text-sm text-gray-400'));return;}
       for(const publication of state.publications){
         const row=el('div','', 'flex flex-wrap items-center justify-between gap-2 rounded border border-[#3e3e4e] p-3');
-        row.append(el('span',`${publication.video_id} · ${publication.language} · ${publication.publish_status}${publication.error?` · ${publication.error}`:''}`,'break-all text-xs'));
+        const source=state.videos.find(video=>video.video_id===publication.video_id);const title=source?.title||source?.name||publication.video_id;
+        row.append(el('span',`${title} · ${label(languageLabels,publication.language)} · ${label(publicationLabels,publication.publish_status)}${publication.created_at?` · ${readableDate(publication.created_at)}`:''}${publication.error?` · ${publication.error}`:''}`,'break-words text-xs'));
         if(publication.publish_status==='failed'){
           const retry=el('button','只重試字幕儲存','min-h-10 rounded border border-[#3e3e4e] px-3 text-xs');retry.type='button';
           retry.dataset.testid=`subtitle-publication-retry-${publication.publication_id}`;retry.addEventListener('click',()=>runOnce(`publication:${publication.publication_id}`,retry,async()=>{try{const value=await api('POST',`/api/subtitles/videos/${encodeURIComponent(publication.video_id)}/results/${encodeURIComponent(publication.publication_id)}/action`,{action:'retry_publish'});await refresh();if(value.publish_status==='failed')status(`字幕儲存仍失敗：${value.error||'原因未提供'}`,true);else status('字幕儲存重試成功。');}catch(error){status(error.message,true);}}));row.append(retry);
@@ -144,7 +153,7 @@
       let spec;try{spec=requestBody();if(!spec)throw new Error('請至少選擇一個字幕階段。');}catch(error){status(error.message,true);return;}
       const videoIds=[...state.selected];if(!videoIds.length){status('請先選擇至少一部影片。',true);return;}
       const videoNames=videoIds.map(id=>{const video=state.videos.find(item=>item.video_id===id);return video?.title||video?.name||id;});
-      const stageModels=spec.selected_stages.map(stage=>{const id=spec.profile_ids[stage]||spec.profile_ids.text;const profile=settings.state.profiles.find(item=>item.profile_id===id);return `${stage}：${profile?.display_name||'設定檔'} (${profile?.provider||'服務未知'} / ${profile?.model||'模型未知'})`;});
+      const stageModels=spec.selected_stages.map(stage=>{const id=spec.profile_ids[stage]||spec.profile_ids.text;const profile=settings.state.profiles.find(item=>item.profile_id===id);return `${label(stageLabels,stage)}：${profile?.display_name||'設定檔'} (${profile?.provider||'服務未知'} / ${profile?.model||'模型未知'})`;});
       const summary=byId('subtitle-submit-summary');if(summary)summary.textContent=`影片：${videoNames.join('、')}。階段與模型：${stageModels.join('；')}。辨識來源語言：日文；翻譯目標語言：${spec.target_languages.join('、')||'未選擇'}；輸出字幕語言：${spec.output_languages.join('、')||'僅保存內部結果'}；額外思考${spec.allow_reasoning?'已明確允許':'停用或未知時由服務規則保護'}。各階段會使用目前設定檔快照。`;
       const errorNode=byId('subtitle-confirm-error');if(errorNode)errorNode.textContent='';byId('subtitle-confirm-dialog')?.showModal();
     }
@@ -159,7 +168,7 @@
     }
     async function refresh({scanVideos=false}={}){
       if(refreshInFlight){await refreshInFlight;if(scanVideos)return refresh({scanVideos:true});return state;}
-      refreshInFlight=(async()=>{try{const [videos,tasks]=await Promise.all([scanVideos?api('GET','/api/subtitles/videos'):Promise.resolve(null),api('GET','/api/subtitles/tasks')]);if(videos){state.videos=videos.videos||[];state.videoErrors=videos.errors||[];settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;renderVideos();renderVideoErrors();}state.tasks=tasks.tasks||[];state.publications=tasks.publications||[];renderTasks();renderPublications();const selector=byId('subtitle-result-video');if(scanVideos&&selector&&!selector.contains(root.activeElement)){const previous=selector.value;selector.replaceChildren();const known=new Set();for(const video of state.videos){const option=el('option',video.title||video.name||video.video_id);option.value=video.video_id;selector.append(option);known.add(video.video_id);}for(const task of state.tasks){if(known.has(task.video_id))continue;const option=el('option',`${task.video_id} · 來源可能離線`);option.value=task.video_id;selector.append(option);known.add(task.video_id);}if([...selector.options].some(option=>option.value===previous))selector.value=previous;else if(selector.options.length)selector.value=selector.options[0].value;}if(state.activeVideo)await loadResults(state.activeVideo);return state;}catch(error){status(error.message,true);return state;}})();
+      refreshInFlight=(async()=>{try{const [videos,tasks]=await Promise.all([scanVideos?api('GET','/api/subtitles/videos'):Promise.resolve(null),api('GET','/api/subtitles/tasks')]);if(videos){state.videos=videos.videos||[];state.videoErrors=videos.errors||[];state.videoPartial=videos.partial===true;state.videoNotice=videos.notice||null;settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;renderVideos();renderVideoErrors();}state.tasks=tasks.tasks||[];state.publications=tasks.publications||[];renderTasks();renderPublications();const selector=byId('subtitle-result-video');if(scanVideos&&selector&&!selector.contains(root.activeElement)){const previous=selector.value;selector.replaceChildren();const known=new Set();for(const video of state.videos){const option=el('option',video.title||video.name||video.video_id);option.value=video.video_id;selector.append(option);known.add(video.video_id);}for(const task of state.tasks){if(known.has(task.video_id))continue;const option=el('option',`${task.video_id} · 來源可能離線`);option.value=task.video_id;selector.append(option);known.add(task.video_id);}if([...selector.options].some(option=>option.value===previous))selector.value=previous;else if(selector.options.length)selector.value=selector.options[0].value;}if(state.activeVideo)await loadResults(state.activeVideo);return state;}catch(error){status(error.message,true);return state;}})();
       try{return await refreshInFlight;}finally{refreshInFlight=null;}
     }
     function bind(){
