@@ -923,7 +923,7 @@ async function B5() {
   assert.equal(englishRedoCalls[0].language, 'en', 'English result is created for the same video before Traditional Chinese redo');
   await clickId('subtitle-refresh');
   const englishResult = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕翻譯 · en'))?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕翻譯 · 英文 · '))?.dataset.testid || null)()`);
   assert.ok(englishResult, 'same-video English translation result is visible');
   await cdp.evaluate(`document.querySelector('[data-testid="${englishResult}"] button')?.click()`);
   await cdp.until(`document.querySelector('[data-testid="subtitle-preview"]')?.textContent.includes('en:')`);
@@ -937,7 +937,7 @@ async function B5() {
     'single-language translation redo calls only translation');
   assert.equal(traditionalRedoCalls[0].language, 'zh-TW', 'second redo is Traditional Chinese only');
   await selectResults(videoIds['subtitle-fixture-a.mp4']);
-  await cdp.until(`document.querySelector('[data-testid="${englishResult}"]')?.innerText.includes('en')`);
+  await cdp.until(`document.querySelector('[data-testid="${englishResult}"]')?.innerText.includes('英文')`);
   assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="${englishResult}"]')?.innerText || ''`), englishResultText,
     'zh-TW-only redo does not alter the prior English result ID or visible row content');
   await cdp.evaluate(`document.querySelector('[data-testid="${englishResult}"] button')?.click()`);
@@ -974,7 +974,7 @@ async function B6() {
   await clearFixture();
   await selectResults(videoIds['subtitle-fixture-a.mp4']);
   const translation = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕翻譯 · zh-TW · '))?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕翻譯 · 繁體中文 · '))?.dataset.testid || null)()`);
   assert.ok(translation, 'B6 selects a Traditional Chinese translation result compatible with zh-TW publication');
   const translationSelector = `[data-testid="${translation}"]`;
   await cdp.evaluate(`document.querySelector('${translationSelector} button')?.click()`);
@@ -1094,7 +1094,7 @@ async function B7() {
   await submitSelected();
   await cdp.until(`document.querySelectorAll('[data-testid^="subtitle-task-subtitle_"]').length === ${silentBefore.length + 1}`, 10000);
   const silentTask = (await taskIds()).find(id => !silentBefore.includes(id));
-  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${silentTask}"]')?.textContent.match(/completed|完成/i)`, 60000);
+  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${silentTask}"]')?.textContent.includes('已完成')`, 60000);
   assert.deepEqual((await fixtureRecords()).map(item => item.kind), ['vad'], 'empty VAD response stops before ASR and text stages');
   const silentOutput = path.join(downloadsDir, 'subtitle-fixture-silent.ja.srt');
   assert.ok(fs.existsSync(silentOutput), 'selected Japanese output is materialized for valid silent input');
