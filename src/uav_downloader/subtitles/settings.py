@@ -27,12 +27,18 @@ OPENAI = "openai"
 ANTHROPIC = "anthropic"
 GEMINI = "gemini"
 OPENAI_COMPATIBLE = "openai-compatible"
+LOCALAI = "localai"
+OLLAMA = "ollama"
+LMSTUDIO = "lmstudio"
 PROVIDERS = (
     LOCAL,
     OPENAI,
     ANTHROPIC,
     GEMINI,
     OPENAI_COMPATIBLE,
+    LOCALAI,
+    OLLAMA,
+    LMSTUDIO,
 )
 
 # Models remain editable in the UI.  These are conservative starting values,
@@ -52,6 +58,9 @@ PROVIDER_DEFAULTS = {
         "model": "gemini-3.5-flash-lite",
     },
     OPENAI_COMPATIBLE: {"base_url": "", "model": ""},
+    LOCALAI: {"base_url": "", "model": ""},
+    OLLAMA: {"base_url": "", "model": ""},
+    LMSTUDIO: {"base_url": "", "model": ""},
 }
 
 _SCHEMA = 1
@@ -85,7 +94,8 @@ class TranslationSettings:
 
     @property
     def credential_available(self) -> bool:
-        return bool(self.api_key) or self.provider == OPENAI_COMPATIBLE
+        return bool(self.api_key) or self.provider in {
+            OPENAI_COMPATIBLE, LOCALAI, OLLAMA, LMSTUDIO}
 
 def _settings_path() -> str:
     return str(product_data_dir() / "translation_api.json")

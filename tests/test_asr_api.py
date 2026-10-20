@@ -7,6 +7,8 @@ import wave
 import pytest
 
 from uav_downloader.subtitles import asr, engine
+from uav_downloader.subtitles.models import SpeechInterval, SubtitleSegment
+from uav_downloader.subtitles.profiles import ProfileSnapshot
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +135,81 @@ def test_real_http_worker_merges_chunks_in_video_time(tmp_path, monkeypatch, api
         assert path == '/v1/audio/transcriptions' and auth == 'Bearer test-token'
         assert b'verbose_json' in body and b'test-model' in body and b'ja' in body
     assert not list(tmp_path.glob('asr-api-*'))
+
+
+def test_stage_asr_uses_vad_intervals_and_rejects_out_of_range_seconds(tmp_path, api_server):
+    settings, responses, requests, _ = api_server
+    responses.append((200, {'segments': [segment(.2, .8, '台詞')]}))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 3)
+    snapshot = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'],
+        'parameters': {},
+    }), None, 'snapshot')
+    result = asr.transcribe_stage(str(wav), [SpeechInterval(1, 2)], snapshot, 'ja', lambda: False)
+    assert result == [SubtitleSegment('segment-000001', 1.2, 1.8, '台詞')]
+    assert [request[0] for request in requests] == ['/v1/audio/transcriptions']
+
+
+def test_stage_asr_does_not_clamp_invalid_seconds(tmp_path, api_server):
+    settings, responses, _, _ = api_server
+    responses.append((200, {'segments': [segment(.8, 1.2, '越界')]}))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 2)
+    snapshot = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'],
+        'parameters': {},
+    }), None, 'snapshot')
+    with pytest.raises(engine.SubtitleError, match='秒單位'):
+        asr.transcribe_stage(str(wav), [SpeechInterval(1, 2)], snapshot, 'ja', lambda: False)
+
+
+def test_stage_asr_overlap_preserves_context_without_duplicate_boundary_segments(
+        tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'CHUNK_SECONDS', 2)
+    monkeypatch.setattr(asr, 'OVERLAP_SECONDS', 0.5)
+    responses.extend((200, {'segments': items}) for items in [
+        [segment(.5, 1, '首段'), segment(1.5, 2.5, '接縫上下文')],
+        [segment(.5, 1, '接縫上下文'), segment(2.2, 2.8, '次段接縫')],
+        [segment(.7, 1.3, '尾段')],
+    ])
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 5)
+    snapshot = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'], 'parameters': {},
+    }), None, 'snapshot')
+    result = asr.transcribe_stage(str(wav), [SpeechInterval(0, 5)], snapshot, 'ja', lambda: False)
+    assert [item.text for item in result] == ['首段', '接縫上下文', '尾段']
+    assert [(item.start, item.end) for item in result] == [(.5, 1.0), (2.0, 2.5), (4.2, 4.8)]
+    assert len(requests) == 3
+
+
+def test_stage_asr_never_posts_model_install_endpoint(tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'DEFAULT_URL', settings['base_url'])
+    responses.append((200, {'segments': []}))
+    wav = tmp_path / 'chunk.wav'
+    audio(wav, 1)
+    result = asr._request(dict(settings, _install_model=False), str(wav))
+    assert result == {'segments': []}
+    assert [request[0] for request in requests] == ['/v1/audio/transcriptions']
+
+
+def test_legacy_asr_keeps_custom_prefix_endpoint_contract(tmp_path, api_server):
+    settings, responses, requests, _ = api_server
+    responses.append((200, {'segments': []}))
+    wav = tmp_path / 'chunk.wav'
+    audio(wav, 1)
+    asr._request(dict(settings, base_url=settings['base_url'].replace('/v1', '/api')),
+                 str(wav))
+    assert requests[-1][0] == '/api/audio/transcriptions'
 
 
 def test_http_failure_hides_provider_body(tmp_path, api_server):
