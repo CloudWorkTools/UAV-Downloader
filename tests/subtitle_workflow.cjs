@@ -435,13 +435,15 @@ async function selectResults(videoId) {
 }
 
 async function resultRow(stage) {
+  const stageLabel = {vad: '語音區間', asr: '語音辨識', correction: '字幕校正', translation: '字幕翻譯'}[stage] || stage;
   const selector = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(${JSON.stringify(` · ${stage} · `)}))?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(${JSON.stringify(` · ${stageLabel} · `)}))?.dataset.testid || null)()`);
   assert.ok(selector, `saved ${stage} result must be visible`);
   return selector;
 }
 
 async function redoOnlyStage(taskId, stage, profileId, inputStage = null, language = 'zh-TW') {
+  const stageLabels = {vad: '語音區間', asr: '語音辨識', correction: '字幕校正', translation: '字幕翻譯'};
   const beforeIds = await appTaskIds();
   await click(`subtitle-action-redo-${taskId}`);
   await cdp.until(`document.getElementById('subtitle-redo-dialog')?.open`);
@@ -452,13 +454,13 @@ async function redoOnlyStage(taskId, stage, profileId, inputStage = null, langua
   if (inputStage) {
     await cdp.until(`document.getElementById('subtitle-redo-input')?.options.length > 1`);
     inputResultId = await cdp.evaluate(`(() => [...document.getElementById('subtitle-redo-input').options]
-      .find(option=>option.textContent.trim().startsWith(${JSON.stringify(inputStage)}))?.value || null)()`);
+      .find(option=>option.textContent.trim().startsWith(${JSON.stringify(stageLabels[inputStage] || inputStage)}))?.value || null)()`);
     assert.ok(inputResultId, `${stage} redo exposes an explicit ${inputStage} upstream result`);
     await cdp.selectId('subtitle-redo-input', inputResultId);
   }
   if (stage === 'translation') await fillId('subtitle-redo-language', language);
   const summary = await cdp.evaluate(`document.getElementById('subtitle-redo-summary')?.textContent || ''`);
-  assert.ok(summary.includes(stage), `redo summary names the requested ${stage} stage`);
+  assert.ok(summary.includes(stageLabels[stage] || stage), `redo summary names the requested ${stage} stage`);
   if (inputResultId) assert.ok(summary.includes(inputResultId), `redo summary names selected upstream result ${inputResultId}`);
   await clickId('subtitle-redo-confirm');
   await clickId('subtitle-redo-confirm');
@@ -554,7 +556,7 @@ async function B2() {
   await cdp.until(`document.getElementById('subtitle-confirm-dialog')?.open`);
   const summary = await cdp.evaluate(`document.getElementById('subtitle-submit-summary')?.textContent || ''`);
   assert.match(summary, /影片：subtitle-fixture-a\.mp4/);
-  assert.match(summary, /vad.*asr.*correction.*translation/i);
+  assert.match(summary, /語音區間.*語音辨識.*字幕校正.*字幕翻譯/);
   await click('subtitle-confirm-submit');
   await click('subtitle-confirm-submit');
   await cdp.until(`document.querySelectorAll('[data-testid^="subtitle-task-subtitle_"]').length === 1`);
@@ -591,8 +593,13 @@ async function legacyStartupMigration() {
   await cdp.setChecked('subtitle-test-allow-reasoning', true);
   cdp.respondToNextDialog({accept: true});
   await click('subtitle-test-profile');
-  await cdp.until(`document.getElementById('subtitle-settings-status')?.textContent.includes('格式未確認')`);
-  assert.equal((await fixtureRecords()).length, 0, 'the browser reports the known migration failure before sending an external request');
+  await cdp.until(`document.getElementById('subtitle-settings-status')?.textContent.includes('格式符合')`);
+  const migrationProbeRecords = await fixtureRecords();
+  assert.equal(migrationProbeRecords.length, 1, 'the migrated profile performs one real correction probe');
+  assert.equal(migrationProbeRecords[0].kind, 'correction');
+  assert.equal(migrationProbeRecords[0].maxTokenField, 'max_tokens');
+  assert.equal(migrationProbeRecords[0].qualitySent, false,
+    'legacy quality metadata is preserved without sending an unsupported provider field');
   const profilesResponse = await fetch(new URL('/api/subtitles/profiles', runtime.url));
   assert.equal(profilesResponse.status, 200, 'legacy startup profile migration is exposed through the browser API');
   const profiles = (await profilesResponse.json()).profiles;
@@ -610,12 +617,13 @@ async function legacyStartupMigration() {
   const probe = await fetch(new URL('/api/subtitles/profiles/test', runtime.url), {method: 'POST',
     headers: {'content-type': 'application/json'}, body: JSON.stringify({action: 'test', profile_id: migratedText.profile_id,
       stage: 'correction', confirm_external_call: true, allow_reasoning: true})}).then(response => response.json());
-  assert.equal(probe.success, false, 'current known legacy quality incompatibility remains visible instead of being called compatible');
-  assert.equal(probe.test_status, 'failed', 'the migrated profile probe reports the known quality incompatibility as a failed probe');
-  assert.equal((await fixtureRecords()).length, 0, 'the known migration failure is rejected before sending an external request');
+  assert.equal(probe.success, true, 'the migrated legacy profile passes its correction probe');
+  assert.equal(probe.format_pass, true);
+  assert.equal((await fixtureRecords()).length, 2, 'the API probe also reaches the real model fixture');
   await cdp.setChecked('subtitle-test-allow-reasoning', false);
   scenarioDetails.Migration = {legacyFilesPreserved: true, migratedProfiles: ['legacy-asr', migratedText.profile_id],
-    legacyTextProbe: 'KNOWN_PRODUCT_FAILURE: migrated quality=balanced is rejected by the new text parameter validator before the fixture request'};
+    legacyTextProbe: 'passed correction probe and parsed fixture response', requests: migrationProbeRecords.length + 1,
+    legacyQualitySent: false};
 }
 
 async function B3() {
@@ -684,7 +692,7 @@ async function B4() {
   assert.equal(batchIds.length, 3, 'batch selection creates three independent subtitle tasks');
   await waitUntil(async () => {
     const rendered = await cdp.evaluate(`document.querySelector('[data-testid="subtitle-task-list"]')?.innerText || ''`);
-    return /running/i.test(rendered) && (rendered.match(/queued/gi) || []).length >= 2 ? rendered : false;
+    return rendered.includes('處理中') && (rendered.match(/排隊中/g) || []).length >= 2 ? rendered : false;
   }, 'visible running task and queued siblings', 10000);
   await cdp.selectId('subtitle-stage-profile-vad', 'workflow-vad-alt');
   const unstartedId = await cdp.evaluate(`window.subtitleTasks.state.tasks.find(item=>item.status==='queued'&&!item.ever_started&&!item.inputs?.length)?.task_id`);
@@ -692,7 +700,7 @@ async function B4() {
   await click(`subtitle-action-settings-${unstartedId}`);
   await cdp.until(`document.querySelector('[data-testid="subtitle-task-${unstartedId}"]')?.textContent.includes('Fixture VAD Alternate')`);
   const appliedSnapshot = await cdp.evaluate(`document.querySelector('[data-testid="subtitle-task-${unstartedId}"]')?.innerText || ''`);
-  assert.match(appliedSnapshot, /已保存階段設定：vad · localai \/ fixture-vad-alt/,
+  assert.match(appliedSnapshot, /已保存階段設定：語音區間 · localai \/ fixture-vad-alt/,
     'apply-only-unstarted updates the visible stage/provider/model snapshot');
   await cdp.evaluate(`document.querySelector('[data-testid="subtitle-task-${unstartedId}"] details summary')?.click()`);
   const expandedTaskSnapshot = await cdp.evaluate(`document.querySelector('[data-testid="subtitle-task-${unstartedId}"] details[open]')?.textContent || ''`);
@@ -717,7 +725,7 @@ async function B4() {
   assert.equal(await cdp.evaluate('document.activeElement?.dataset.testid'), cancelTestId,
     `focused task action remains focused after visible update: ${JSON.stringify(liveAfterFocusPoll)}`);
   await waitTaskStatus(runningId, 'completed');
-  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${runningId}"] [data-task-live-title]')?.textContent.includes('completed')`);
+  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${runningId}"] [data-task-live-title]')?.textContent.includes('已完成')`);
   assert.equal(await cdp.evaluate('document.activeElement?.dataset.testid'), cancelTestId,
     'focus remains on the original row action after the delayed task completes');
   await cdp.evaluate(`document.querySelector('[data-testid="subtitle-refresh"]')?.focus()`);
@@ -776,6 +784,28 @@ async function B4() {
     observedCalls: (await fixtureRecords()).filter(item => item.kind === 'vad').map(item => ({kind: item.kind, model: item.model, status: item.status}))};
 
   await fixture.reset();
+  await fixture.control({failPath: '/v1/vad', failStatus: 503});
+  await clearVideoSelection();
+  const beforeRetryCancelIds = await appTaskIds();
+  await setPipeline({stages: ['vad'], outputs: [], target: []});
+  await selectVideoByName('subtitle-fixture-d.mp4');
+  await submitSelected();
+  await cdp.until(`window.subtitleTasks.state.tasks.length === ${beforeRetryCancelIds.length + 1}`);
+  const retryCancelId = (await appTaskIds()).find(id => !beforeRetryCancelIds.includes(id));
+  await waitTaskStatus(retryCancelId, 'retry_wait');
+  const retryCancelTestId = `subtitle-action-cancel-${retryCancelId}`;
+  assert.equal((await cdp.selector(retryCancelTestId)).hidden, false,
+    'retry_wait exposes an enabled cancellation action');
+  await click(retryCancelTestId);
+  await waitTaskStatus(retryCancelId, 'cancelled');
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  const cancelledRetryRequests = (await fixtureRecords()).filter(item => item.kind === 'vad');
+  assert.equal(cancelledRetryRequests.length, 1,
+    'cancelling during the bounded retry wait prevents the next upstream request');
+  assert.equal(cancelledRetryRequests[0].status, 503);
+  retryEvidence.retryWaitCancel = {status: 'cancelled', observedRequests: cancelledRetryRequests.length};
+
+  await fixture.reset();
   await fixture.control({failPath: '/v1/vad', failStatus: 401});
   await clearVideoSelection();
   const before401Ids = await appTaskIds();
@@ -812,7 +842,7 @@ async function B4() {
   scenarioDetails.B4 = {...retryEvidence, beforeRestartRequests};
   await restartRuntime();
   await click('subtitle-tab');
-  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${interruptedTaskId}"]')?.textContent.includes('waiting_for_resume')`);
+  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${interruptedTaskId}"]')?.textContent.includes('等待手動續跑')`);
   const resumeButton = await cdp.selector(`subtitle-action-resume-${interruptedTaskId}`);
   assert.equal(resumeButton.hidden, false, 'service restart exposes an explicit manual resume action');
   await fixture.reset();
@@ -894,7 +924,7 @@ async function B5() {
   assert.equal(englishRedoCalls[0].language, 'en', 'English result is created for the same video before Traditional Chinese redo');
   await clickId('subtitle-refresh');
   const englishResult = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(' · translation · en'))?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕翻譯 · 英文 · '))?.dataset.testid || null)()`);
   assert.ok(englishResult, 'same-video English translation result is visible');
   await cdp.evaluate(`document.querySelector('[data-testid="${englishResult}"] button')?.click()`);
   await cdp.until(`document.querySelector('[data-testid="subtitle-preview"]')?.textContent.includes('en:')`);
@@ -908,7 +938,7 @@ async function B5() {
     'single-language translation redo calls only translation');
   assert.equal(traditionalRedoCalls[0].language, 'zh-TW', 'second redo is Traditional Chinese only');
   await selectResults(videoIds['subtitle-fixture-a.mp4']);
-  await cdp.until(`document.querySelector('[data-testid="${englishResult}"]')?.innerText.includes('en')`);
+  await cdp.until(`document.querySelector('[data-testid="${englishResult}"]')?.innerText.includes('英文')`);
   assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="${englishResult}"]')?.innerText || ''`), englishResultText,
     'zh-TW-only redo does not alter the prior English result ID or visible row content');
   await cdp.evaluate(`document.querySelector('[data-testid="${englishResult}"] button')?.click()`);
@@ -945,7 +975,7 @@ async function B6() {
   await clearFixture();
   await selectResults(videoIds['subtitle-fixture-a.mp4']);
   const translation = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(' · translation · zh-TW · '))?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕翻譯 · 繁體中文 · '))?.dataset.testid || null)()`);
   assert.ok(translation, 'B6 selects a Traditional Chinese translation result compatible with zh-TW publication');
   const translationSelector = `[data-testid="${translation}"]`;
   await cdp.evaluate(`document.querySelector('${translationSelector} button')?.click()`);
@@ -953,7 +983,7 @@ async function B6() {
   await check('subtitle-download', 'download result');
   const before = (await fixtureRecords()).length;
   const previousCorrection = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(' · correction · ') && row.querySelectorAll('button').length >= 3)?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕校正 · ') && row.querySelectorAll('button').length >= 3)?.dataset.testid || null)()`);
   assert.ok(previousCorrection, 'previous correction version can be restored');
   await cdp.respondToNextDialog({accept: true, promptText: ''});
   await cdp.evaluate(`document.querySelector('[data-testid="${previousCorrection}"] button:nth-of-type(3)')?.click()`);
@@ -991,13 +1021,19 @@ async function B6() {
     fs.chmodSync(downloadsDir, downloadsOriginalMode);
     downloadsReadOnly = false;
   }
-  await cdp.until(`document.getElementById('subtitle-publications')?.textContent.includes('failed')`);
+  await cdp.until(`document.getElementById('subtitle-publications')?.textContent.includes('儲存失敗')`);
   const publicationFailureText = await cdp.evaluate(`document.getElementById('subtitle-publications')?.textContent || ''`);
   const retryTestId = await cdp.evaluate(`document.querySelector('[data-testid^="subtitle-publication-retry-"]')?.dataset.testid || null`);
   assert.ok(retryTestId, 'failed publication exposes a storage-only retry in the visible publication history');
   assert.equal((await cdp.selector(retryTestId)).disabled, false, 'storage-only retry is enabled after publication failure');
+  const retryPublicationId = retryTestId.slice('subtitle-publication-retry-'.length);
   await click(retryTestId);
-  await cdp.until(`document.getElementById('subtitle-publications')?.textContent.includes('published')`);
+  await cdp.until(`window.subtitleTasks.state.publications.find(item=>item.publication_id===${JSON.stringify(retryPublicationId)})?.publish_status==='published'
+    && !Object.hasOwn(window.subtitleTasks.state.publications.find(item=>item.publication_id===${JSON.stringify(retryPublicationId)}),'error')`);
+  const clearedRetry = await cdp.evaluate(`window.subtitleTasks.state.publications.find(item=>item.publication_id===${JSON.stringify(retryPublicationId)})||null`);
+  assert.equal(clearedRetry.publish_status, 'published');
+  assert.equal(Object.hasOwn(clearedRetry, 'error'), false,
+    'successful publication retry clears the persisted failure from the live UI model');
   assert.equal((await fixtureRecords()).length, beforeStorageRetry,
     'publication retry uses the saved result for storage and makes no model request');
   assert.ok(fs.existsSync(blockedVersionedPath) && fs.statSync(blockedVersionedPath).isFile(),
@@ -1059,7 +1095,7 @@ async function B7() {
   await submitSelected();
   await cdp.until(`document.querySelectorAll('[data-testid^="subtitle-task-subtitle_"]').length === ${silentBefore.length + 1}`, 10000);
   const silentTask = (await taskIds()).find(id => !silentBefore.includes(id));
-  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${silentTask}"]')?.textContent.match(/completed|完成/i)`, 60000);
+  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${silentTask}"]')?.textContent.includes('已完成')`, 60000);
   assert.deepEqual((await fixtureRecords()).map(item => item.kind), ['vad'], 'empty VAD response stops before ASR and text stages');
   const silentOutput = path.join(downloadsDir, 'subtitle-fixture-silent.ja.srt');
   assert.ok(fs.existsSync(silentOutput), 'selected Japanese output is materialized for valid silent input');
@@ -1161,7 +1197,8 @@ const runPromise = (async () => {
   await assertStyledFrontend();
   currentCase = 'LegacyStartupMigration';
   await legacyStartupMigration();
-  evidence.push({case: currentCase, result: 'PASS_WITH_KNOWN_PRODUCT_FAILURE', fixture: [], details: scenarioDetails.Migration});
+  const migrationRecords = await fixtureRecords();
+  evidence.push({case: currentCase, result: 'PASS', fixture: migrationRecords.map(({method, path, kind, model, status}) => ({method, path, kind, model, status})), details: scenarioDetails.Migration});
   const scenarios = [B1, B2, B3, B4, B5, B6, B7, B8];
   for (const scenario of scenarios) {
     currentCase = scenario.name;

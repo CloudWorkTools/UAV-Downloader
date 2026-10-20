@@ -39,6 +39,20 @@ def test_save_profile_validates_private_http_url_and_keeps_secret_url_bound(isol
     assert "api_key" not in json.dumps(asdict(changed))
 
 
+def test_replacing_key_for_same_endpoint_refills_pinned_snapshot_but_endpoint_change_isolated(isolated_profiles):
+    original = profiles.save_profile(profile(), api_key="old-secret")
+    pinned = profiles.snapshot(original.profile_id, "asr")
+    refreshed = profiles.save_profile(profile(), api_key="new-secret")
+    assert refreshed.credential_ref == original.credential_ref == pinned.credential_ref
+    assert profiles.resolve_credential(pinned.credential_ref, "http://192.168.1.8:8000/v1") == "new-secret"
+
+    changed = profiles.save_profile(
+        profile(base_url="http://192.168.1.9:8000/v1"), api_key="other-secret")
+    assert changed.credential_ref != pinned.credential_ref
+    assert profiles.resolve_credential(changed.credential_ref, changed.base_url) == "other-secret"
+    assert profiles.resolve_credential(pinned.credential_ref, "http://192.168.1.8:8000/v1") == "new-secret"
+
+
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "https://user:pass@host/v1", "http://host/v1?key=x", "https://host/v1#fragment", "http://host:99999/v1", "http://host/v1\r\nX: y"])
 def test_invalid_profile_url_is_rejected_without_replacing_profiles(isolated_profiles, url):
     profiles.save_profile(profile())

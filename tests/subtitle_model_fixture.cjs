@@ -37,6 +37,11 @@ function createFixture({host = '0.0.0.0'} = {}) {
       record.requestOrdinal = records.filter(item => item.kind === record.kind).length + 1;
       const model = body && typeof body.model === 'string' ? body.model : null;
       if (model) record.model = model.slice(0, 160);
+      if (body && typeof body === 'object') {
+        record.maxTokenField = Object.hasOwn(body, 'max_completion_tokens') ? 'max_completion_tokens'
+          : Object.hasOwn(body, 'max_tokens') ? 'max_tokens' : null;
+        record.qualitySent = Object.hasOwn(body, 'quality');
+      }
 
       let reply;
       let status = 200;

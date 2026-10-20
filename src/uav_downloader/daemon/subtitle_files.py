@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import time
 
 from uav_downloader.core import config
 from uav_downloader.core.storage import SMB_PATH_ROOT, storage_fs, storage_open
@@ -41,6 +42,7 @@ class SubtitleFileManager:
         self._lock = threading.RLock()
         self._sources = {}
         self.list_errors = []
+        self.list_partial = False
         self._listed = {}
         if self.state_path.exists():
             data = json.loads(self.state_path.read_text(encoding='utf-8'))
@@ -64,9 +66,32 @@ class SubtitleFileManager:
             if temporary:
                 os.unlink(temporary)
 
+    def publication_lock_key(self, video_id):
+        """Return one lock identity for source IDs that publish to the same file."""
+        with self._lock:
+            descriptor = self._sources.get(video_id)
+            if not isinstance(descriptor, dict):
+                return video_id
+            relative = (descriptor.get('relative_path') if descriptor.get('kind') == 'smb'
+                        else descriptor.get('remote_relative_path')
+                        if descriptor.get('output_mode') == 'upload' else None)
+            nas_identity = descriptor.get('nas_identity')
+            if relative and isinstance(nas_identity, list):
+                return ('nas-publication', tuple(nas_identity), relative)
+            if descriptor.get('kind') == 'local' and isinstance(descriptor.get('path'), str):
+                return ('local-publication', os.path.normcase(os.path.abspath(descriptor['path'])))
+            return video_id
+
     @staticmethod
     def _media_identity(path):
-        return engine._media_identity(path)
+        try:
+            return engine._media_identity(path)
+        except engine.SubtitleError as exc:
+            if isinstance(exc.__cause__, OSError):
+                raise OSError('字幕影片來源離線或無讀取權限') from None
+            if exc.args == ('Downloaded video file changed during subtitle setup',):
+                raise ValueError('字幕來源影片已變更，請重新選取') from None
+            raise
 
     @staticmethod
     def _nas_identity(settings):
@@ -438,39 +463,68 @@ class SubtitleFileManager:
         from uav_downloader.core.history import get_history_manager
 
         self.list_errors = []
+        self.list_partial = False
         self._listed = {}
         candidates = {}
+        scan_remaining = max_entries
+        scan_deadline = time.monotonic() + 8.0
+
+        def scan_expired():
+            if time.monotonic() >= scan_deadline:
+                self.list_partial = True
+                return True
+            return False
+
         history = get_history_manager()
-        for entry in history._entries.values():
+        for index, entry in enumerate(history._entries.values()):
+            if index >= max_entries:
+                self.list_partial = True
+                break
             path = entry.get('file_path')
             if not path or path.startswith('smb://'):
                 continue
             candidates[path] = ('history', entry.get('title', ''))
         for root in self._configured_roots():
+            if scan_remaining <= 0 or scan_expired():
+                self.list_partial = True
+                break
             try:
                 root = self._absolute_without_links(root)
-                visited = 0
-                def walk_error(error, current_root=root):
-                    self.list_errors.append({'source': 'local', 'root': current_root,
-                                             'error': '下載或掛載目錄離線或無讀取權限'})
-                for current, directories, files in os.walk(root, followlinks=False, onerror=walk_error):
-                    directories[:] = [name for name in directories
-                                      if not os.path.islink(os.path.join(current, name))]
-                    for name in files:
-                        path = os.path.join(current, name)
-                        if (Path(name).suffix.lower() in _VIDEO_EXTENSIONS
-                                and not os.path.islink(path)):
-                            candidates.setdefault(path, ('configured', ''))
-                            visited += 1
-                            if visited >= max_entries:
-                                break
-                    if visited >= max_entries:
-                        break
+                pending = [root]
+                while pending and scan_remaining > 0 and not scan_expired():
+                    current = pending.pop()
+                    try:
+                        with os.scandir(current) as entries:
+                            for entry in entries:
+                                if scan_expired():
+                                    break
+                                scan_remaining -= 1
+                                try:
+                                    if entry.is_symlink():
+                                        pass
+                                    elif entry.is_dir(follow_symlinks=False):
+                                        pending.append(entry.path)
+                                    elif (entry.is_file(follow_symlinks=False)
+                                          and Path(entry.name).suffix.lower() in _VIDEO_EXTENSIONS):
+                                        candidates.setdefault(entry.path, ('configured', ''))
+                                except OSError:
+                                    self.list_errors.append({'source': 'local', 'root': current,
+                                                             'error': '影片離線或無讀取權限'})
+                                if scan_remaining <= 0:
+                                    self.list_partial = True
+                                    break
+                    except OSError:
+                        self.list_errors.append({'source': 'local', 'root': current,
+                                                 'error': '下載或掛載目錄離線或無讀取權限'})
+                if pending:
+                    self.list_partial = True
             except OSError:
                 self.list_errors.append({'source': 'local', 'root': str(root),
                                          'error': '下載或掛載目錄離線或無讀取權限'})
         result = []
         for path, (origin, title) in candidates.items():
+            if scan_expired():
+                break
             try:
                 root = os.path.dirname(path)
                 checked, _ = self._validate_local(path, [root])
@@ -486,50 +540,62 @@ class SubtitleFileManager:
                 self.list_errors.append({'source': origin, 'root': os.path.dirname(path),
                                          'error': '影片離線或無讀取權限'})
         settings = nas.load_settings(secret=True)
-        if settings.get('enabled') and settings.get('mode') in ('smb', 'upload'):
+        if (settings.get('enabled') and settings.get('mode') in ('smb', 'upload')
+                and scan_remaining > 0 and not scan_expired()):
             root = nas.smb_destination()
             try:
                 with nas.open_smb_storage(settings, root):
                     filesystem = storage_fs(root)
-                    pending, visited = [(root, '', 0)], 0
-                    while pending and visited < max_entries:
+                    pending = [(root, '', 0)]
+                    while pending and scan_remaining > 0 and not scan_expired():
                         current, relative_dir, depth = pending.pop()
                         try:
-                            names = filesystem.listdir(current)
+                            with filesystem.scandir(current) as entries:
+                                for entry in entries:
+                                    if scan_expired():
+                                        break
+                                    scan_remaining -= 1
+                                    name = entry.name
+                                    path = os.path.join(current, name)
+                                    relative = os.path.join(relative_dir, name) if relative_dir else name
+                                    try:
+                                        if entry.is_symlink():
+                                            pass
+                                        elif entry.is_dir(follow_symlinks=False):
+                                            if depth < 5:
+                                                pending.append((path, relative, depth + 1))
+                                            else:
+                                                self.list_partial = True
+                                        elif (entry.is_file(follow_symlinks=False)
+                                              and Path(name).suffix.lower() in _VIDEO_EXTENSIONS):
+                                            identity = self._media_identity(path)
+                                            descriptor = {'kind': 'smb', 'relative_path': relative,
+                                                          'identity': identity,
+                                                          'nas_identity': self._nas_identity(settings),
+                                                          'output_mode': 'smb'}
+                                            video_id = self._video_id(descriptor)
+                                            self._listed[video_id] = {
+                                                'kind': 'smb', 'path': path, 'root': root,
+                                                'settings': self._nas_identity(settings)}
+                                            result.append({'video_id': video_id,
+                                                           'name': name, 'title': '', 'source': 'smb'})
+                                    except OSError:
+                                        self.list_errors.append({'source': 'smb', 'root': relative,
+                                                                 'error': '影片離線或無讀取權限'})
+                                    if scan_remaining <= 0:
+                                        self.list_partial = True
+                                        break
                         except OSError:
                             self.list_errors.append({'source': 'smb', 'root': relative_dir,
                                                      'error': 'NAS 目錄離線或無讀取權限'})
-                            continue
-                        for name in names:
-                            path = os.path.join(current, name)
-                            relative = os.path.join(relative_dir, name) if relative_dir else name
-                            try:
-                                if filesystem.islink(path):
-                                    continue
-                                if filesystem.isdir(path) and depth < 5:
-                                    pending.append((path, relative, depth + 1))
-                                elif (filesystem.isfile(path)
-                                      and Path(name).suffix.lower() in _VIDEO_EXTENSIONS):
-                                    identity = self._media_identity(path)
-                                    descriptor = {'kind': 'smb', 'relative_path': relative,
-                                                  'identity': identity,
-                                                  'nas_identity': self._nas_identity(settings),
-                                                  'output_mode': 'smb'}
-                                    video_id = self._video_id(descriptor)
-                                    self._listed[video_id] = {
-                                        'kind': 'smb', 'path': path, 'root': root,
-                                        'settings': self._nas_identity(settings)}
-                                    result.append({'video_id': video_id,
-                                                   'name': name, 'title': '', 'source': 'smb'})
-                                    visited += 1
-                                    if visited >= max_entries:
-                                        break
-                            except OSError:
-                                self.list_errors.append({'source': 'smb', 'root': relative,
-                                                         'error': '影片離線或無讀取權限'})
+                    if pending:
+                        self.list_partial = True
             except (OSError, ValueError):
                 self.list_errors.append({'source': 'smb', 'root': '',
                                          'error': 'NAS 離線或無讀取權限'})
+        if len(result) > max_entries:
+            result = result[:max_entries]
+            self.list_partial = True
         return result
 
     def register_history(self, video_id):

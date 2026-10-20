@@ -290,7 +290,7 @@ def save_profile(profile: StageProfile, api_key: str | None = None) -> StageProf
             if isinstance(entry, dict) and entry.get("base_url") == profile.base_url:
                 profile = StageProfile(**{**asdict(profile), "credential_ref": old_ref})
         elif secret:
-            reference = os.urandom(16).hex()
+            reference = old_ref if prior and prior.get("base_url") == profile.base_url and old_ref else os.urandom(16).hex()
             profile = StageProfile(**{**asdict(profile), "credential_ref": reference})
             raw["credentials"][reference] = {
                 "base_url": profile.base_url, "encrypted": asr._encrypt_secret(secret)}

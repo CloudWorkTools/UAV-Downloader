@@ -110,6 +110,19 @@ class SmbStorage:
     def listdir(self, path):
         return self._call(self.client.listdir, path)
 
+    @contextmanager
+    def scandir(self, path):
+        """Stream SMB directory entries so bounded callers can stop early."""
+        try:
+            with self.client.scandir(self._path(path), **self.options) as entries:
+                yield entries
+        except OSError as exc:
+            code = exc.errno or errno.EIO
+            kind = {errno.ENOENT: FileNotFoundError, errno.ENOTDIR: NotADirectoryError}.get(code, OSError)
+            raise kind(code, 'NAS SMB 目錄離線或無讀取權限') from None
+        except Exception:
+            raise OSError(errno.EIO, 'NAS SMB 連線中斷或目錄讀取失敗') from None
+
     def makedirs(self, path, exist_ok=False):
         return self._call(self.client.makedirs, path, exist_ok=exist_ok)
 

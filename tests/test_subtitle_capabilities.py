@@ -215,14 +215,15 @@ def test_localai_documented_thinking_controls_are_explicit_payload_fields():
     assert payload['metadata'] == {'enable_thinking': 'false'}
 
 
-def test_ollama_missing_false_value_in_model_metadata_blocks_before_chat():
+@pytest.mark.parametrize('values', [['low', 'high'], [0], [0.0], None])
+def test_ollama_missing_boolean_false_in_model_metadata_blocks_before_chat(values):
     paths = []
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_): pass
         def do_POST(self):
             paths.append(self.path)
             self.rfile.read(int(self.headers['Content-Length']))
-            body = json.dumps({'thinking': {'values': ['low', 'high'], 'default': 'high'}}).encode()
+            body = json.dumps({'thinking': {'values': values, 'default': 'high'}}).encode()
             self.send_response(200)
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()

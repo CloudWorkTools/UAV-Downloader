@@ -53,6 +53,9 @@ try:
         with storage_open(direct_video, "xb") as stream:
             stream.write(b"synthetic direct SMB video")
         direct = manager.register_smb(direct_video, storage_root=root, nas_settings=settings)
+    listed = manager.list_videos()
+    assert any(item["video_id"] == direct.video_id and item["source"] == "smb" for item in listed), (
+        "real SMB list_videos did not return the newly created direct source", manager.list_errors)
     direct_result = SimpleNamespace(result_id="w8-direct-" + token, video_id=direct.video_id,
         stage="translation", language="en", segments=(SubtitleSegment("w8", 1.0, 2.0, "direct SMB subtitle"),))
     direct_publish = manager.publish_result(direct.video_id, direct_result, "en")

@@ -1,6 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -16,6 +17,7 @@ from uav_downloader.subtitles import profiles
 def subtitle_http(monkeypatch, tmp_path):
     monkeypatch.setenv('CONFIG_DIR', str(tmp_path / 'config'))
     monkeypatch.setenv('DOWNLOAD_DIR', str(tmp_path / 'videos'))
+    monkeypatch.setenv('APPDATA', str(tmp_path / 'appdata'))
     monkeypatch.setattr(TaskManager, 'start_dispatcher', lambda self: None)
     monkeypatch.setattr('uav_downloader.daemon.task_manager.nas.load_settings',
                         lambda **kw: {'enabled': False})
@@ -250,15 +252,111 @@ def test_unknown_reasoning_control_requires_separate_explicit_permission(subtitl
 
 def test_video_listing_returns_safe_paths_and_local_vad_capability(subtitle_http):
     request, server, _ = subtitle_http
-    server.subtitle_file_manager.list_videos = lambda **kw: [{
-        'video_id': 'source-v1.abc', 'name': 'clip.mp4', 'title': 'clip', 'source': 'configured'}]
+    def partial_list(**_kwargs):
+        server.subtitle_file_manager.list_partial = True
+        return [{'video_id': 'source-v1.abc', 'name': 'clip.mp4', 'title': 'clip', 'source': 'configured'}]
+    server.subtitle_file_manager.list_videos = partial_list
     status, result = request('/api/subtitles/videos')
     assert status == 200
     assert result['videos'][0]['video_id'] == 'source-v1.abc'
+    assert result['partial'] is True and '掃描上限' in result['notice']
     assert 'path' not in json.dumps(result)
     vad = result['capabilities']['local_vad']
     assert vad['available'] is False
     assert 'Windows' in vad['reason']
+
+
+def test_local_video_scan_stops_at_work_budget(subtitle_http, monkeypatch):
+    import os
+    from uav_downloader.daemon import subtitle_files
+    from uav_downloader.core import history
+
+    request, server, tmp_path = subtitle_http
+    root = tmp_path / 'scan-root'
+    root.mkdir()
+    for index in range(1001):
+        (root / f'file-{index}.txt').write_text('x')
+    manager = server.subtitle_file_manager
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [str(root)])
+    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={}))
+    monkeypatch.setattr(subtitle_files.nas, 'load_settings', lambda **_kwargs: {'enabled': False})
+    real_scandir = os.scandir
+    consumed = []
+
+    class CountedScan:
+        def __init__(self, iterator): self.iterator = iterator
+        def __enter__(self): self.iterator.__enter__(); return self
+        def __exit__(self, *args): return self.iterator.__exit__(*args)
+        def __iter__(self):
+            for entry in self.iterator:
+                consumed.append(entry.name)
+                yield entry
+
+    def counted_scandir(path):
+        iterator = real_scandir(path)
+        return CountedScan(iterator) if os.fspath(path) == str(root) else iterator
+
+    monkeypatch.setattr(subtitle_files.os, 'scandir', counted_scandir)
+    status, result = request('/api/subtitles/videos')
+    assert status == 200
+    assert len(consumed) == 1000
+    assert manager.list_partial is True
+    assert result['partial'] is True and '掃描上限' in result['notice']
+
+
+def test_local_video_scan_keeps_support_for_deep_paths(subtitle_http, monkeypatch):
+    from uav_downloader.daemon import subtitle_files
+    from uav_downloader.core import history
+
+    _, server, tmp_path = subtitle_http
+    root = tmp_path / 'deep-root'
+    deep = root.joinpath('a', 'b', 'c', 'd', 'e', 'f')
+    deep.mkdir(parents=True)
+    video = deep / 'deep.mp4'
+    video.write_bytes(b'video')
+    manager = server.subtitle_file_manager
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [str(root)])
+    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={}))
+    monkeypatch.setattr(subtitle_files.nas, 'load_settings', lambda **_kwargs: {'enabled': False})
+
+    listed = manager.list_videos(max_entries=100)
+
+    assert any(item['name'] == 'deep.mp4' for item in listed)
+    assert manager.list_partial is False
+
+
+def test_video_identity_work_respects_elapsed_scan_budget(subtitle_http, monkeypatch):
+    from uav_downloader.daemon import subtitle_files
+    from uav_downloader.core import history
+
+    _, server, tmp_path = subtitle_http
+    root = tmp_path / 'history-root'
+    root.mkdir()
+    paths = [root / 'first.mp4', root / 'second.mp4']
+    for path in paths:
+        path.write_bytes(b'video')
+    manager = server.subtitle_file_manager
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [])
+    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={
+        str(index): {'file_path': str(path), 'title': path.name}
+        for index, path in enumerate(paths)}))
+    monkeypatch.setattr(subtitle_files.nas, 'load_settings', lambda **_kwargs: {'enabled': False})
+    now = [0]
+    monkeypatch.setattr(subtitle_files.time, 'monotonic', lambda: now[0])
+    identities = []
+
+    def slow_identity(path):
+        identities.append(path)
+        now[0] = 9
+        return f'identity-{len(identities)}'
+
+    monkeypatch.setattr(manager, '_media_identity', slow_identity)
+
+    listed = manager.list_videos(max_entries=100)
+
+    assert identities == [str(paths[0])]
+    assert len(listed) == 1
+    assert manager.list_partial is True
 
 
 def test_download_start_snapshots_selected_profiles_without_changing_legacy_subtitles(subtitle_http):
@@ -313,6 +411,23 @@ def test_task_batch_reports_each_video_and_result_retry_is_storage_only(subtitle
     assert status == 200
     assert result['publish_status'] == 'published'
     assert retry_calls == ['subtitle_pub_0123456789abcdef0123456789abcdef']
+
+
+def test_batch_preserves_manager_value_error_reason(subtitle_http, monkeypatch):
+    request, server, _ = subtitle_http
+    profiles.save_profile(profiles.StageProfile(
+        profile_id='asr-one', display_name='ASR', kind='asr', provider='localai',
+        capabilities=('asr',), base_url='http://127.0.0.1:1234/v1', model='whisper',
+        parameters_json='{}'))
+    server.subtitle_file_manager.register_history = lambda video_id: SimpleNamespace(video_path='/tmp/video.mp4')
+    monkeypatch.setattr(server.subtitle_task_manager, 'submit', lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(ValueError('字幕輸出語言清單無效')))
+    status, result = request('/api/subtitles/tasks', 'POST', {'items': [{
+        'video_id': 'valid-video', 'selected_stages': ['asr'],
+        'profile_ids': {'asr': 'asr-one'}, 'target_languages': [], 'output_languages': ['ja']}]})
+    assert status == 200
+    assert result['items'][0]['success'] is False
+    assert result['items'][0]['error'] == '字幕輸出語言清單無效'
 
 
 def test_batch_item_failure_does_not_leak_unvalidated_video_ids_or_abort_neighbors(subtitle_http):
@@ -530,3 +645,180 @@ def test_profile_probe_exercises_vad_asr_and_native_text_routes(subtitle_http):
         fixture.shutdown()
         fixture.server_close()
         thread.join(timeout=2)
+
+
+def test_profile_probe_reports_actual_vad_and_asr_contract_rejections(subtitle_http):
+    calls = []
+    replies = [
+        ('/v1/vad', json.dumps({'segments': [{'start': 0.8, 'end': 0.2}]}).encode()),
+        ('/v1/audio/transcriptions', json.dumps({'segments': [{'start': 0, 'text': 'missing end'}]}).encode()),
+        ('/v1/vad', json.dumps({'segments': [None]}).encode()),
+        ('/v1/audio/transcriptions', json.dumps({'segments': [None]}).encode()),
+        ('/v1/vad', b'{invalid json'),
+        ('/v1/audio/transcriptions', b'{invalid json'),
+    ]
+    class InvalidContractHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_args): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            calls.append(self.path)
+            _, raw = replies[len(calls) - 1]
+            self.send_response(200); self.send_header('Content-Length', str(len(raw)))
+            self.end_headers(); self.wfile.write(raw)
+
+    fixture = ThreadingHTTPServer(('127.0.0.1', 0), InvalidContractHandler)
+    thread = threading.Thread(target=fixture.serve_forever, daemon=True); thread.start()
+    base = f'http://127.0.0.1:{fixture.server_address[1]}/v1'
+    request, _, _ = subtitle_http
+    profiles.save_profile(profiles.StageProfile(
+        profile_id='invalid-vad', display_name='VAD', kind='vad', provider='localai',
+        capabilities=('vad',), base_url=base, model='vad-model', parameters_json='{}'))
+    profiles.save_profile(profiles.StageProfile(
+        profile_id='invalid-asr', display_name='ASR', kind='asr', provider='localai',
+        capabilities=('asr',), base_url=base, model='asr-model', parameters_json='{}'))
+    try:
+        for profile_id, stage in [('invalid-vad', 'vad'), ('invalid-asr', 'asr'),
+                                  ('invalid-vad', 'vad'), ('invalid-asr', 'asr'),
+                                  ('invalid-vad', 'vad'), ('invalid-asr', 'asr')]:
+            status, result = request('/api/subtitles/profiles/test', 'POST', {
+                'profile_id': profile_id, 'stage': stage, 'confirm_external_call': True})
+            assert status == 200
+            assert result['success'] is False
+            assert result['format_pass'] is False
+            assert '格式' in result['message']
+        assert calls == [path for path, _ in replies]
+    finally:
+        fixture.shutdown(); fixture.server_close(); thread.join(timeout=2)
+
+
+def test_submission_maps_source_oserror_to_safe_offline_permission_message(subtitle_http, monkeypatch):
+    request, server, _ = subtitle_http
+    profiles.save_profile(profiles.StageProfile(
+        profile_id='submission-vad', display_name='VAD', kind='vad', provider='localai',
+        capabilities=('vad',), base_url='http://127.0.0.1:1234/v1', model='vad-model',
+        parameters_json='{}'))
+    def unavailable(*_args, **_kwargs):
+        raise OSError('/private/nas/video.mp4 permission denied')
+    monkeypatch.setattr(server.subtitle_file_manager, 'register_history', unavailable)
+    status, result = request('/api/subtitles/tasks', 'POST', {
+        'video_id': 'source-v1.test', 'selected_stages': ['vad'],
+        'profile_ids': {'vad': 'submission-vad'}})
+    assert status == 503
+    assert '離線或無讀取權限' in result['error']
+    assert '/private/nas' not in json.dumps(result)
+
+
+def test_registered_video_identity_io_failure_is_safe_in_list_and_submission(subtitle_http, monkeypatch):
+    from uav_downloader.core import history
+    from uav_downloader.daemon import subtitle_files
+
+    request, server, tmp_path = subtitle_http
+    root = tmp_path / 'videos'
+    root.mkdir()
+    video = root / 'movie.mp4'
+    video.write_bytes(b'video')
+    monkeypatch.setattr(server.subtitle_file_manager, '_configured_roots', lambda: [str(root)])
+    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={}))
+    monkeypatch.setattr(subtitle_files.nas, 'load_settings', lambda **_kwargs: {'enabled': False})
+    status, listing = request('/api/subtitles/videos')
+    assert status == 200
+    video_id = next(item['video_id'] for item in listing['videos'] if item['name'] == 'movie.mp4')
+    profiles.save_profile(profiles.StageProfile(
+        profile_id='identity-failure-vad', display_name='VAD', kind='vad', provider='localai',
+        capabilities=('vad',), base_url='http://127.0.0.1:1234/v1', model='vad-model',
+        parameters_json='{}'))
+
+    def offline(*_args, **_kwargs):
+        raise PermissionError('/private/nas/movie.mp4 permission denied')
+
+    monkeypatch.setattr(subtitle_files.engine, 'storage_open', offline)
+    status, result = request('/api/subtitles/tasks', 'POST', {
+        'video_id': video_id, 'selected_stages': ['vad'],
+        'profile_ids': {'vad': 'identity-failure-vad'}})
+    assert status == 503
+    assert '離線或無讀取權限' in result['error']
+    assert '/private/nas' not in json.dumps(result)
+
+    status, listing = request('/api/subtitles/videos')
+    assert status == 200
+    assert listing['videos'] == []
+    assert listing['errors'][0]['error'] == '影片離線或無讀取權限'
+    assert '/private/nas' not in json.dumps(listing)
+
+
+def test_video_identity_change_error_is_safe_in_list_and_submission(subtitle_http, monkeypatch):
+    from uav_downloader.core import history
+    from uav_downloader.daemon import subtitle_files
+
+    request, server, tmp_path = subtitle_http
+    root = tmp_path / 'videos'
+    root.mkdir()
+    (root / 'movie.mp4').write_bytes(b'video')
+    manager = server.subtitle_file_manager
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [str(root)])
+    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={}))
+    monkeypatch.setattr(subtitle_files.nas, 'load_settings', lambda **_kwargs: {'enabled': False})
+    status, listing = request('/api/subtitles/videos')
+    assert status == 200
+    video_id = next(item['video_id'] for item in listing['videos'] if item['name'] == 'movie.mp4')
+    profiles.save_profile(profiles.StageProfile(
+        profile_id='identity-change-vad', display_name='VAD', kind='vad', provider='localai',
+        capabilities=('vad',), base_url='http://127.0.0.1:1234/v1', model='vad-model',
+        parameters_json='{}'))
+    monkeypatch.setattr(subtitle_files.engine, '_media_identity', lambda _path: (_ for _ in ()).throw(
+        subtitle_files.engine.SubtitleError('Downloaded video file changed during subtitle setup')))
+
+    status, result = request('/api/subtitles/tasks', 'POST', {
+        'video_id': video_id, 'selected_stages': ['vad'],
+        'profile_ids': {'vad': 'identity-change-vad'}})
+    assert status == 400
+    assert result['error'] == '字幕來源影片已變更，請重新選取'
+    assert str(root) not in json.dumps(result)
+
+    status, listing = request('/api/subtitles/videos')
+    assert status == 200
+    assert listing['videos'] == []
+    assert listing['errors'][0]['error'] == '影片離線或無讀取權限'
+    assert str(root) not in json.dumps(listing)
+
+
+def test_migrated_legacy_quality_profile_passes_real_correction_probe_without_sending_quality(
+        subtitle_http, monkeypatch):
+    from uav_downloader.subtitles import settings
+
+    seen = []
+    class TextHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_args): pass
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            seen.append((self.path, body))
+            reply = {'choices': [{'finish_reason': 'stop', 'message': {
+                'content': '[{"id":"probe-1","text":"corrected"}]'}}]}
+            raw = json.dumps(reply).encode(); self.send_response(200)
+            self.send_header('Content-Length', str(len(raw))); self.end_headers(); self.wfile.write(raw)
+
+    fixture = ThreadingHTTPServer(('127.0.0.1', 0), TextHandler)
+    thread = threading.Thread(target=fixture.serve_forever, daemon=True); thread.start()
+    request, _, _ = subtitle_http
+    legacy = Path(settings._settings_path())
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy_bytes = json.dumps({
+        'schema': 1, 'selected_provider': settings.OPENAI_COMPATIBLE,
+        'profiles': {settings.OPENAI_COMPATIBLE: {
+            'base_url': f'http://127.0.0.1:{fixture.server_port}/v1',
+            'model': 'legacy-text', 'quality': 'balanced'}}}).encode()
+    legacy.write_bytes(legacy_bytes)
+    try:
+        migrated = next(item for item in profiles.load_profiles()
+                        if item.profile_id == 'legacy-text-openai_compatible')
+        assert json.loads(migrated.parameters_json) == {'quality': 'balanced'}
+        status, result = request('/api/subtitles/profiles/test', 'POST', {
+            'profile_id': migrated.profile_id, 'stage': 'correction',
+            'confirm_external_call': True, 'allow_reasoning': True})
+        assert status == 200 and result['success'] is True and result['format_pass'] is True
+        assert len(seen) == 1 and seen[0][0] == '/v1/chat/completions'
+        assert seen[0][1]['max_tokens'] == 4096
+        assert 'quality' not in seen[0][1]
+        assert legacy.read_bytes() == legacy_bytes
+    finally:
+        fixture.shutdown(); fixture.server_close(); thread.join(timeout=2)
