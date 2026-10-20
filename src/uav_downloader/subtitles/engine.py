@@ -5427,3 +5427,221 @@ def generate_subtitles(video_path: str, mode,
             tuple(generated),
             satisfied_by_source=satisfied_by_source,
         )
+
+
+def _filter_asr_sound_descriptions(segments):
+    from uav_downloader.subtitles import domain
+
+    music_cues = {
+        domain.normalize_cue(cue) for cue in (
+            '[音楽]', '(音楽)', '（音楽）', '[BGM]', '(BGM)',
+            '（BGM）', '[music]', '(music)', '（music）',
+            '[background music]', '(background music)',
+            '[音樂]', '（音樂）', '[背景音樂]', '(背景音樂)',
+        )
+    }
+
+    def is_sound_description(text):
+        normalized = domain.normalize_cue(text)
+        if normalized in music_cues:
+            return True
+        known_description = domain.normalize_nonlexical(text, 'en')
+        return bool(known_description and known_description.startswith('[')
+                    and known_description.endswith(']'))
+
+    return tuple(segment for segment in segments
+                 if not is_sound_description(segment.text))
+
+
+def run_stage(video_id: str, audio_path: Optional[str], stage: str, profile_snapshot,
+              target_language: Optional[str] = None,
+              input_result_id: Optional[str] = None,
+              allow_reasoning: bool = False,
+              cancel_check: Optional[CancelCheck] = None,
+              progress_callback: Optional[ProgressCallback] = None,
+              *, execution_id: str,
+              commit_guard: Optional[Callable] = None):
+    """Run exactly one external stage, checkpointing each completed request.
+
+    Omitting ``input_result_id`` selects the currently adopted upstream result.
+    Supplying an ID explicitly permits using an older retained result; the new
+    result remains stale when that input does not match the adopted graph.
+    ``execution_id`` is stable across retries for one task and unique for redo.
+    """
+    from uav_downloader.subtitles import asr, llm, results, vad
+    from uav_downloader.subtitles.models import SpeechInterval, SubtitleSegment
+
+    if stage not in ('vad', 'asr', 'correction', 'translation'):
+        raise SubtitleError('字幕階段無效')
+    if not isinstance(video_id, str) or not video_id:
+        raise SubtitleError('字幕影片識別碼無效')
+    if not isinstance(execution_id, str) or not execution_id:
+        raise SubtitleError('字幕執行識別碼無效')
+    _check_cancel(cancel_check)
+    needs_audio = stage in ('vad', 'asr')
+    if needs_audio and (not isinstance(audio_path, (str, os.PathLike))
+                        or not storage_fs(audio_path).isfile(audio_path)):
+        raise SubtitleError('字幕音訊檔案不存在')
+    try:
+        profile = json.loads(profile_snapshot.profile_json)
+    except (AttributeError, TypeError, json.JSONDecodeError):
+        raise SubtitleError('字幕設定快照格式無效') from None
+    if not isinstance(profile, dict) or stage not in profile.get('capabilities', ()):
+        raise SubtitleError('字幕設定快照不支援所選階段')
+    if (stage == 'translation'
+            and (not isinstance(target_language, str)
+                 or not target_language.strip() or len(target_language) > 120
+                 or re.search(r'[\x00-\x1f\x7f]', target_language))):
+        raise SubtitleError('請指定字幕目標語言')
+    if stage != 'translation' and target_language is not None:
+        raise SubtitleError('此字幕階段不接受目標語言')
+
+    source = None
+    input_ids = ()
+    if stage != 'vad':
+        required = {'asr': 'vad', 'correction': 'asr'}
+        if stage == 'translation':
+            source = (results.get(video_id, input_result_id)
+                      if input_result_id else
+                      results.adopted(video_id, 'correction')
+                      or results.adopted(video_id, 'asr'))
+            if source is not None and source.stage not in ('asr', 'correction'):
+                raise SubtitleError('翻譯需要 ASR 或原文後矯正結果')
+        else:
+            required_stage = required[stage]
+            source = (results.get(video_id, input_result_id)
+                      if input_result_id else
+                      results.adopted(video_id, required_stage))
+            if source is not None and source.stage != required_stage:
+                raise SubtitleError('字幕階段上游結果類型不符')
+        if source is None or not source.content_available:
+            raise SubtitleError('缺少可選用的字幕上游結果')
+        if not input_result_id and source.stale:
+            raise SubtitleError('字幕上游結果已過期，請先更新或明確選擇舊版本')
+        input_ids = (source.result_id,)
+
+    audio_identity = (_sha256(audio_path, cancel_check) if needs_audio
+                      else 'input:' + ','.join(input_ids))
+    result_language = target_language if stage == 'translation' else None
+    request_key = results.execution_request_key(
+        video_id, execution_id, stage, result_language, profile_snapshot,
+        input_ids, audio_identity, allow_reasoning)
+    committed_execution = results.completed_execution(
+        video_id, execution_id, request_key)
+    if committed_execution is not None:
+        _notify(progress_callback, 'done', 100)
+        return committed_execution
+    completed_keys = []
+
+    def run_checkpointed(chunk_items, checkpoint_stage, identity_for,
+                         call, expected_type):
+        output = []
+        total = len(chunk_items)
+        for index, item in enumerate(chunk_items):
+            _check_cancel(cancel_check)
+            identity = identity_for(item, index)
+            key = results.checkpoint_key(
+                execution_id, checkpoint_stage, audio_identity, profile_snapshot,
+                input_ids, identity)
+            completed_keys.append(key)
+            chunk_output = results.load_checkpoint(video_id, key)
+            if chunk_output is None:
+                chunk_output = call(item)
+                _check_cancel(cancel_check)
+                if (not isinstance(chunk_output, (list, tuple))
+                        or any(not isinstance(value, expected_type)
+                               for value in chunk_output)):
+                    raise SubtitleError('字幕階段分塊回應格式無效')
+                results.save_checkpoint(video_id, key, chunk_output)
+                _check_cancel(cancel_check)
+            output.extend(chunk_output)
+            _notify(progress_callback, stage,
+                    int((index + 1) * 100 / total) if total else 100)
+        return output
+
+    if stage == 'vad':
+        chunks = vad.plan_speech_chunks(audio_path)
+        intervals = run_checkpointed(
+            chunks, stage,
+            lambda chunk, _index: {
+                'index': chunk.index, 'core_start_frame': chunk.core_start_frame,
+                'core_end_frame': chunk.core_end_frame,
+                'start_frame': chunk.start_frame, 'end_frame': chunk.end_frame},
+            lambda chunk: vad.detect_speech_chunk(
+                audio_path, profile_snapshot, chunk, cancel_check),
+            SpeechInterval)
+        output_intervals = tuple(vad.merge_speech_intervals(intervals))
+        output_segments = None
+    elif stage == 'asr':
+        intervals = source.intervals
+        if intervals is None:
+            raise SubtitleError('語音活動偵測結果格式無效')
+        chunks = asr.plan_transcription_chunks(audio_path, intervals)
+        segments = run_checkpointed(
+            chunks, stage,
+            lambda chunk, _index: {
+                'index': chunk.index, 'interval_index': chunk.interval_index,
+                'core_start_frame': chunk.core_start_frame,
+                'core_end_frame': chunk.core_end_frame,
+                'start_frame': chunk.start_frame, 'end_frame': chunk.end_frame,
+                'language': 'ja'},
+            lambda chunk: asr.transcribe_chunk(
+                audio_path, chunk, profile_snapshot, 'ja', cancel_check),
+            SubtitleSegment)
+        output_intervals = None
+        output_segments = _filter_asr_sound_descriptions(segments)
+    else:
+        segments = source.segments
+        if segments is None:
+            raise SubtitleError('字幕上游片段格式無效')
+        operation = stage
+        batches = llm.plan_transform_batches(segments, profile_snapshot)
+        output_segments_list = run_checkpointed(
+            batches, stage,
+            lambda batch, index: {
+                'batch': index,
+                'segment_ids': [segment.segment_id for segment in batch],
+                'language': target_language},
+            lambda batch: llm.transform_segments(
+                operation, batch, profile_snapshot, target_language,
+                allow_reasoning=allow_reasoning, cancel_check=cancel_check),
+            SubtitleSegment)
+        output_intervals = None
+        output_segments = tuple(output_segments_list)
+
+    def commit_result():
+        _check_cancel(cancel_check)
+        committed_result = results.commit_success(results.StageResult(
+            result_id='', video_id=video_id, stage=stage,
+            language=result_language,
+            input_result_ids=input_ids, profile_snapshot=profile_snapshot,
+            intervals=output_intervals, segments=output_segments,
+            execution_id=execution_id, execution_key=request_key),
+            clear_checkpoint_keys=completed_keys)
+        return committed_result
+
+    # The caller can hold its task lock and validate the task generation while
+    # this closure commits, closing the late-cancel window between the final
+    # check and the atomic success write.
+    committed = commit_guard(commit_result) if commit_guard else commit_result()
+    _notify(progress_callback, 'done', 100)
+    return committed
+
+
+def is_retryable_stage_error(error: BaseException) -> bool:
+    """Return an explicit request retry marker, with legacy fallback."""
+    from uav_downloader.subtitles import llm
+    from uav_downloader.subtitles.models import StageRequestError
+
+    if isinstance(error, (SubtitleCancelled, llm.LlmTranslationCancelled)):
+        return False
+    if isinstance(error, StageRequestError):
+        return error.retryable is True
+    if isinstance(error, (SubtitleProcessTimeout, TimeoutError)):
+        return True
+    message = str(error)
+    match = re.search(r'HTTP\s+(\d{3})\b', message, flags=re.IGNORECASE)
+    if not match:
+        return False
+    status = int(match.group(1))
+    return status in (408, 425, 429) or 500 <= status <= 599
