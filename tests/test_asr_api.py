@@ -149,7 +149,7 @@ def test_stage_asr_uses_vad_intervals_and_rejects_out_of_range_seconds(tmp_path,
         'parameters': {},
     }), None, 'snapshot')
     result = asr.transcribe_stage(str(wav), [SpeechInterval(1, 2)], snapshot, 'ja', lambda: False)
-    assert result == [SubtitleSegment('segment-000001', 1.2, 1.8, '台詞')]
+    assert result == [SubtitleSegment('segment-000000-0001', 1.2, 1.8, '台詞')]
     assert [request[0] for request in requests] == ['/v1/audio/transcriptions']
 
 
@@ -189,6 +189,31 @@ def test_stage_asr_overlap_preserves_context_without_duplicate_boundary_segments
     assert [item.text for item in result] == ['首段', '接縫上下文', '尾段']
     assert [(item.start, item.end) for item in result] == [(.5, 1.0), (2.0, 2.5), (4.2, 4.8)]
     assert len(requests) == 3
+
+
+def test_asr_chunk_plan_exposes_stable_keys_offsets_and_one_request_executor(
+        tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'CHUNK_SECONDS', 2)
+    monkeypatch.setattr(asr, 'OVERLAP_SECONDS', 0.5)
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 5)
+    chunks = asr.plan_transcription_chunks(str(wav), [SpeechInterval(0, 5)])
+    assert [(chunk.index, chunk.interval_index, chunk.core_start_frame,
+             chunk.core_end_frame, chunk.start_frame, chunk.end_frame) for chunk in chunks] == [
+        (0, 0, 0, 32000, 0, 40000),
+        (1, 0, 32000, 64000, 24000, 72000),
+        (2, 0, 64000, 80000, 56000, 80000),
+    ]
+    responses.append((200, {'segments': [segment(.5, 1, '第一個可保存片段')]}))
+    profile = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'], 'parameters': {},
+    }), None, 'snapshot')
+    saved = asr.transcribe_chunk(str(wav), chunks[0], profile, 'ja', lambda: False)
+    assert saved == [SubtitleSegment('segment-000000-0001', .5, 1.0, '第一個可保存片段')]
+    assert len(requests) == 1
 
 
 def test_stage_asr_never_posts_model_install_endpoint(tmp_path, monkeypatch, api_server):

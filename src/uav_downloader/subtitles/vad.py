@@ -12,7 +12,7 @@ import wave
 
 import requests
 
-from uav_downloader.subtitles.models import SpeechInterval
+from uav_downloader.subtitles.models import SpeechChunk, SpeechInterval
 from uav_downloader.subtitles.profiles import ProfileSnapshot, capability_report, resolve_credential
 
 SAMPLE_RATE = 16000
@@ -68,6 +68,35 @@ def _validate_intervals(payload: object, duration: float) -> list[SpeechInterval
 
 def detect_speech(audio_path: str, profile_snapshot: ProfileSnapshot,
                   cancel_check=None) -> list[SpeechInterval]:
+    intervals = []
+    for chunk in plan_speech_chunks(audio_path):
+        if cancel_check is not None and cancel_check():
+            from uav_downloader.subtitles import engine
+            engine._check_cancel(cancel_check)
+        intervals.extend(detect_speech_chunk(audio_path, profile_snapshot, chunk, cancel_check))
+    return merge_speech_intervals(intervals)
+
+
+def plan_speech_chunks(audio_path: str) -> tuple[SpeechChunk, ...]:
+    """Plan resumable VAD windows with explicit core and overlap frame bounds."""
+    with wave.open(audio_path, "rb") as audio:
+        if audio.getnchannels() != 1 or audio.getsampwidth() != 2 or audio.getframerate() != SAMPLE_RATE:
+            raise ValueError("VAD 音訊必須為 16 kHz 單聲道 PCM")
+        total_frames = audio.getnframes()
+    frames_per_chunk = SAMPLE_RATE * CHUNK_SECONDS
+    overlap_frames = int(CHUNK_OVERLAP_SECONDS * SAMPLE_RATE)
+    chunks = []
+    for index, core_start in enumerate(range(0, total_frames, frames_per_chunk)):
+        core_end = min(total_frames, core_start + frames_per_chunk)
+        chunks.append(SpeechChunk(index, core_start, core_end,
+                                  max(0, core_start - overlap_frames),
+                                  min(total_frames, core_end + overlap_frames)))
+    return tuple(chunks)
+
+
+def detect_speech_chunk(audio_path: str, profile_snapshot: ProfileSnapshot,
+                        chunk: SpeechChunk, cancel_check=None) -> list[SpeechInterval]:
+    """Run exactly one planned VAD request, returning intervals on source time."""
     profile = _profile(profile_snapshot)
     url = profile["base_url"].rstrip("/")
     if not url.endswith("/v1"):
@@ -75,47 +104,51 @@ def detect_speech(audio_path: str, profile_snapshot: ProfileSnapshot,
     url += "/vad"
     key = resolve_credential(profile_snapshot.credential_ref, profile["base_url"])
     headers = {"Authorization": "Bearer " + key} if key else {}
-    output = []
     from uav_downloader.subtitles import engine
     with wave.open(audio_path, "rb") as audio, tempfile.TemporaryDirectory(
             prefix="subtitle-vad-", dir=os.path.dirname(audio_path)) as folder:
         if audio.getnchannels() != 1 or audio.getsampwidth() != 2 or audio.getframerate() != SAMPLE_RATE:
             raise ValueError("VAD 音訊必須為 16 kHz 單聲道 PCM")
         total_frames = audio.getnframes()
-        frames_per_chunk = SAMPLE_RATE * CHUNK_SECONDS
-        overlap_frames = int(CHUNK_OVERLAP_SECONDS * SAMPLE_RATE)
-        for index, core_start in enumerate(range(0, total_frames, frames_per_chunk)):
-            engine._check_cancel(cancel_check)
-            offset = max(0, core_start - overlap_frames)
-            stop = min(total_frames, core_start + frames_per_chunk + overlap_frames)
-            frames = stop - offset
-            audio.setpos(offset)
-            samples = array("h", audio.readframes(frames))
-            if samples.itemsize != 2:
-                raise ValueError("不支援的 PCM 樣本格式")
-            chunk_duration = frames / SAMPLE_RATE
-            request_path, response_path = (os.path.join(folder, f"{index}.{suffix}")
-                                           for suffix in ("request.json", "response.json"))
-            descriptor = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as request_file:
-                json.dump({"url": url, "headers": headers, "model": profile["model"],
-                           "audio": [sample / 32768.0 for sample in samples]}, request_file)
-            try:
-                engine._run_process(
-                    [sys.executable, "-m", __name__, request_path, response_path],
-                    os.path.join(folder, "worker.log"), cancel_check,
-                    timeout_seconds=900, disk_guard_path=folder)
-                envelope = json.loads(Path(response_path).read_bytes())
-                if not isinstance(envelope, dict) or envelope.get("ok") is not True:
-                    raise ValueError(envelope.get("error", "VAD API 回應無效"))
-                intervals = _validate_intervals(envelope.get("payload"), chunk_duration)
-            except (OSError, ValueError, TypeError) as exc:
-                raise engine.SubtitleError(str(exc)) from None
-            output.extend(SpeechInterval(item.start + offset / SAMPLE_RATE,
-                                         item.end + offset / SAMPLE_RATE)
-                          for item in intervals)
+        if (not isinstance(chunk, SpeechChunk) or type(chunk.index) is not int or chunk.index < 0
+                or any(type(value) is not int for value in (
+                    chunk.start_frame, chunk.end_frame, chunk.core_start_frame, chunk.core_end_frame))
+                or not 0 <= chunk.start_frame <= chunk.core_start_frame < chunk.core_end_frame
+                    or not chunk.core_end_frame <= chunk.end_frame <= total_frames
+                or chunk.end_frame <= chunk.start_frame):
+            raise ValueError("VAD 分塊邊界無效")
+        engine._check_cancel(cancel_check)
+        frames = chunk.end_frame - chunk.start_frame
+        audio.setpos(chunk.start_frame)
+        samples = array("h", audio.readframes(frames))
+        if samples.itemsize != 2:
+            raise ValueError("不支援的 PCM 樣本格式")
+        chunk_duration = frames / SAMPLE_RATE
+        request_path, response_path = (os.path.join(folder, f"{chunk.index}.{suffix}")
+                                       for suffix in ("request.json", "response.json"))
+        descriptor = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as request_file:
+            json.dump({"url": url, "headers": headers, "model": profile["model"],
+                       "audio": [sample / 32768.0 for sample in samples]}, request_file)
+        try:
+            engine._run_process(
+                [sys.executable, "-m", __name__, request_path, response_path],
+                os.path.join(folder, "worker.log"), cancel_check,
+                timeout_seconds=900, disk_guard_path=folder)
+            envelope = json.loads(Path(response_path).read_bytes())
+            if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+                raise ValueError(envelope.get("error", "VAD API 回應無效"))
+            intervals = _validate_intervals(envelope.get("payload"), chunk_duration)
+        except (OSError, ValueError, TypeError) as exc:
+            raise engine.SubtitleError(str(exc)) from None
+    return [SpeechInterval(item.start + chunk.start_frame / SAMPLE_RATE,
+                           item.end + chunk.start_frame / SAMPLE_RATE)
+            for item in intervals]
+
+
+def merge_speech_intervals(intervals) -> list[SpeechInterval]:
     merged = []
-    for interval in sorted(output, key=lambda item: (item.start, item.end)):
+    for interval in sorted(intervals, key=lambda item: (item.start, item.end)):
         if merged and interval.start <= merged[-1].end + CHUNK_OVERLAP_SECONDS:
             merged[-1] = SpeechInterval(merged[-1].start, max(merged[-1].end, interval.end))
         else:

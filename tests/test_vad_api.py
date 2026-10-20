@@ -92,7 +92,13 @@ def test_vad_overlap_stitches_speech_across_chunk_boundary(tmp_path):
         wav = tmp_path / 'long.wav'
         make_wav(wav, 31)
         profile = snapshot(f'http://127.0.0.1:{server.server_port}/v1')
-        assert vad.detect_speech(str(wav), profile, lambda: False) == [SpeechInterval(29.8, 30.25)]
+        plan = vad.plan_speech_chunks(str(wav))
+        assert [(chunk.index, chunk.core_start_frame, chunk.core_end_frame,
+                 chunk.start_frame, chunk.end_frame) for chunk in plan] == [
+            (0, 0, 480000, 0, 484000), (1, 480000, 496000, 476000, 496000)]
+        partials = [interval for chunk in plan
+                    for interval in vad.detect_speech_chunk(str(wav), profile, chunk, lambda: False)]
+        assert vad.merge_speech_intervals(partials) == [SpeechInterval(29.8, 30.25)]
         assert [len(call['audio']) for call in seen] == [484000, 20000]
     finally:
         server.shutdown()

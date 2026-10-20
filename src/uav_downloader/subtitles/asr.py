@@ -341,12 +341,46 @@ def transcribe(settings, wav_path, output_base, log_path, cancel_check=None, pro
     return path
 
 
-def transcribe_stage(audio_path, intervals, profile_snapshot, language, cancel_check=None):
-    """Transcribe only the supplied VAD intervals, preserving the input audio clock."""
-    from uav_downloader.subtitles import engine
-    from uav_downloader.subtitles.models import SpeechInterval, SubtitleSegment
-    from uav_downloader.subtitles.profiles import capability_report, resolve_credential
+def plan_transcription_chunks(audio_path, intervals):
+    """Plan resumable ASR requests with stable indices and explicit time ownership."""
+    from uav_downloader.subtitles.models import SpeechInterval, TranscriptionChunk
+    with wave.open(audio_path, 'rb') as source:
+        rate, total_frames = source.getframerate(), source.getnframes()
+        if source.getnchannels() != 1 or source.getsampwidth() != 2 or rate != 16000:
+            raise ValueError('辨識音訊必須為 16 kHz 單聲道 PCM')
+    frame_limit, overlap = CHUNK_SECONDS * rate, int(OVERLAP_SECONDS * rate)
+    chunks, index = [], 0
+    for interval_index, interval in enumerate(intervals):
+        if (not isinstance(interval, SpeechInterval) or type(interval.start) not in (int, float)
+                or type(interval.end) not in (int, float)
+                or not math.isfinite(interval.start) or not math.isfinite(interval.end)
+                or interval.start < 0 or interval.start >= interval.end
+                or interval.end > total_frames / rate):
+            raise ValueError('VAD 語音區間必須是原音訊內合法的秒單位時間')
+        first = int(interval.start * rate)
+        last = min(total_frames, int(math.ceil(interval.end * rate)))
+        for core_start in range(first, last, frame_limit):
+            core_end = min(last, core_start + frame_limit)
+            chunks.append(TranscriptionChunk(
+                index, interval_index, core_start, core_end,
+                max(first, core_start - overlap), min(last, core_end + overlap)))
+            index += 1
+    return tuple(chunks)
 
+
+def transcribe_stage(audio_path, intervals, profile_snapshot, language, cancel_check=None):
+    """Transcribe VAD intervals through the resumable one-request stage seam."""
+    result = []
+    for chunk in plan_transcription_chunks(audio_path, intervals):
+        result.extend(transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check))
+    return result
+
+
+def transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check=None):
+    """Run one planned request; IDs remain stable as chunk index plus local ordinal."""
+    from uav_downloader.subtitles import engine
+    from uav_downloader.subtitles.models import SubtitleSegment, TranscriptionChunk
+    from uav_downloader.subtitles.profiles import capability_report, resolve_credential
     try:
         profile = json.loads(profile_snapshot.profile_json)
     except (TypeError, json.JSONDecodeError):
@@ -369,64 +403,51 @@ def transcribe_stage(audio_path, intervals, profile_snapshot, language, cancel_c
         stage_base += '/v1'
     settings = {'base_url': stage_base, 'model': profile['model'], 'api_key': key,
                 '_install_model': False}
-    frame_limit = CHUNK_SECONDS * 16000
-    result = []
-    request_index = 0
     with wave.open(audio_path, 'rb') as source, tempfile.TemporaryDirectory(
             prefix='subtitle-asr-', dir=os.path.dirname(audio_path)) as folder:
-        rate = source.getframerate()
-        total_frames = source.getnframes()
-        if source.getnchannels() != 1 or source.getsampwidth() != 2 or rate != 16000:
-            raise engine.SubtitleError('辨識音訊必須為 16 kHz 單聲道 PCM')
-        for interval in intervals:
-            engine._check_cancel(cancel_check)
-            if (not isinstance(interval, SpeechInterval) or
-                    type(interval.start) not in (int, float) or
-                    type(interval.end) not in (int, float) or
-                    not math.isfinite(interval.start) or not math.isfinite(interval.end) or
-                    interval.start < 0 or interval.start >= interval.end or
-                    interval.end > total_frames / rate):
-                raise ValueError('VAD 語音區間必須是原音訊內合法的秒單位時間')
-            first = int(interval.start * rate)
-            last = min(total_frames, int(math.ceil(interval.end * rate)))
-            overlap_frames = int(OVERLAP_SECONDS * 16000)
-            for core_start in range(first, last, frame_limit):
-                engine._check_cancel(cancel_check)
-                chunk_start = max(first, core_start - overlap_frames)
-                chunk_stop = min(last, core_start + frame_limit + overlap_frames)
-                source.setpos(chunk_start)
-                audio_bytes = source.readframes(chunk_stop - chunk_start)
-                chunk_path = os.path.join(folder, f'{request_index}.wav')
-                request_path = os.path.join(folder, f'{request_index}.json')
-                response_path = os.path.join(folder, f'{request_index}.response.json')
-                with wave.open(chunk_path, 'wb') as chunk:
-                    chunk.setparams(source.getparams())
-                    chunk.writeframes(audio_bytes)
-                request_settings = dict(settings, _language=language, _parameters=parameters)
-                fd = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, 'w', encoding='utf-8') as request_file:
-                    json.dump(request_settings, request_file)
-                engine._run_process(
-                    [sys.executable, '-m', __name__, request_path, chunk_path, response_path],
-                    os.path.join(folder, 'worker.log'), cancel_check,
-                    timeout_seconds=1850, disk_guard_path=folder)
-                try:
-                    envelope = json.loads(Path(response_path).read_bytes())
-                    if not isinstance(envelope, dict) or envelope.get('ok') is not True:
-                        raise ValueError(envelope.get('error', '辨識 API 回應無效'))
-                    duration = (chunk_stop - chunk_start) / rate
-                    segments = _stage_segments(envelope.get('payload'), duration)
-                except (OSError, ValueError, TypeError) as exc:
-                    raise engine.SubtitleError(str(exc)) from None
-                for start, end, text in segments:
-                    absolute_start, absolute_end = chunk_start / rate + start, chunk_start / rate + end
-                    midpoint = (absolute_start + absolute_end) / 2
-                    if core_start / rate <= midpoint < min(last, core_start + frame_limit) / rate:
-                        result.append(SubtitleSegment(
-                            f'segment-{len(result) + 1:06d}', absolute_start, absolute_end, text))
-                request_index += 1
-    return result
-
+        rate, total_frames = source.getframerate(), source.getnframes()
+        if (source.getnchannels() != 1 or source.getsampwidth() != 2 or rate != 16000
+                or not isinstance(chunk, TranscriptionChunk)
+                or type(chunk.index) is not int or chunk.index < 0
+                or type(chunk.interval_index) is not int or chunk.interval_index < 0
+                or any(type(value) is not int for value in (
+                    chunk.core_start_frame, chunk.core_end_frame, chunk.start_frame, chunk.end_frame))
+                or not 0 <= chunk.start_frame <= chunk.core_start_frame < chunk.core_end_frame
+                or not chunk.core_end_frame <= chunk.end_frame <= total_frames):
+            raise ValueError('辨識分塊邊界無效')
+        engine._check_cancel(cancel_check)
+        source.setpos(chunk.start_frame)
+        audio_bytes = source.readframes(chunk.end_frame - chunk.start_frame)
+        chunk_path = os.path.join(folder, f'{chunk.index}.wav')
+        request_path = os.path.join(folder, f'{chunk.index}.json')
+        response_path = os.path.join(folder, f'{chunk.index}.response.json')
+        with wave.open(chunk_path, 'wb') as target:
+            target.setparams(source.getparams())
+            target.writeframes(audio_bytes)
+        request_settings = dict(settings, _language=language, _parameters=parameters)
+        fd = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as request_file:
+            json.dump(request_settings, request_file)
+        engine._run_process(
+            [sys.executable, '-m', __name__, request_path, chunk_path, response_path],
+            os.path.join(folder, 'worker.log'), cancel_check,
+            timeout_seconds=1850, disk_guard_path=folder)
+        try:
+            envelope = json.loads(Path(response_path).read_bytes())
+            if not isinstance(envelope, dict) or envelope.get('ok') is not True:
+                raise ValueError(envelope.get('error', '辨識 API 回應無效'))
+            duration = (chunk.end_frame - chunk.start_frame) / rate
+            segments = _stage_segments(envelope.get('payload'), duration)
+        except (OSError, ValueError, TypeError) as exc:
+            raise engine.SubtitleError(str(exc)) from None
+        result = []
+        for ordinal, (start, end, text) in enumerate(segments, 1):
+            absolute_start, absolute_end = chunk.start_frame / rate + start, chunk.start_frame / rate + end
+            midpoint = (absolute_start + absolute_end) / 2
+            if chunk.core_start_frame / rate <= midpoint < chunk.core_end_frame / rate:
+                result.append(SubtitleSegment(
+                    f'segment-{chunk.index:06d}-{ordinal:04d}', absolute_start, absolute_end, text))
+        return result
 
 def _stage_segments(payload, duration):
     if not isinstance(payload, dict) or not isinstance(payload.get('segments'), list):

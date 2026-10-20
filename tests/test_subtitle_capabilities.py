@@ -31,6 +31,12 @@ def test_localai_vad_parameters_are_reported_as_server_side_only():
     assert report['vad_parameters'] == 'service_side_model_configuration'
 
 
+def test_localai_reasoning_capability_reports_template_control_limit():
+    profile = json.loads(snapshot('localai').profile_json)
+    report = capability_report(ProfileSnapshot(json.dumps(profile), None, 'snapshot'))
+    assert report['reasoning_disable'] == 'documented_request_controls_without_machine_confirmation'
+
+
 @pytest.mark.parametrize('provider', ['localai', 'openai-compatible'])
 def test_unknown_reasoning_control_blocks_required_disable_before_network(provider, monkeypatch):
     monkeypatch.setattr(llm.requests, 'Session', lambda: pytest.fail('unknown must block before network'))
@@ -146,6 +152,9 @@ def test_transform_batches_by_count_and_output_budget():
     with pytest.raises(llm.LlmTranslationError, match='輸出預算'):
         llm._segment_batches([SubtitleSegment('long', 0, 1, '12345')],
                              {'max_output_tokens': 4})
+    planned = llm.plan_transform_batches(segments, snapshot('lmstudio'))
+    assert [len(batch) for batch in planned] == [20, 20, 1]
+    assert all(isinstance(batch, tuple) for batch in planned)
 
 
 def test_unknown_model_parameter_is_rejected_before_request(monkeypatch):

@@ -596,6 +596,29 @@ def profile_capabilities(snapshot) -> tuple[str, ...]:
         raise LlmTranslationError('模型設定快照格式錯誤') from None
 
 
+def plan_transform_batches(segments, profile_snapshot):
+    """Return immutable bounded batches so callers can checkpoint per request."""
+    from uav_downloader.subtitles.models import SubtitleSegment
+    try:
+        profile = json.loads(profile_snapshot.profile_json)
+    except (AttributeError, TypeError, json.JSONDecodeError):
+        raise LlmTranslationError('模型設定快照格式錯誤') from None
+    if not isinstance(profile, dict):
+        raise LlmTranslationError('模型設定快照格式錯誤')
+    provider, parameters = profile.get('provider'), profile.get('parameters')
+    if not any(stage in profile_capabilities(profile_snapshot)
+               for stage in ('correction', 'translation')):
+        raise LlmTranslationError('所選模型服務不支援文字轉換')
+    parameters = _validate_text_parameters(provider, parameters)
+    values = list(segments)
+    if len(values) > 5000:
+        raise LlmTranslationError('字幕片段過多')
+    if any(not isinstance(item, SubtitleSegment) or not isinstance(item.text, str)
+           for item in values):
+        raise LlmTranslationError('字幕片段格式無效')
+    return tuple(tuple(batch) for batch in _segment_batches(values, parameters))
+
+
 def transform_segments(operation, segments, profile_snapshot, target_language=None,
                        *, require_reasoning_disabled=True, allow_reasoning=False,
                        cancel_check=None):
@@ -618,29 +641,7 @@ def transform_segments(operation, segments, profile_snapshot, target_language=No
             and provider not in {'lmstudio', 'ollama'}):
         raise LlmTranslationError('此模型服務停用思考能力未確認，請明確允許思考')
     parameters = profile.get('parameters')
-    allowed = {
-        'openai': {'temperature', 'max_output_tokens'},
-        'openai-compatible': {'temperature', 'max_output_tokens'},
-        'localai': {'temperature', 'max_output_tokens'},
-        'anthropic': {'temperature', 'max_output_tokens'},
-        'gemini': {'temperature', 'max_output_tokens'},
-        'ollama': {'temperature', 'top_p', 'top_k', 'repeat_penalty', 'num_predict'},
-        'lmstudio': {'temperature', 'top_p', 'top_k', 'min_p', 'repeat_penalty',
-                     'max_output_tokens', 'context_length'},
-    }[provider]
-    if not isinstance(parameters, dict) or set(parameters) - allowed:
-        raise LlmTranslationError('模型參數不受支援')
-    for name, value in parameters.items():
-        integer = name in {'max_output_tokens', 'context_length', 'top_k', 'num_predict'}
-        if (type(value) not in ((int,) if integer else (int, float))
-                or (not integer and not math.isfinite(value))):
-            raise LlmTranslationError(f'模型參數 {name} 格式無效')
-        if name in {'temperature', 'top_p', 'min_p'} and not 0 <= value <= 1:
-            raise LlmTranslationError(f'模型參數 {name} 超出範圍')
-        if name in {'context_length', 'top_k', 'num_predict', 'max_output_tokens'} and value <= 0:
-            raise LlmTranslationError(f'模型參數 {name} 必須大於 0')
-        if name == 'repeat_penalty' and value <= 0:
-            raise LlmTranslationError('模型參數 repeat_penalty 必須大於 0')
+    parameters = _validate_text_parameters(provider, parameters)
     inputs = list(segments)
     if len(inputs) > 5000:
         raise LlmTranslationError('字幕片段過多')
@@ -683,7 +684,7 @@ def transform_segments(operation, segments, profile_snapshot, target_language=No
     if provider in {'openai', 'anthropic', 'gemini'} and not key:
         raise LlmTranslationError('此文字模型服務需要 API 金鑰')
     output = []
-    batches = _segment_batches(inputs, parameters)
+    batches = plan_transform_batches(inputs, profile_snapshot)
     for batch_segments in batches:
         _check_cancelled(cancel_check)
         job = ('Correct transcription spelling and punctuation without changing meaning or adding content.'
@@ -734,6 +735,33 @@ def transform_segments(operation, segments, profile_snapshot, target_language=No
         output.extend(SubtitleSegment(segment.segment_id, segment.start, segment.end, value['text'].strip())
                       for segment, value in zip(batch_segments, decoded))
     return output
+
+
+def _validate_text_parameters(provider, parameters):
+    allowed = {
+        'openai': {'temperature', 'max_output_tokens'},
+        'openai-compatible': {'temperature', 'max_output_tokens'},
+        'localai': {'temperature', 'max_output_tokens'},
+        'anthropic': {'temperature', 'max_output_tokens'},
+        'gemini': {'temperature', 'max_output_tokens'},
+        'ollama': {'temperature', 'top_p', 'top_k', 'repeat_penalty', 'num_predict'},
+        'lmstudio': {'temperature', 'top_p', 'top_k', 'min_p', 'repeat_penalty',
+                     'max_output_tokens', 'context_length'},
+    }.get(provider)
+    if allowed is None or not isinstance(parameters, dict) or set(parameters) - allowed:
+        raise LlmTranslationError('模型參數不受支援')
+    for name, value in parameters.items():
+        integer = name in {'max_output_tokens', 'context_length', 'top_k', 'num_predict'}
+        if (type(value) not in ((int,) if integer else (int, float))
+                or (not integer and not math.isfinite(value))):
+            raise LlmTranslationError(f'模型參數 {name} 格式無效')
+        if name in {'temperature', 'top_p', 'min_p'} and not 0 <= value <= 1:
+            raise LlmTranslationError(f'模型參數 {name} 超出範圍')
+        if name in {'context_length', 'top_k', 'num_predict', 'max_output_tokens'} and value <= 0:
+            raise LlmTranslationError(f'模型參數 {name} 必須大於 0')
+        if name == 'repeat_penalty' and value <= 0:
+            raise LlmTranslationError('模型參數 repeat_penalty 必須大於 0')
+    return parameters
 
 
 def _segment_batches(segments, parameters):
