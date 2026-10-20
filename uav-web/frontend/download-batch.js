@@ -5,7 +5,7 @@ window.formatStoragePath = value => {
   try { return decodeURIComponent(path); } catch { return path; }
 };
 
-window.createDownloadBatch = ({getQuery, onTasks}) => {
+window.createDownloadBatch = ({getQuery, getSubtitleRequest, onTasks}) => {
   const dialog = document.getElementById('download-batch-dialog');
   const form = document.getElementById('download-batch-form');
   const field = id => document.getElementById('batch-' + id);
@@ -20,6 +20,13 @@ window.createDownloadBatch = ({getQuery, onTasks}) => {
   const storage = () => form.querySelector('input[name="batch-storage"]:checked').value;
   const values = () => ({storage: storage(), name: field('name').value,
     policy: field('policy').value, naming: field('naming').value});
+  function updateSubtitleSummary() {
+    const summary=document.getElementById('batch-subtitle-summary');
+    if(!summary)return;
+    if(!field('subtitles').checked){summary.textContent='未啟用獨立字幕工作；沿用既有下載字幕設定。啟用後依字幕工作頁目前選取階段與設定檔快照排入字幕任務。';return;}
+    try{const spec=getSubtitleRequest?.();const profiles=window.subtitleSettings?.state?.profiles||[];const stages=spec?.selected_stages.map(stage=>{const id=spec.profile_ids?.[stage]||spec.profile_ids?.text;const profile=profiles.find(item=>item.profile_id===id);return `${stage}：${profile?.display_name||'設定檔'}（${profile?.provider||'服務未知'} / ${profile?.model||'模型未知'}）`;})||[];summary.textContent=spec?`辨識來源：日文；字幕階段與模型：${stages.join('；')}；翻譯目標：${spec.target_languages.join('、')||'未選擇'}；輸出字幕：${spec.output_languages.join('、')||'無'}。加入下載時保存設定檔快照。`:'請先選擇字幕階段。';}
+    catch(error){summary.textContent=error.message;}
+  }
   async function request(body) {
     const response = await fetch('/api/download/batch', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const data = await response.json();
@@ -63,6 +70,7 @@ window.createDownloadBatch = ({getQuery, onTasks}) => {
       try { localStorage.setItem(preferenceKey, preferredStorage); } catch {}
       field('policy').value = preferredStorage === 'settings' ? 'merge' : 'new';
     }
+    if(event.target.id==='batch-subtitles')updateSubtitleSummary();
     refresh();
   });
   form.addEventListener('submit', async event => {
@@ -73,6 +81,10 @@ window.createDownloadBatch = ({getQuery, onTasks}) => {
     field('cancel').disabled = true;
     for (const control of form.querySelectorAll('input, select')) control.disabled = true;
     try {
+      if(field('subtitles').checked&&!pendingRequest){
+        try{const subtitle_request=getSubtitleRequest?.();if(!subtitle_request)throw Error('請先選擇字幕階段');pendingRequest={action:'submit',...values(),expected_destination:preview.destination,urls,request_id:requestId,subtitle_request};}
+        catch(error){field('status').textContent=error.message;submitting=false;field('submit').disabled=false;field('cancel').disabled=false;return;}
+      }
       pendingRequest ||= {action:'submit', ...values(), expected_destination:preview.destination, urls, request_id:requestId};
       const data = await request(pendingRequest);
       pendingRequest = null;
@@ -115,6 +127,7 @@ window.createDownloadBatch = ({getQuery, onTasks}) => {
     const now = new Date();
     const date = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
     field('name').value = getQuery() || `下載_${date}`;
+    updateSubtitleSummary();
     dialog.returnValue = '';
     dialog.showModal();
     refresh();

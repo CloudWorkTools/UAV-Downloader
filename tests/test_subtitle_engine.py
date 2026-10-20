@@ -1829,6 +1829,41 @@ def test_asr_and_correction_dispatch_only_the_selected_stage(
         (item.segment_id, item.start, item.end) for item in source_segments[3:]]
 
 
+def test_asr_filters_exact_english_sound_descriptions_but_keeps_dialogue(
+        monkeypatch, tmp_path):
+    from uav_downloader.subtitles import asr, results
+    from uav_downloader.subtitles.models import SpeechInterval, SubtitleSegment, TranscriptionChunk
+
+    monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
+    audio = tmp_path / 'audio.bin'
+    audio.write_bytes(b'fixture audio bytes')
+    vad_result = results.commit_success(results.StageResult(
+        '', 'video-english-sound-cues', 'vad', None, (), _stage_profile_snapshot('vad'),
+        (SpeechInterval(0.0, 2.4),), None))
+    chunk = TranscriptionChunk(0, 0, 0, 38400, 0, 38400)
+    monkeypatch.setattr(asr, 'plan_transcription_chunks',
+                        lambda _audio, _intervals: (chunk,))
+    source_segments = (
+        SubtitleSegment('laughter', 0.0, 0.2, '[laughter]'),
+        SubtitleSegment('laughing', 0.2, 0.4, '[laughing]'),
+        SubtitleSegment('breathing', 0.4, 0.6, '[breathing]'),
+        SubtitleSegment('panting', 0.6, 0.8, '[heavy breathing]'),
+        SubtitleSegment('moaning', 0.8, 1.0, '[moaning]'),
+        SubtitleSegment('panting-label', 1.0, 1.2, '[panting]'),
+        SubtitleSegment('groaning', 1.2, 1.4, '[groaning]'),
+        SubtitleSegment('music', 1.4, 1.6, '[music]'),
+        SubtitleSegment('dialogue', 1.6, 2.2, "I'm having trouble breathing."),
+        SubtitleSegment('quiet', 2.2, 2.4, 'はい'),
+    )
+    monkeypatch.setattr(asr, 'transcribe_chunk', lambda *_args: list(source_segments))
+
+    result = subtitles.run_stage(
+        'video-english-sound-cues', str(audio), 'asr', _stage_profile_snapshot('asr'),
+        input_result_id=vad_result.result_id, execution_id='english-sound-cues')
+
+    assert result.segments == source_segments[-2:]
+
+
 def test_explicit_old_upstream_is_allowed_but_remains_stale(
         monkeypatch, tmp_path):
     from uav_downloader.subtitles import llm, results
