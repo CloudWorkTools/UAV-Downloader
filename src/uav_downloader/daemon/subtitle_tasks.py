@@ -751,18 +751,27 @@ class SubtitleTaskManager:
 
     def restore_previous(self, video_id, stage, language=None, *, output_language=None,
                          replace_existing=False):
-        """Publish an adopted prior success without invoking a model stage."""
-        if stage not in ('asr', 'correction', 'translation'):
-            raise ValueError('此字幕階段沒有可發布文字')
+        """Adopt a prior success; publish text only when an output is requested."""
+        if stage not in ('vad', 'asr', 'correction', 'translation'):
+            raise ValueError('此字幕階段沒有可回復結果')
         if stage == 'translation' and not language:
             raise ValueError('請指定字幕翻譯語言')
-        output_language = output_language or (language if stage == 'translation' else 'ja')
-        if output_language not in ('ja', 'en', 'zh-TW'):
+        if stage == 'vad' and output_language is not None:
+            raise ValueError('VAD 結果不能發布為字幕')
+        if output_language is not None and output_language not in ('ja', 'en', 'zh-TW'):
             raise ValueError('字幕輸出語言無效')
+        if output_language is not None and (
+                (stage in ('asr', 'correction') and output_language != 'ja') or
+                (stage == 'translation' and output_language != language)):
+            raise ValueError('字幕結果階段與輸出語言不符')
         if not isinstance(replace_existing, bool):
             raise ValueError('字幕替換選項無效')
         with self._video_locks.setdefault(video_id, threading.Lock()):
             restored = results.restore_previous(video_id, stage, language)
+            if output_language is None:
+                return {'publication_id': None, 'video_id': video_id,
+                        'result_id': restored.result_id, 'language': None,
+                        'restore_status': 'restored', 'publish_status': 'not_requested'}
             publication_id = 'subtitle_pub_' + uuid.uuid4().hex
             publication = {
                 'publication_id': publication_id, 'video_id': video_id,
@@ -800,13 +809,42 @@ class SubtitleTaskManager:
             self._save_locked()
         return status
 
+    def publish_result(self, video_id, result_id, language, *, replace_existing):
+        """Persist and publish one selected stored text result without model work."""
+        from uav_downloader.subtitles import results
+        if language not in ('ja', 'en', 'zh-TW') or not isinstance(replace_existing, bool):
+            raise ValueError('字幕輸出語言或替換選項無效')
+        value = results.get(video_id, result_id)
+        if value is None or value.stage not in ('asr', 'correction', 'translation'):
+            raise ValueError('所選字幕結果不存在或沒有可發布文字')
+        if ((value.stage in ('asr', 'correction') and language != 'ja') or
+                (value.stage == 'translation' and value.language != language)):
+            raise ValueError('字幕結果階段與輸出語言不符')
+        publication_id = 'subtitle_pub_' + uuid.uuid4().hex
+        publication = {
+            'publication_id': publication_id, 'video_id': video_id,
+            'result_id': result_id, 'language': language,
+            'replace_existing': replace_existing, 'purpose': 'selected',
+            'restore_status': 'not_requested', 'publish_status': 'publishing',
+            'created_at': time.time(),
+        }
+        with self._video_locks.setdefault(video_id, threading.Lock()):
+            with self._lock:
+                self._publications[publication_id] = publication
+                self._save_locked()
+            status = self._publish_restored_locked(publication)
+        return {'publication_id': publication_id, 'video_id': video_id,
+                'result_id': result_id, 'language': language,
+                'restore_status': 'not_requested', 'publish_status': status['publish_status'],
+                'path': status.get('path'), 'error': status.get('error')}
+
     def retry_restored_publish(self, publication_id):
         """Retry only storage for a restored result recorded in the task store."""
         if not isinstance(publication_id, str) or not re.fullmatch(r'subtitle_pub_[0-9a-f]{32}', publication_id):
             raise ValueError('字幕發布識別碼格式錯誤')
         with self._lock:
             publication = self._publications.get(publication_id)
-            if (not publication or publication.get('purpose') != 'restore'
+            if (not publication or publication.get('purpose') not in ('restore', 'selected')
                     or publication.get('publish_status') != 'failed'):
                 raise ValueError('字幕發布目前無法重試')
             publication = copy.deepcopy(publication)
@@ -814,5 +852,6 @@ class SubtitleTaskManager:
             status = self._publish_restored_locked(publication)
         return {'publication_id': publication_id, 'video_id': publication['video_id'],
                 'result_id': publication['result_id'], 'language': publication['language'],
-                'restore_status': 'restored', 'publish_status': status['publish_status'],
+                'restore_status': publication.get('restore_status', 'not_requested'),
+                'publish_status': status['publish_status'],
                 'path': status.get('path'), 'error': status.get('error')}

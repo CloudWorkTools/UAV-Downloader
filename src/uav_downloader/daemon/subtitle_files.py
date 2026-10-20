@@ -144,7 +144,8 @@ class SubtitleFileManager:
             self._save_locked()
         return VideoSource(video_id, path, identity, 'local', output_mode)
 
-    def register_smb(self, video_path, *, storage_root, nas_settings, output_mode='smb'):
+    def register_smb(self, video_path, *, storage_root, nas_settings, output_mode='smb',
+                     batch_relative_path=''):
         """Register an active SMB virtual path without converting it to a local path."""
         if (output_mode != 'smb'
                 or not isinstance(storage_root, str) or not storage_root.startswith(SMB_PATH_ROOT + os.path.sep)
@@ -155,6 +156,7 @@ class SubtitleFileManager:
         if not filesystem.remote or filesystem.islink(video_path) or not filesystem.isfile(video_path):
             raise ValueError('找不到可讀取的 SMB 影片')
         relative = self._validate_smb_locator(filesystem, storage_root, video_path)
+        relative = self._join_batch_locator(batch_relative_path, relative)
         identity = self._media_identity(video_path)
         descriptor = {
             'kind': 'smb', 'relative_path': relative,
@@ -168,7 +170,7 @@ class SubtitleFileManager:
         return VideoSource(video_id, video_path, identity, 'smb', output_mode)
 
     def register_upload(self, video_path, *, allowed_roots, nas_settings,
-                        remote_root, remote_video_path):
+                        remote_root, remote_video_path, batch_relative_path=''):
         """Bind a local staging copy to the exact already-uploaded SMB locator."""
         path, root = self._validate_local(video_path, allowed_roots)
         if (not isinstance(remote_root, str) or not remote_root.startswith(SMB_PATH_ROOT + os.path.sep)
@@ -180,6 +182,7 @@ class SubtitleFileManager:
                 or not filesystem.isfile(remote_video_path)):
             raise ValueError('找不到已上傳的 NAS 影片')
         relative = self._validate_smb_locator(filesystem, remote_root, remote_video_path)
+        relative = self._join_batch_locator(batch_relative_path, relative)
         descriptor = {
             'kind': 'local', 'path': path, 'root': root,
             'identity': self._media_identity(path), 'output_mode': 'upload',
@@ -199,6 +202,15 @@ class SubtitleFileManager:
                 self._nas_identity(settings) != descriptor.get('nas_identity')):
             raise ValueError('NAS 設定已變更，請恢復原設定後重試字幕儲存')
         return settings
+
+    @staticmethod
+    def _join_batch_locator(batch_relative_path, relative_path):
+        if not isinstance(batch_relative_path, str):
+            raise ValueError('NAS 批次路徑無效')
+        parts = batch_relative_path.replace('\\', '/').split('/') if batch_relative_path else []
+        if any(part in ('', '.', '..') or any(ord(char) < 32 for char in part) for part in parts):
+            raise ValueError('NAS 批次路徑無效')
+        return os.path.join(*parts, relative_path) if parts else relative_path
 
     @contextmanager
     def resolve(self, video_id):
@@ -313,6 +325,10 @@ class SubtitleFileManager:
         if (language not in _LANGUAGES or result.video_id != video_id
                 or not isinstance(replace_existing, bool)):
             raise ValueError('字幕發布影片或語言不符')
+        if (result.stage in ('asr', 'correction') and language != 'ja') or (
+                result.stage == 'translation' and result.language != language) or (
+                result.stage not in ('asr', 'correction', 'translation')):
+            raise ValueError('字幕結果階段與輸出語言不符')
         text = self._srt(result)
         data = text.encode('utf-8')
         expected_hash = hashlib.sha256(data).hexdigest()

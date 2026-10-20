@@ -167,7 +167,7 @@ def test_restore_publish_failure_is_persisted_and_retried_after_restart(manager,
     manager._source_manager.publish_result = fail_then_publish
     monkeypatch.setattr(engine, 'run_stage', lambda *_a, **_k: pytest.fail('restore retry called a model'))
 
-    failed = manager.restore_previous('video-1', 'asr')
+    failed = manager.restore_previous('video-1', 'asr', output_language='ja')
     assert failed['restore_status'] == 'restored'
     assert failed['publish_status'] == 'failed'
     assert failed['publication_id'].startswith('subtitle_pub_')
@@ -186,6 +186,44 @@ def test_restore_publish_failure_is_persisted_and_retried_after_restart(manager,
     assert writes == ['write', 'write']
     persisted = json.loads(manager._state_path.read_text())
     assert persisted['publications'][failed['publication_id']]['publish_status'] == 'published'
+
+
+@pytest.mark.parametrize('stage', ['vad', 'asr'])
+def test_restore_previous_selects_without_implicit_srt_publication(manager, monkeypatch, stage):
+    from uav_downloader.subtitles import engine, results
+
+    restored = SimpleNamespace(result_id='prior-result', video_id='video-1', stage=stage,
+                               language=None, intervals=(), segments=(), content_available=True)
+    calls = []
+    monkeypatch.setattr(results, 'restore_previous', lambda *args: calls.append(args) or restored)
+    monkeypatch.setattr(engine, 'run_stage', lambda *_a, **_k: pytest.fail('restore called a model stage'))
+
+    selected = manager.restore_previous('video-1', stage)
+
+    assert calls == [('video-1', stage, None)]
+    assert selected == {'publication_id': None, 'video_id': 'video-1',
+                        'result_id': 'prior-result', 'language': None,
+                        'restore_status': 'restored', 'publish_status': 'not_requested'}
+    assert manager._publications == {}
+
+
+def test_restore_previous_publishes_text_only_for_a_matching_explicit_language(manager, monkeypatch):
+    from uav_downloader.subtitles import results
+
+    restored = SimpleNamespace(result_id='prior-result', video_id='video-1', stage='translation',
+                               language='en', intervals=None, segments=(), content_available=True)
+    monkeypatch.setattr(results, 'restore_previous', lambda *_a: restored)
+    monkeypatch.setattr(results, 'get', lambda *_a: restored)
+    writes = []
+    manager._source_manager.publish_result = lambda *_a, **_k: writes.append('write') or {'path': 'movie.en.srt'}
+
+    with pytest.raises(ValueError, match='階段與輸出語言'):
+        manager.restore_previous('video-1', 'translation', 'en', output_language='ja')
+    assert writes == []
+
+    published = manager.restore_previous('video-1', 'translation', 'en', output_language='en')
+    assert published['publish_status'] == 'published'
+    assert writes == ['write']
 
 
 def test_reorder_moves_only_waiting_work_and_redo_gets_a_new_execution_id(manager):

@@ -30,15 +30,20 @@ def _profile(snapshot: ProfileSnapshot) -> dict:
         raise ValueError("所選設定不支援語音活動偵測")
     if profile.get("provider") != "localai":
         raise ValueError("所選模型服務不支援獨立語音活動偵測")
-    parameters = profile.get("parameters")
+    validate_vad_parameters(profile.get("parameters"))
+    if not profile.get("base_url") or not profile.get("model"):
+        raise ValueError("請設定 VAD 模型服務與模型別名")
+    return profile
+
+
+def validate_vad_parameters(parameters):
+    """Validate the current LocalAI contract; tuning stays server-side."""
     if not isinstance(parameters, dict) or set(parameters) - {
             "threshold", "min_silence_duration_ms", "speech_pad_ms"}:
         raise ValueError("VAD 模型參數不受支援")
     if parameters:
         raise ValueError("LocalAI VAD 參數只能在服務端設定；請設定模型別名後再執行")
-    if not profile.get("base_url") or not profile.get("model"):
-        raise ValueError("請設定 VAD 模型服務與模型別名")
-    return profile
+    return parameters
 
 
 def _validate_intervals(payload: object, duration: float) -> list[SpeechInterval]:

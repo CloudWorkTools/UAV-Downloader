@@ -1,9 +1,10 @@
 use crate::client::{DaemonClient, StartDownloadRequest};
 use crate::ws::WsHub;
+use axum::body::{to_bytes, Body};
 use axum::extract::{Query, State, WebSocketUpgrade};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use rust_embed::RustEmbed;
 use serde::Deserialize;
@@ -77,6 +78,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/history", get(history_handler))
         .route("/api/history/check", post(history_check_handler))
         .route("/api/settings", get(get_settings_handler).post(update_settings_handler))
+        .route("/api/subtitles", any(subtitles_handler))
+        .route("/api/subtitles/*path", any(subtitles_handler))
         .fallback(static_handler)
         .with_state(state)
 }
@@ -168,7 +171,7 @@ async fn start_download_handler(
     Json(req): Json<StartDownloadRequest>,
 ) -> impl IntoResponse {
     match state.client.start_download(req).await {
-        Ok(v) => Json(v).into_response(),
+        Ok((status, value)) => (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(value)).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
     }
 }
@@ -237,6 +240,90 @@ async fn update_settings_handler(
     }
 }
 
+const MAX_SUBTITLE_REQUEST_BYTES: usize = 1024 * 1024;
+
+async fn subtitles_handler(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let Some(method_allowed) = subtitle_method_allowed(uri.path(), &method) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !method_allowed {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+    let content_type = headers.get(header::CONTENT_TYPE);
+    if matches!(method, Method::POST | Method::PUT) && !is_json_content_type(content_type) {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+    }
+    let body = match to_bytes(body, MAX_SUBTITLE_REQUEST_BYTES).await {
+        Ok(body) => body.to_vec(),
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    let response = match state.client.subtitles_request(
+        method,
+        &uri.to_string(),
+        content_type,
+        body,
+    ).await {
+        Ok(response) => response,
+        Err(_) => return subtitle_gateway_error(),
+    };
+    let status = response.status();
+    let content_type = response.headers().get(reqwest::header::CONTENT_TYPE).cloned();
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(_) => return subtitle_gateway_error(),
+    };
+    let mut result = Response::builder().status(status);
+    if let Some(content_type) = content_type {
+        result = result.header(header::CONTENT_TYPE, content_type);
+    }
+    result.body(Body::from(body)).unwrap_or_else(|_| subtitle_gateway_error())
+}
+
+fn subtitle_gateway_error() -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(serde_json::json!({"success": false, "error": "字幕服務暫時無法連線"})),
+    ).into_response()
+}
+
+fn is_json_content_type(content_type: Option<&HeaderValue>) -> bool {
+    content_type
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"))
+}
+
+fn subtitle_method_allowed(path: &str, method: &Method) -> Option<bool> {
+    fn is_id(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 512
+            && value != "."
+            && value != ".."
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
+    }
+    let segments: Vec<_> = path.strip_prefix("/api/subtitles/")?.split('/').collect();
+    let allowed = match segments.as_slice() {
+        ["profiles"] => &[Method::GET, Method::PUT][..],
+        ["profiles", "test"] => &[Method::POST][..],
+        ["videos"] => &[Method::GET][..],
+        ["tasks"] => &[Method::GET, Method::POST][..],
+        ["tasks", task_id] if is_id(task_id) => &[Method::GET][..],
+        ["tasks", task_id, "action"] if is_id(task_id) => &[Method::POST][..],
+        ["videos", video_id, "results"] if is_id(video_id) => &[Method::GET][..],
+        ["videos", video_id, "results", result_id] if is_id(video_id) && is_id(result_id) => &[Method::GET][..],
+        ["videos", video_id, "results", result_id, "content"] if is_id(video_id) && is_id(result_id) => &[Method::GET][..],
+        ["videos", video_id, "results", result_id, "action"] if is_id(video_id) && is_id(result_id) => &[Method::POST][..],
+        _ => return None,
+    };
+    Some(allowed.contains(method))
+}
+
 async fn static_handler(uri: axum::http::Uri) -> Response {
     let mut path = uri.path().trim_start_matches('/').to_string();
     if path.is_empty() {
@@ -264,5 +351,176 @@ async fn static_handler(uri: axum::http::Uri) -> Response {
                 (StatusCode::NOT_FOUND, "404 Not Found").into_response()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Method, Request};
+    use axum::routing::any;
+    use std::convert::Infallible;
+    use tokio::sync::{mpsc, oneshot};
+    use tower::ServiceExt;
+
+    #[derive(Debug)]
+    struct SeenRequest {
+        method: Method,
+        uri: axum::http::Uri,
+        headers: axum::http::HeaderMap,
+        body: Vec<u8>,
+    }
+
+    async fn mock_daemon() -> (String, mpsc::UnboundedReceiver<SeenRequest>, oneshot::Sender<()>) {
+        let (seen_tx, seen_rx) = mpsc::unbounded_channel();
+        let daemon = Router::new().route(
+            "/*path",
+            any(move |request: Request<Body>| {
+                let seen_tx = seen_tx.clone();
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let body = to_bytes(body, 1024 * 1024).await.unwrap().to_vec();
+                    let status = parts.uri.query()
+                        .and_then(|query| query.strip_prefix("status="))
+                        .and_then(|status| status.parse::<u16>().ok())
+                        .unwrap_or(409);
+                    let _ = seen_tx.send(SeenRequest {
+                        method: parts.method,
+                        uri: parts.uri,
+                        headers: parts.headers,
+                        body,
+                    });
+                    let mut response = Response::new(Body::from(format!("daemon-{status}")));
+                    *response.status_mut() = StatusCode::from_u16(status).unwrap();
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("text/plain; charset=utf-8"),
+                    );
+                    Ok::<_, Infallible>(response)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            axum::serve(listener, daemon)
+                .with_graceful_shutdown(async { let _ = shutdown_rx.await; })
+                .await
+                .unwrap();
+        });
+        (format!("http://{address}"), seen_rx, shutdown_tx)
+    }
+
+    fn app(daemon_url: String) -> Router {
+        create_router(AppState {
+            client: DaemonClient::new(daemon_url, Some("test-secret".into())),
+            ws_hub: WsHub::new(),
+            static_dir: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn subtitle_proxy_preserves_allowed_requests_and_upstream_responses() {
+        let (daemon_url, mut seen, shutdown) = mock_daemon().await;
+        let requests = [
+            Request::builder().method(Method::POST).uri("/api/subtitles/tasks?status=200")
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .body(Body::from(r#"{"video_id":"source-v1:abc"}"#)).unwrap(),
+            Request::builder().method(Method::GET).uri("/api/subtitles/tasks?status=400").body(Body::empty()).unwrap(),
+            Request::builder().method(Method::GET).uri("/api/subtitles/tasks?status=404").body(Body::empty()).unwrap(),
+            Request::builder().method(Method::GET).uri("/api/subtitles/tasks?status=409").body(Body::empty()).unwrap(),
+            Request::builder().method(Method::GET).uri("/api/subtitles/tasks?status=413").body(Body::empty()).unwrap(),
+        ];
+
+        for request in requests {
+            let response = app(daemon_url.clone()).oneshot(request).await.unwrap();
+            let status = response.status();
+            let content_type = response.headers().get(header::CONTENT_TYPE).unwrap().clone();
+            let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            let expected = format!("daemon-{}", status.as_u16());
+            assert_eq!(body.as_ref(), expected.as_bytes());
+            assert_eq!(content_type, "text/plain; charset=utf-8");
+
+            let request = seen.recv().await.unwrap();
+            assert_eq!(request.uri.path(), "/api/subtitles/tasks");
+            assert_eq!(request.uri.query(), Some(&format!("status={}", status.as_u16())[..]));
+            assert_eq!(request.headers.get(header::AUTHORIZATION).unwrap(), "Bearer test-secret");
+            if status == StatusCode::OK {
+                assert_eq!(request.method, Method::POST);
+                assert_eq!(request.headers.get(header::CONTENT_TYPE).unwrap(), "application/json; charset=utf-8");
+                assert_eq!(request.body, br#"{"video_id":"source-v1:abc"}"#);
+            }
+        }
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn subtitle_proxy_rejects_unlisted_routes_methods_and_non_json_writes() {
+        let (daemon_url, mut seen, shutdown) = mock_daemon().await;
+        let app = app(daemon_url);
+        for (method, uri, content_type) in [
+            (Method::GET, "/api/subtitles/unlisted", None),
+            (Method::DELETE, "/api/subtitles/tasks", None),
+            (Method::POST, "/api/subtitles/tasks", Some("text/plain")),
+        ] {
+            let mut request = Request::builder().method(method).uri(uri);
+            if let Some(value) = content_type {
+                request = request.header(header::CONTENT_TYPE, value);
+            }
+            let response = app.clone().oneshot(request.body(Body::from("x")).unwrap()).await.unwrap();
+            assert!(matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::UNSUPPORTED_MEDIA_TYPE));
+        }
+        let oversized = vec![b'x'; MAX_SUBTITLE_REQUEST_BYTES + 1];
+        let response = app.clone().oneshot(
+            Request::builder().method(Method::POST).uri("/api/subtitles/tasks")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(oversized)).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(seen.try_recv().is_err(), "rejected requests must not reach the daemon");
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn subtitle_proxy_allows_only_the_documented_endpoint_shapes() {
+        let (daemon_url, mut seen, shutdown) = mock_daemon().await;
+        let app = app(daemon_url);
+        let allowed = [
+            (Method::GET, "/api/subtitles/profiles"),
+            (Method::PUT, "/api/subtitles/profiles"),
+            (Method::POST, "/api/subtitles/profiles/test"),
+            (Method::GET, "/api/subtitles/videos"),
+            (Method::GET, "/api/subtitles/tasks"),
+            (Method::POST, "/api/subtitles/tasks"),
+            (Method::GET, "/api/subtitles/tasks/subtitle_0123456789abcdef"),
+            (Method::POST, "/api/subtitles/tasks/subtitle_0123456789abcdef/action"),
+            (Method::GET, "/api/subtitles/videos/source-v1:abc/results"),
+            (Method::GET, "/api/subtitles/videos/source-v1:abc/results/result-1"),
+            (Method::GET, "/api/subtitles/videos/source-v1:abc/results/result-1/content"),
+            (Method::POST, "/api/subtitles/videos/source-v1:abc/results/result-1/action"),
+        ];
+        for (method, uri) in allowed {
+            let mut request = Request::builder().method(method.clone()).uri(uri);
+            if matches!(method, Method::POST | Method::PUT) {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+            }
+            let response = app.clone().oneshot(request.body(Body::from("{}")).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT, "{method} {uri}");
+            let forwarded = seen.recv().await.unwrap();
+            assert_eq!(forwarded.method, method);
+            assert_eq!(forwarded.uri.path(), uri);
+        }
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn unknown_client_route_keeps_spa_fallback() {
+        let response = app("http://127.0.0.1:1".into())
+            .oneshot(Request::get("/client/navigation").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
     }
 }

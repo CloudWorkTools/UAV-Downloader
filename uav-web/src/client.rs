@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use axum::http::HeaderValue;
 
 #[derive(Clone, Debug)]
 pub struct DaemonClient {
     base_url: String,
     auth_token: Option<String>,
     client: reqwest::Client,
+    subtitles_client: reqwest::Client,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -26,6 +28,8 @@ pub struct StartDownloadRequest {
     pub enable_subtitles: Option<bool>,
     pub download_cover: Option<bool>,
     pub subtitle_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_request: Option<serde_json::Value>,
 }
 
 impl DaemonClient {
@@ -34,11 +38,17 @@ impl DaemonClient {
             .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_default();
+        let subtitles_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_default();
 
         Self {
             base_url,
             auth_token,
             client,
+            subtitles_client,
         }
     }
 
@@ -134,14 +144,15 @@ impl DaemonClient {
     pub async fn start_download(
         &self,
         req: StartDownloadRequest,
-    ) -> Result<serde_json::Value, reqwest::Error> {
+    ) -> Result<(u16, serde_json::Value), reqwest::Error> {
         let endpoint = format!("{}/api/download/start", self.base_url);
         let resp = self
             .apply_auth(self.client.post(&endpoint))
             .json(&req)
             .send()
             .await?;
-        resp.json().await
+        let status = resp.status().as_u16();
+        Ok((status, resp.json().await?))
     }
 
     pub async fn cancel_task(&self, task_id: &str) -> Result<serde_json::Value, reqwest::Error> {
@@ -213,5 +224,20 @@ impl DaemonClient {
             .send()
             .await?;
         resp.json().await
+    }
+
+    pub async fn subtitles_request(
+        &self,
+        method: reqwest::Method,
+        uri: &str,
+        content_type: Option<&HeaderValue>,
+        body: Vec<u8>,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let url = format!("{}{}", self.base_url.trim_end_matches('/'), uri);
+        let mut request = self.apply_auth(self.subtitles_client.request(method, url));
+        if let Some(content_type) = content_type {
+            request = request.header(reqwest::header::CONTENT_TYPE, content_type);
+        }
+        request.body(body).send().await
     }
 }

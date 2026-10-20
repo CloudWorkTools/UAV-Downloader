@@ -62,6 +62,11 @@ def destination(manager, body, *, commit=False):
         final_settings = dict(settings)
         if name and remote:
             final_settings['directory'] = '/'.join(filter(None, [settings.get('directory', '').replace('\\', '/'), name]))
+            # Keep the user-selected base and the exact batch locator separate.
+            # The subtitle hook compares account/share identity against current
+            # settings, then maps the completed video using this stored locator.
+            final_settings['_subtitle_base_directory'] = settings.get('directory', '')
+            final_settings['_subtitle_relative_path'] = name
         if name and settings.get('enabled') and settings.get('mode') == 'direct':
             final_settings['direct_path'] = os.path.join(base, name)
         display = nas.public_destination(final_settings) if remote else os.path.join(base, name) if name else base
@@ -100,6 +105,13 @@ def submit(manager, body):
     request_id = body.get('request_id')
     if not isinstance(request_id, str) or not request_id or len(request_id) > 100:
         raise ValueError('批次識別碼無效，請重新開啟下載視窗')
+    subtitle_request = None
+    if body.get('subtitle_request') is not None:
+        from uav_downloader.daemon.subtitle_http import prepare_download_request
+        try:
+            subtitle_request = prepare_download_request(body['subtitle_request'])
+        except Exception as exc:
+            raise ValueError(str(getattr(exc, 'message', '字幕工作要求格式無效'))) from None
     with manager._lock:
         if not hasattr(manager, '_batch_results'):
             manager._batch_results = {}
@@ -112,7 +124,8 @@ def submit(manager, body):
         previous_ids = set(manager._tasks)
         try:
             tasks = [manager.add_task(url, batch_destination=(dest, settings),
-                                      folder_policy=body.get('policy', 'new'), defer_start=True)
+                                      folder_policy=body.get('policy', 'new'), defer_start=True,
+                                      subtitle_request=subtitle_request)
                      for url in dict.fromkeys(urls)]
             manager._save_tasks()
         except Exception:
