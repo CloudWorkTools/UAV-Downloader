@@ -6,8 +6,6 @@
 
 請在預定執行影匣的 Docker 主機操作。環境需要 Docker Compose v2、Buildx 與 Python 3；Compose 啟動 Web、Speaches 與專用 Firecrawl 服務。
 
-> **草稿**：一般 Compose 首次安裝分支尚未在專用 Docker 主機完整走查；請首位實際使用者回報結果。
-
 請依[專案首頁](../README.md#人類安裝)產生 `.env` 密碼並啟動服務。已有 `.env` 時沿用原檔，不要替換密碼。
 
 第一次建置會下載 Rust、Python、FFmpeg 與 Firecrawl 依賴。Compose 將 Speaches 模型快取保存在 `speaches-models` Docker volume。
