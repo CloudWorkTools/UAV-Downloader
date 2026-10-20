@@ -238,6 +238,126 @@ def test_http_auth_error_is_specific_and_does_not_echo_url_or_secret(manager, mo
     assert 'secret' not in error
 
 
+@pytest.mark.parametrize(('error_kind', 'message', 'expected'), [
+    ('value', '字幕上游結果已過期，請先更新', '上游字幕結果已過期'),
+    ('llm', '此模型服務停用思考能力未確認，請明確允許思考 at https://private/?token=secret',
+     '尚未確認思考控制'),
+])
+def test_known_domain_errors_are_specific_and_sanitized(manager, monkeypatch, error_kind, message, expected):
+    from uav_downloader.subtitles import engine, llm
+
+    task = submit(manager)
+    error = ValueError(message) if error_kind == 'value' else llm.LlmTranslationError(message)
+    monkeypatch.setattr(engine, 'run_stage', lambda *a, **k: (_ for _ in ()).throw(error))
+    manager._run_task(task['task_id'])
+    message = manager.get_task(task['task_id'])['error']
+    assert expected in message
+    assert 'private' not in message
+    assert 'secret' not in message
+
+
+def test_retry_deadline_crossing_never_sleeps_for_negative_time(monkeypatch):
+    from uav_downloader.daemon import subtitle_tasks
+
+    values = iter([0.0, 0.2, 0.3])
+    waits = []
+    monkeypatch.setattr(subtitle_tasks.time, 'monotonic', lambda: next(values))
+    monkeypatch.setattr(subtitle_tasks.time, 'sleep', waits.append)
+
+    subtitle_tasks._wait_for_retry(.25, lambda: False)
+
+    assert len(waits) == 1
+    assert 0 <= waits[0] <= .05
+
+
+def test_dispatcher_does_not_retry_after_start_state_persistence_failure(manager, monkeypatch):
+    task = submit(manager)
+    attempts = []
+    failed_once = threading.Event()
+    original_save = manager._save_locked
+
+    def fail_running_save_once():
+        if manager._tasks[task['task_id']]['status'] == 'running':
+            attempts.append(1)
+            if len(attempts) == 1:
+                failed_once.set()
+                raise OSError('disk full')
+        original_save()
+
+    monkeypatch.setattr(manager, '_save_locked', fail_running_save_once)
+    manager._running = True
+    dispatcher = threading.Thread(target=manager._dispatch_loop, daemon=True)
+    dispatcher.start()
+    assert failed_once.wait(2)
+    for _ in range(100):
+        if manager.get_task(task['task_id'])['status'] == 'waiting_for_resume':
+            break
+        time.sleep(.01)
+    time.sleep(.25)
+    manager._running = False
+    dispatcher.join(2)
+
+    assert manager.get_task(task['task_id'])['status'] == 'waiting_for_resume'
+    assert task['task_id'] not in manager._queue
+    assert attempts == [1]
+
+
+def test_load_rejects_tampered_task_id_without_touching_external_file(tmp_path):
+    from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    marker = outside / 'keep.txt'
+    marker.write_text('keep')
+    state = tmp_path / 'tasks.json'
+    contents = {'schema': 1, 'queue': [], 'tasks': [{
+        'task_id': '../outside', 'status': 'cancelled', 'generation': 0,
+    }]}
+    raw = json.dumps(contents)
+    state.write_text(raw)
+
+    with pytest.raises(ValueError, match='佇列格式錯誤'):
+        SubtitleTaskManager(state_path=state)
+
+    assert state.read_text() == raw
+    assert marker.read_text() == 'keep'
+
+
+def test_failed_task_cleans_generated_audio_and_resume_reextracts(manager, monkeypatch, tmp_path):
+    from uav_downloader.daemon import subtitle_tasks
+    from uav_downloader.subtitles import engine
+
+    video = tmp_path / 'input.mp4'
+    video.write_bytes(b'video')
+    task = manager.submit('video-1', ['vad'], {'vad': SNAPSHOT}, [], video_path=str(video))
+    extracted = []
+    def extract(_video, audio, _log, _cancel):
+        extracted.append(audio)
+        Path(audio).write_bytes(b'wav')
+
+    runs = []
+    def run_stage(*args, **kwargs):
+        runs.append(kwargs['execution_id'])
+        if len(runs) == 1:
+            raise StageRequestError('permanent', retryable=False)
+        return SimpleNamespace(result_id='result-vad')
+
+    monkeypatch.setattr(engine, '_extract_audio', extract)
+    monkeypatch.setattr(engine, 'run_stage', run_stage)
+    manager._run_task(task['task_id'])
+    folder = tmp_path / 'subtitle-task-audio' / task['task_id']
+    assert manager.get_task(task['task_id'])['status'] == 'failed'
+    assert not folder.exists()
+
+    manager.resume(task['task_id'])
+    manager._run_task(task['task_id'])
+    assert manager.get_task(task['task_id'])['status'] == 'completed'
+    assert len(extracted) == 2
+    assert runs == [task['task_id'], task['task_id']]
+    assert not folder.exists()
+    assert video.read_bytes() == b'video'
+
+
 def test_disabled_correction_pins_translation_to_adopted_asr(manager, monkeypatch):
     from uav_downloader.subtitles import engine, results
 

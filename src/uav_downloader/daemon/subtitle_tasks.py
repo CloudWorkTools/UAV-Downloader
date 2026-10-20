@@ -19,6 +19,7 @@ from uav_downloader.subtitles.profiles import ProfileSnapshot
 _STAGES = ('vad', 'asr', 'correction', 'translation')
 _RETRY_LIMIT = 2
 _RETRY_DELAYS = (1.0, 3.0)
+_TASK_ID_RE = re.compile(r'subtitle_[0-9a-f]{32}\Z')
 
 
 def _snapshot_dict(snapshot):
@@ -51,6 +52,17 @@ def _retry_delay(attempt):
     return _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
 
 
+def _wait_for_retry(seconds, cancel_check):
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        if cancel_check():
+            raise engine.SubtitleCancelled('Subtitle generation cancelled')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.1, remaining))
+
+
 def _safe_error(stage, error):
     """Return a concise message without exposing endpoint URLs or credentials."""
     from uav_downloader.subtitles.models import StageRequestError
@@ -70,6 +82,12 @@ def _safe_error(stage, error):
     lowered = message.casefold()
     if '缺少' in message or '缺明確' in message:
         return f'{prefix}：缺少必要的上游字幕結果，請先完成或指定上游階段'
+    if any(term in lowered for term in ('已過期', '過期', 'stale', 'outdated')):
+        return f'{prefix}：上游字幕結果已過期，請更新結果或明確選擇舊版本'
+    if any(term in lowered for term in (
+            '思考能力未確認', '未確認此模型支援 thinking', 'reasoning control',
+            'thinking control', 'reasoning is not confirmed')):
+        return f'{prefix}：尚未確認思考控制，請切換相容模型或明確允許思考'
     if any(term in lowered for term in ('invalid response', 'invalid json', 'response format', 'returned an invalid')):
         return f'{prefix}：服務回應格式無效，請確認模型與階段 API 相容'
     if isinstance(error, (TimeoutError, engine.SubtitleProcessTimeout)):
@@ -104,7 +122,8 @@ class SubtitleTaskManager:
         if not isinstance(records, dict) or records.get('schema') != 1 or not isinstance(records.get('tasks'), list):
             raise ValueError('字幕工作佇列格式錯誤')
         for task in records['tasks']:
-            if not isinstance(task, dict) or not isinstance(task.get('task_id'), str):
+            if (not isinstance(task, dict) or not isinstance(task.get('task_id'), str)
+                    or not _TASK_ID_RE.fullmatch(task['task_id'])):
                 raise ValueError('字幕工作佇列格式錯誤')
             self._tasks[task['task_id']] = task
         self._queue = [task_id for task_id in records.get('queue', []) if task_id in self._tasks]
@@ -436,6 +455,8 @@ class SubtitleTaskManager:
         return str(destination)
 
     def _cleanup_audio(self, task_id):
+        if not isinstance(task_id, str) or not _TASK_ID_RE.fullmatch(task_id):
+            raise ValueError('字幕工作識別碼格式錯誤')
         folder = self._state_path.parent / 'subtitle-task-audio' / task_id
         shutil.rmtree(folder, ignore_errors=True)
 
@@ -455,13 +476,14 @@ class SubtitleTaskManager:
             try:
                 self._save_locked()
             except OSError:
-                task['status'] = 'queued'
+                task['status'] = 'waiting_for_resume'
                 task['generation'] = previous_generation
                 task['ever_started'] = previous_ever_started
-                if task_id not in self._queue:
-                    self._queue.append(task_id)
+                task['error'] = '字幕工作狀態無法保存，請手動續跑'
+                if task_id in self._queue:
+                    self._queue.remove(task_id)
                 self._active.pop(task_id, None)
-                logging.exception('字幕工作狀態無法保存，暫停執行')
+                logging.warning('字幕工作狀態無法保存；已停止自動重試，請手動續跑')
                 return
             task = self._copy(task)
         video_lock = self._video_locks.setdefault(task['video_id'], threading.Lock())
@@ -532,11 +554,7 @@ class SubtitleTaskManager:
                                 current['next_retry_at'] = time.time() + wait_seconds
                                 current['updated_at'] = time.time()
                                 self._save_locked()
-                            deadline = time.monotonic() + wait_seconds
-                            while time.monotonic() < deadline:
-                                if cancel_check():
-                                    raise engine.SubtitleCancelled('Subtitle generation cancelled')
-                                time.sleep(min(0.1, deadline - time.monotonic()))
+                            _wait_for_retry(wait_seconds, cancel_check)
                             with self._lock:
                                 current = self._tasks[task_id]
                                 if current['generation'] != generation or current['status'] != 'retry_wait':
@@ -593,7 +611,7 @@ class SubtitleTaskManager:
                 video_lock.release()
             with self._lock:
                 current = self._tasks.get(task_id)
-                cleanup_audio = current and current['status'] in ('completed', 'cancelled')
+                cleanup_audio = current and current['status'] in ('completed', 'cancelled', 'failed')
                 self._active.pop(task_id, None)
             if cleanup_audio:
                 self._cleanup_audio(task_id)
