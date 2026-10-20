@@ -102,9 +102,9 @@ class StageResult:
 
 `profiles.load_profiles() -> list[StageProfile]`；`profiles.save_profile(profile, api_key=None) -> StageProfile`；`profiles.snapshot(profile_id, stage) -> ProfileSnapshot`。驗證所選階段存在於 `capabilities`。只有在適配器即將送出請求時，才解析秘密值。保存與建立快照時使用 canonical JSON 複製設定，不與佇列工作共用任何可變巢狀資料。
 
-`vad.detect_speech(audio_path, profile_snapshot, cancel_check) -> list[SpeechInterval]`；`asr.transcribe_stage(audio_path, intervals, profile_snapshot, language, cancel_check) -> list[SubtitleSegment]`。保留既有公開簽章 `asr.transcribe(settings, wav_path, output_base, log_path, cancel_check=None, progress_callback=None)`，供桌面版與 Web 呼叫端繼續使用。`engine.transform_segments(operation, segments, profile_snapshot, target_language=None, allow_reasoning=False, cancel_check=None) -> list[SubtitleSegment]`。原文後矯正與字幕翻譯須保留輸入 ID 與時間邊界。
+`vad.detect_speech(audio_path, profile_snapshot, cancel_check) -> list[SpeechInterval]`；`asr.transcribe_stage(audio_path, intervals, profile_snapshot, language, cancel_check) -> list[SubtitleSegment]`。保留既有公開簽章 `asr.transcribe(settings, wav_path, output_base, log_path, cancel_check=None, progress_callback=None)`，供桌面版與 Web 呼叫端繼續使用。文字 adapter 的實際介面為 `llm.transform_segments(operation, segments, profile_snapshot, target_language=None, allow_reasoning=False, cancel_check=None)`，由 `engine.run_stage` 派送原文矯正與字幕翻譯；兩階段須保留輸入 ID 與時間邊界。
 
-`results.commit_success(result) -> StageResult` 原子建立成功版本；`results.latest(video_id, stage, language=None) -> StageResult | None` 取得最新版本；`results.mark_dependents_stale(result_id) -> list[str]` 標示下游過期。任務模組不得讓執行中的結果成為可選用的成功版本。
+`results.commit_success(result) -> StageResult` 原子建立成功版本；`results.latest(video_id, stage, language=None) -> StageResult | None` 取得最新版本。下游 `stale` 狀態會依 `input_result_ids` 與各階段目前採用的上游版本動態計算；實際程式沒有 `mark_dependents_stale` 公開函式。任務模組不得讓執行中的結果成為可選用的成功版本。
 
 `subtitle_tasks.submit(video_id, selected_stages, profile_snapshots, target_languages) -> TaskSnapshot`；`subtitle_tasks.redo(video_id, stage, profile_snapshot, language=None, input_result_id=None) -> TaskSnapshot`；`subtitle_tasks.cancel(task_id) -> None`；`subtitle_tasks.resume(task_id) -> TaskSnapshot`。既有 daemon 任務介面保持不變，供下載呼叫端使用。
 
