@@ -17,6 +17,11 @@
     const status=(message,error=false)=>{const node=byId('subtitle-error');if(node){node.textContent=message;node.setAttribute('role',error?'alert':'status');}const dialogNode=byId('subtitle-redo-dialog')?.open?byId('subtitle-redo-error'):byId('subtitle-confirm-dialog')?.open?byId('subtitle-confirm-error'):null;if(dialogNode){dialogNode.textContent=message;dialogNode.setAttribute('role',error?'alert':'status');}};
     const requestBody=()=>settings.downloadRequest();
     const busyActions=new Set();
+    function restoreFailedDialogActionFocus(dialogId,button,wasFocused){
+      const dialog=byId(dialogId);if(!wasFocused||!button||!dialog?.open)return;
+      const active=root.activeElement;
+      if(active===root.body||active===dialog||active===button)button.focus();
+    }
     function liveTaskTitle(task){const source=state.videos.find(video=>video.video_id===task.video_id);const profile=task.profile_snapshots?.[task.current_stage]?.profile;return `${source?.title||source?.name||task.video_id} · ${task.status||'未知狀態'} · ${task.current_stage||'等待階段'}${task.current_language?` / ${task.current_language}`:''}${profile?` · ${profile.display_name?`${profile.display_name} · `:''}${profile.provider||'未知服務'} / ${profile.model||'未知模型'}`:''}`;}
     function updateFocusedTaskFields(){const box=byId('subtitle-task-list');if(!box)return;for(const task of state.tasks){const row=[...box.querySelectorAll('article[data-task-id]')].find(item=>item.dataset.taskId===task.task_id);if(!row)continue;const title=row.querySelector('[data-task-live-title]'),progress=row.querySelector('[data-task-live-progress]'),error=row.querySelector('[data-task-live-error]');if(title)title.textContent=liveTaskTitle(task);if(progress)progress.textContent=task.progress!=null?`進度 ${task.progress}%`:'排隊等待';if(error){error.textContent=task.error?`錯誤：${task.error}`:'';error.hidden=!task.error;}for(const line of row.querySelectorAll('[data-task-publication-language]')){const entry=task.publish_status?.[line.dataset.taskPublicationLanguage];if(entry)line.textContent=`輸出 ${line.dataset.taskPublicationLanguage}：${entry.status}${entry.error?` · ${entry.error}`:''}`;}}}
     function renderVideos(){
@@ -100,8 +105,8 @@
       if(!redoTask)return;const stage=byId('subtitle-redo-stage').value,profile_id=byId('subtitle-redo-profile').value,input_result_id=byId('subtitle-redo-input').value;
       if(!profile_id){status('請選擇此階段的設定檔。',true);return;}
       if(['asr','correction','translation'].includes(stage)&&!input_result_id){status('請明確選擇上游字幕版本。',true);return;}
-      const key=`redo:${redoTask.task_id}:${stage}`;if(busyActions.has(key))return;busyActions.add(key);status('');const button=byId('subtitle-redo-confirm');if(button)button.disabled=true;
-      try{const body={action:'redo',stage,profile_id,input_result_id:input_result_id||null,allow_reasoning:!!byId('subtitle-allow-reasoning')?.checked,output_languages:[...root.querySelectorAll('input[name="subtitle-output-language"]:checked')].map(item=>item.value)};if(stage==='translation')body.language=byId('subtitle-redo-language').value.trim();await api('POST',`/api/subtitles/tasks/${encodeURIComponent(redoTask.task_id)}/action`,body);byId('subtitle-redo-dialog')?.close();redoTask=null;await refresh();status('階段重做任務已加入佇列。');}catch(error){status(error.message,true);}finally{busyActions.delete(key);if(button)button.disabled=false;}
+      const key=`redo:${redoTask.task_id}:${stage}`;if(busyActions.has(key))return;busyActions.add(key);status('');const button=byId('subtitle-redo-confirm'),wasFocused=root.activeElement===button;let failed=false;if(button)button.disabled=true;
+      try{const body={action:'redo',stage,profile_id,input_result_id:input_result_id||null,allow_reasoning:!!byId('subtitle-allow-reasoning')?.checked,output_languages:[...root.querySelectorAll('input[name="subtitle-output-language"]:checked')].map(item=>item.value)};if(stage==='translation')body.language=byId('subtitle-redo-language').value.trim();await api('POST',`/api/subtitles/tasks/${encodeURIComponent(redoTask.task_id)}/action`,body);byId('subtitle-redo-dialog')?.close();redoTask=null;await refresh();status('階段重做任務已加入佇列。');}catch(error){failed=true;status(error.message,true);}finally{busyActions.delete(key);if(button)button.disabled=false;if(failed)restoreFailedDialogActionFocus('subtitle-redo-dialog',button,wasFocused);}
     }
     async function applySettings(task){const profile_ids={};for(const stage of task.selected_stages||[]){const id=byId(`subtitle-stage-profile-${stage}`)?.value;if(id)profile_ids[stage]=id;}if((task.selected_stages||[]).some(stage=>!profile_ids[stage])){status('請為每個待套用階段選擇設定檔。',true);return;}await act(task,'apply_new_settings',{profile_ids});}
     async function loadResults(videoId){if(state.activeVideo!==videoId){state.preview=null;const preview=byId('subtitle-preview'),download=byId('subtitle-download');if(preview)preview.textContent='';if(download){download.hidden=true;if(download.dataset.objectUrl)URL.revokeObjectURL(download.dataset.objectUrl);delete download.dataset.objectUrl;}}state.activeVideo=videoId;const requestId=++resultsRequest;try{const data=await api('GET',`/api/subtitles/videos/${encodeURIComponent(videoId)}/results`);if(requestId!==resultsRequest||state.activeVideo!==videoId)return;state.results=data.results||[];renderResults();}catch(error){if(requestId===resultsRequest)status(error.message,true);}}
@@ -147,10 +152,10 @@
       if(submitting)return;
       let spec;try{spec=requestBody();if(!spec)throw new Error('請至少選擇一個字幕階段。');}catch(error){status(error.message,true);return;}
       const items=[...state.selected].map(video_id=>({video_id,...spec}));
-      submitting=true;status('');const button=byId('subtitle-confirm-submit');if(button)button.disabled=true;
+      submitting=true;status('');const button=byId('subtitle-confirm-submit'),wasFocused=root.activeElement===button;let failed=false;if(button)button.disabled=true;
       try{const data=await api('POST','/api/subtitles/tasks',{items});const accepted=data.items||[];const failed=accepted.filter(item=>!item.success);state.selected=new Set(failed.map(item=>item.video_id).filter(Boolean));if(failed.length)status(`已提交 ${accepted.length-failed.length} 項；${failed.length} 項失敗：${failed.map(item=>item.error).join('；')}`,true);else status(`已提交 ${accepted.length} 項字幕任務。`);byId('subtitle-confirm-dialog')?.close();await refresh();}
-      catch(error){status(error.message,true);}
-      finally{submitting=false;if(button)button.disabled=false;}
+      catch(error){failed=true;status(error.message,true);}
+      finally{submitting=false;if(button)button.disabled=false;if(failed)restoreFailedDialogActionFocus('subtitle-confirm-dialog',button,wasFocused);}
     }
     async function refresh({scanVideos=false}={}){
       if(refreshInFlight){await refreshInFlight;if(scanVideos)return refresh({scanVideos:true});return state;}
