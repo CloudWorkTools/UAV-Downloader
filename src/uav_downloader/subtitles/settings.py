@@ -59,7 +59,6 @@ _MAX_SECRET_LENGTH = 4096
 _MAX_MODEL_LENGTH = 160
 _MAX_URL_LENGTH = 2048
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # Keep the original entropy bytes forever: changing them would make existing
 # DPAPI-protected API keys undecryptable after the UAV rename.
 _DPAPI_ENTROPY = b"JableTV.translation-api.v1"
@@ -121,13 +120,9 @@ def _normalize_base_url(value: object, provider: str) -> str:
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise TranslationSettingsError(
             "Translation API URLs cannot contain credentials, query, or fragment")
-    if parsed.scheme == "http":
-        if host not in _LOOPBACK_HOSTS:
-            raise TranslationSettingsError(
-                "Translation API URLs must use HTTPS except on this computer")
-    elif parsed.scheme != "https":
+    if parsed.scheme not in ("http", "https"):
         raise TranslationSettingsError(
-            "Translation API URLs must use HTTPS except on this computer")
+            "Translation API URLs must use HTTP or HTTPS")
     if not host:
         raise TranslationSettingsError("A valid translation API URL is required")
     path = parsed.path.rstrip("/")
