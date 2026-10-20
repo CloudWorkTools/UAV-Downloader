@@ -35,7 +35,7 @@ def manager(tmp_path, monkeypatch):
     class Sources:
         @contextmanager
         def resolve(self, _video_id):
-            yield None
+            yield SimpleNamespace(video_path='/tmp/resolved-video.mp4')
 
         def publish_result(self, *_args, **_kwargs):
             raise AssertionError('test did not request subtitle publication')
@@ -148,6 +148,44 @@ def test_retry_publish_waits_for_same_video_task_lock(manager, monkeypatch):
     worker.join(2)
     assert not worker.is_alive()
     assert looked_up.is_set()
+
+
+def test_restore_publish_failure_is_persisted_and_retried_after_restart(manager, monkeypatch):
+    from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+    from uav_downloader.subtitles import engine, results
+
+    restored = SimpleNamespace(result_id='prior-result', video_id='video-1', stage='asr',
+                               language=None, segments=(), content_available=True)
+    monkeypatch.setattr(results, 'restore_previous', lambda *_a: restored)
+    monkeypatch.setattr(results, 'get', lambda *_a: restored)
+    writes = []
+    def fail_then_publish(*_args, **_kwargs):
+        writes.append('write')
+        if len(writes) == 1:
+            raise OSError('storage offline')
+        return {'path': 'movie.ja.srt'}
+    manager._source_manager.publish_result = fail_then_publish
+    monkeypatch.setattr(engine, 'run_stage', lambda *_a, **_k: pytest.fail('restore retry called a model'))
+
+    failed = manager.restore_previous('video-1', 'asr')
+    assert failed['restore_status'] == 'restored'
+    assert failed['publish_status'] == 'failed'
+    assert failed['publication_id'].startswith('subtitle_pub_')
+
+    saved = json.loads(manager._state_path.read_text())
+    saved['publications'][failed['publication_id']]['publish_status'] = 'publishing'
+    manager._state_path.write_text(json.dumps(saved))
+
+    restarted = SubtitleTaskManager(state_path=manager._state_path,
+                                    source_manager=manager._source_manager)
+    assert restarted.get_publication(failed['publication_id'])['publish_status'] == 'failed'
+    retried = restarted.retry_restored_publish(failed['publication_id'])
+
+    assert retried['restore_status'] == 'restored'
+    assert retried['publish_status'] == 'published'
+    assert writes == ['write', 'write']
+    persisted = json.loads(manager._state_path.read_text())
+    assert persisted['publications'][failed['publication_id']]['publish_status'] == 'published'
 
 
 def test_reorder_moves_only_waiting_work_and_redo_gets_a_new_execution_id(manager):

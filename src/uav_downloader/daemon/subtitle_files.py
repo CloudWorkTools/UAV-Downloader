@@ -28,6 +28,9 @@ class VideoSource:
     identity: str
     kind: str
     output_mode: str
+    publish_path: str | None = None
+    publish_identity: str | None = None
+    publish_root: str | None = None
 
 
 class SubtitleFileManager:
@@ -214,11 +217,14 @@ class SubtitleFileManager:
                 with nas.open_smb_storage(settings, root):
                     remote_video = os.path.join(root, descriptor['remote_relative_path'])
                     filesystem = storage_fs(remote_video)
-                    if (not filesystem.remote or filesystem.islink(remote_video)
+                    relative = self._validate_smb_locator(filesystem, root, remote_video)
+                    if (relative != descriptor['remote_relative_path']
+                            or not filesystem.remote or filesystem.islink(remote_video)
                             or not filesystem.isfile(remote_video)
                             or self._media_identity(remote_video) != descriptor.get('remote_identity')):
                         raise ValueError('NAS 影片已變更或離線，請確認已上傳的影片')
-                    yield VideoSource(video_id, path, descriptor['identity'], 'local', 'upload')
+                    yield VideoSource(video_id, path, descriptor['identity'], 'local', 'upload',
+                                      remote_video, descriptor['remote_identity'], root)
                 return
             yield VideoSource(video_id, path, descriptor['identity'], 'local', descriptor.get('output_mode', 'local'))
             return
@@ -229,11 +235,44 @@ class SubtitleFileManager:
         with nas.open_smb_storage(settings, root):
             path = os.path.join(root, descriptor['relative_path'])
             filesystem = storage_fs(path)
-            if not filesystem.remote or filesystem.islink(path) or not filesystem.isfile(path):
+            relative = self._validate_smb_locator(filesystem, root, path)
+            if (relative != descriptor['relative_path'] or not filesystem.remote
+                    or filesystem.islink(path) or not filesystem.isfile(path)):
                 raise ValueError('NAS 影片已離線或不存在')
             if self._media_identity(path) != descriptor['identity']:
                 raise ValueError('字幕來源影片已變更，請重新選取')
-            yield VideoSource(video_id, path, descriptor['identity'], 'smb', descriptor.get('output_mode', 'smb'))
+            yield VideoSource(video_id, path, descriptor['identity'], 'smb', descriptor.get('output_mode', 'smb'),
+                              path, descriptor['identity'], root)
+
+    def verify_active(self, video_id, source):
+        """Recheck a source while its resolver-owned storage context is active."""
+        if source.video_id != video_id:
+            raise ValueError('字幕影片來源識別碼不符')
+        with self._lock:
+            descriptor = self._sources.get(video_id)
+            descriptor = json.loads(json.dumps(descriptor)) if descriptor else None
+        if not isinstance(descriptor, dict) or video_id != self._video_id(descriptor):
+            raise ValueError('字幕影片來源不存在或識別碼無效')
+        if descriptor.get('kind') == 'local':
+            path, _root = self._validate_local(descriptor.get('path'), [descriptor.get('root')])
+            if self._media_identity(path) != descriptor['identity']:
+                raise ValueError('字幕來源影片已變更，請重新選取')
+            if descriptor.get('output_mode') == 'upload':
+                remote = source.publish_path
+                filesystem = storage_fs(remote)
+                relative = self._validate_smb_locator(filesystem, source.publish_root, remote)
+                if (relative != descriptor.get('remote_relative_path')
+                        or not filesystem.remote or filesystem.islink(remote) or not filesystem.isfile(remote)
+                        or self._media_identity(remote) != descriptor.get('remote_identity')):
+                    raise ValueError('NAS 影片已變更或離線，請確認已上傳的影片')
+            return
+        remote = source.video_path
+        filesystem = storage_fs(remote)
+        if (self._validate_smb_locator(filesystem, source.publish_root, remote)
+                != descriptor.get('relative_path') or not filesystem.remote
+                or filesystem.islink(remote) or not filesystem.isfile(remote)
+                or self._media_identity(remote) != descriptor.get('identity')):
+            raise ValueError('字幕來源影片已變更或離線，請重新選取')
 
     @staticmethod
     def _srt(result):
@@ -284,6 +323,10 @@ class SubtitleFileManager:
                 with nas.open_smb_storage(settings, root):
                     descriptor = self._sources[video_id]
                     remote_video = os.path.join(root, descriptor['remote_relative_path'])
+                    filesystem = storage_fs(remote_video)
+                    relative = self._validate_smb_locator(filesystem, root, remote_video)
+                    if relative != descriptor['remote_relative_path']:
+                        raise ValueError('NAS 影片路徑已變更，請重新選取')
                     path = self._publish_path(remote_video, language, result.result_id,
                                               data, expected_hash, replace_existing,
                                               descriptor['remote_identity'], remote_video)
