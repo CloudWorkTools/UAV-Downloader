@@ -172,7 +172,7 @@ def test_openai_batches_in_order_mounts_shared_ssl_and_reports_progress():
     assert 'medical' in prompt
 
 
-def test_provider_requests_follow_the_app_proxy_setting(monkeypatch):
+def test_legacy_provider_requests_keep_the_app_proxy_setting(monkeypatch):
     from uav_downloader.core import config
 
     routes = {
@@ -336,18 +336,15 @@ def test_redirect_response_is_rejected_without_following_it():
     assert session.calls[0][1]['allow_redirects'] is False
 
 
-def test_provider_url_rejects_remote_plain_http():
-    with pytest.raises(
-            llm.LlmTranslationError,
-            match='HTTPS except on this computer'):
-        llm.translate_cues(
-            ['入力'],
-            _settings(
-                'openai-compatible',
-                base_url='http://example.invalid/v1'),
-            api_key='secret',
-            session=FakeSession(),
-        )
+def test_provider_url_accepts_remote_plain_http_for_configured_model_host():
+    session = FakeSession([_openai_response([{'id': 0, 'text': '輸出'}])])
+    llm.translate_cues(
+        ['輸入'],
+        _settings('openai-compatible', base_url='http://model.lan:1234/v1'),
+        api_key='secret', session=session)
+    assert session.calls[0][0] == 'http://model.lan:1234/v1/chat/completions'
+    assert session.calls[0][1]['allow_redirects'] is False
+    assert session.calls[0][1]['headers']['Authorization'] == 'Bearer secret'
 
 
 @pytest.mark.parametrize(

@@ -322,3 +322,41 @@ def resolve_credential(credential_ref: str | None, base_url: str) -> str:
             return asr._decrypt_secret(entry["encrypted"])
         except Exception:
             raise ValueError("模型服務 API 金鑰無法解密，請重新輸入") from None
+
+
+def capability_report(profile_snapshot: ProfileSnapshot) -> dict:
+    """Report adapter support separately from any model-list discovery."""
+    try:
+        profile = json.loads(profile_snapshot.profile_json)
+    except (AttributeError, TypeError, json.JSONDecodeError):
+        raise ValueError("模型設定快照格式錯誤") from None
+    if not isinstance(profile, dict):
+        raise ValueError("模型設定快照格式錯誤")
+    provider, kind = profile.get("provider"), profile.get("kind")
+    if kind == "vad" and provider == "localai":
+        supported = {"vad"}
+    elif kind == "asr" and provider in {"localai", "openai-compatible"}:
+        supported = {"asr"}
+    elif kind == "text" and provider in {
+            "openai", "anthropic", "gemini", "openai-compatible", "localai",
+            "ollama", "lmstudio"}:
+        supported = {"correction", "translation"}
+    else:
+        supported = set()
+    declared = profile.get("capabilities", ())
+    if not isinstance(declared, list):
+        declared = ()
+    stages = tuple(stage for stage in ("vad", "asr", "correction", "translation")
+                   if stage in supported and stage in declared)
+    return {
+        "provider": provider,
+        "model": profile.get("model"),
+        "stages": stages,
+        "reasoning_disable": (
+            "requires_successful_native_request" if provider == "lmstudio" else
+            "api_show_thinking_values_must_include_false_then_think_false" if provider == "ollama" else
+            "documented_request_controls_without_machine_confirmation" if provider == "localai" else
+            "unknown"),
+        "vad_parameters": (
+            "service_side_model_configuration" if kind == "vad" and provider == "localai" else None),
+    }
