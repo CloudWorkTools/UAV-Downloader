@@ -174,6 +174,7 @@ def test_text_stage_connection_failure_is_retryable():
         llm.transform_segments('correction', [SubtitleSegment('a', 1, 2, '原文')], profile)
     assert error.value.retryable is True
     assert '127.0.0.1' not in str(error.value)
+    assert '文字模型服務連線逾時或中斷' in str(error.value)
 
 
 def test_ollama_requires_thinking_capability_metadata_then_sends_think_false():

@@ -915,11 +915,12 @@ def _stage_worker(request_path, response_path):
             result = {'ok': True, 'payload': envelope}
         except StageRequestError as exc:
             result = {'ok': False, 'failure': {'retryable': exc.retryable, 'message': str(exc)}}
-        except _LlmTransportError as exc:
-            result = {'ok': False, 'failure': {'retryable': True, 'message': str(exc)}}
+        except _LlmTransportError:
+            result = {'ok': False, 'failure': {
+                'retryable': True, 'message': '文字模型服務連線逾時或中斷'}}
         except (requests.Timeout, requests.ConnectionError):
             result = {'ok': False, 'failure': {
-                'retryable': True, 'message': f'{provider} connection timed out or was interrupted'}}
+                'retryable': True, 'message': '文字模型服務連線逾時或中斷'}}
         except Exception as exc:
             message = str(exc) if isinstance(exc, LlmTranslationError) else (
                 f'{provider} 無法連線或回應無效')
