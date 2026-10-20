@@ -53,13 +53,16 @@ def _canonical_parameters(value: str) -> str:
     if not isinstance(parameters, dict):
         raise ValueError("模型參數必須是 JSON 物件")
     sensitive_names = ("authorization", "password", "secret", "credential", "apikey")
+    token_secret_names = {
+        "token", "accesstoken", "authtoken", "refreshtoken", "idtoken",
+        "bearertoken", "apitoken", "clienttoken", "tokenvalue", "tokensecret",
+    }
 
     def check_keys(item):
         if isinstance(item, dict):
             for key, nested in item.items():
                 normalized = re.sub(r"[-_]", "", key.lower()) if isinstance(key, str) else ""
-                if (any(name in normalized for name in sensitive_names) or
-                        ("token" in normalized and normalized not in {"tokens", "maxtokens", "tokencount"})):
+                if any(name in normalized for name in sensitive_names) or normalized in token_secret_names:
                     raise ValueError("模型參數不得包含敏感憑證欄位")
                 check_keys(nested)
         elif isinstance(item, list):
@@ -142,6 +145,16 @@ def _atomic_write(raw: dict) -> None:
             os.unlink(temporary)
 
 
+def _translation_environment_is_configured(provider: str) -> bool:
+    names = ["UAV_TRANSLATION_API_KEY", "ALOS_TRANSLATION_API_KEY", "JABLE_TRANSLATION_API_KEY"]
+    names.extend({
+        settings.OPENAI: ("OPENAI_API_KEY",),
+        settings.ANTHROPIC: ("ANTHROPIC_API_KEY",),
+        settings.GEMINI: ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    }.get(provider, ()))
+    return any(os.environ.get(name) for name in names)
+
+
 def _from_record(record: object) -> StageProfile:
     if not isinstance(record, dict):
         raise ValueError("字幕模型設定檔格式錯誤")
@@ -190,15 +203,21 @@ def _migrate_legacy() -> None:
                 continue
             old_profile = provider_profiles[provider]
             protected = old_profile.get("api_key_protected")
+            environment_secret = settings._environment_key(provider)
             if "api_key_protected" in old_profile and protected:
                 if not isinstance(protected, str) or not protected.startswith("dpapi:"):
-                    raise ValueError("舊翻譯 API 金鑰格式無效，請重新輸入金鑰")
-                secret = settings._unprotect_secret(protected)
-                if not secret:
-                    raise ValueError("舊翻譯 API 金鑰無法解密，請重新輸入金鑰")
+                    if not environment_secret:
+                        raise ValueError("舊翻譯 API 金鑰格式無效，請重新輸入金鑰")
+                    secret = ""
+                else:
+                    secret = settings._unprotect_secret(protected)
+                    if not secret and not environment_secret:
+                        raise ValueError("舊翻譯 API 金鑰無法解密，請重新輸入金鑰")
             else:
                 secret = ""
-            environment_secret = settings._environment_key(provider)
+            if (_translation_environment_is_configured(provider) and
+                    not environment_secret and not secret):
+                raise ValueError("環境翻譯 API 金鑰格式無效，請重新設定金鑰")
             translated = settings.get_translation_settings(provider)
             record = _validate_profile(StageProfile(
                 profile_id="legacy-text-" + provider.replace("-", "_"), display_name="Legacy " + provider,
@@ -290,13 +309,15 @@ def resolve_credential(credential_ref: str | None, base_url: str) -> str:
             secret = os.environ.get(entry["environment"], "")
             if len(secret) > 4096 or re.search(r"[\x00-\x20\x7f]", secret):
                 raise ValueError("環境 API 金鑰格式錯誤")
+            if not secret:
+                raise ValueError("環境 API 金鑰不存在，請重新設定金鑰")
             return secret
         if entry.get("environment_provider"):
             secret = settings._environment_key(entry["environment_provider"])
             if secret:
                 return secret
         if "encrypted" not in entry:
-            return ""
+            raise ValueError("環境 API 金鑰不存在，請重新設定金鑰")
         try:
             return asr._decrypt_secret(entry["encrypted"])
         except Exception:

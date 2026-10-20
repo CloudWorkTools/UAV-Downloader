@@ -157,6 +157,66 @@ def test_translation_environment_key_keeps_priority_and_protected_fallback(
     assert profiles.resolve_credential(migrated.credential_ref, migrated.base_url) == "protected-secret"
 
 
+@pytest.mark.parametrize("name", ["max_output_tokens", "max_completion_tokens"])
+def test_parameters_allow_generation_token_limits(isolated_profiles, name):
+    saved = profiles.save_profile(profile(parameters_json=json.dumps({name: 1200})))
+    assert json.loads(saved.parameters_json) == {name: 1200}
+
+
+def test_environment_references_fail_clearly_when_environment_key_disappears(
+        isolated_profiles, monkeypatch):
+    asr.save_settings({"base_url": "https://asr.example/v1", "model": "whisper"})
+    monkeypatch.setenv("UAV_ASR_API_KEY", "asr-environment-secret")
+    migrated = next(item for item in profiles.load_profiles() if item.kind == "asr")
+    monkeypatch.delenv("UAV_ASR_API_KEY")
+    with pytest.raises(ValueError, match="API 金鑰"):
+        profiles.resolve_credential(migrated.credential_ref, migrated.base_url)
+
+
+def test_translation_environment_only_reference_fails_when_key_disappears(
+        isolated_profiles, monkeypatch):
+    source = isolated_profiles / "translation_api.json"
+    source.write_text(json.dumps({
+        "schema": 1, "profiles": {settings.OPENAI_COMPATIBLE: {
+            "base_url": "https://text.example/v1", "model": "text-model"}}}), encoding="utf-8")
+    monkeypatch.setenv("UAV_TRANSLATION_API_KEY", "text-environment-secret")
+    migrated = next(item for item in profiles.load_profiles() if item.kind == "text")
+    monkeypatch.delenv("UAV_TRANSLATION_API_KEY")
+    with pytest.raises(ValueError, match="API 金鑰"):
+        profiles.resolve_credential(migrated.credential_ref, migrated.base_url)
+
+
+def test_invalid_translation_environment_key_does_not_migrate_as_no_key(
+        isolated_profiles, monkeypatch):
+    source = isolated_profiles / "translation_api.json"
+    source.write_text(json.dumps({
+        "schema": 1, "profiles": {settings.OPENAI_COMPATIBLE: {
+            "base_url": "https://text.example/v1", "model": "text-model"}}}), encoding="utf-8")
+    monkeypatch.setenv("UAV_TRANSLATION_API_KEY", "invalid\nkey")
+    with pytest.raises(ValueError, match="API 金鑰"):
+        profiles.load_profiles()
+    assert source.exists()
+    assert not (isolated_profiles / "subtitle_profiles.json").exists()
+
+
+def test_environment_key_migrates_when_protected_fallback_is_unavailable(
+        isolated_profiles, monkeypatch):
+    source = isolated_profiles / "translation_api.json"
+    source.write_text(json.dumps({
+        "schema": 1, "profiles": {settings.OPENAI_COMPATIBLE: {
+            "base_url": "https://text.example/v1", "model": "text-model",
+            "api_key_protected": "dpapi:legacy"}}}), encoding="utf-8")
+    original = source.read_bytes()
+    monkeypatch.setattr(settings, "_unprotect_secret", lambda _value: "")
+    monkeypatch.setenv("UAV_TRANSLATION_API_KEY", "environment-secret")
+    migrated = next(item for item in profiles.load_profiles() if item.kind == "text")
+    assert profiles.resolve_credential(migrated.credential_ref, migrated.base_url) == "environment-secret"
+    monkeypatch.delenv("UAV_TRANSLATION_API_KEY")
+    with pytest.raises(ValueError, match="API 金鑰"):
+        profiles.resolve_credential(migrated.credential_ref, migrated.base_url)
+    assert source.read_bytes() == original
+
+
 def test_corrupt_legacy_translation_json_fails_without_creating_profiles(isolated_profiles):
     source = isolated_profiles / "translation_api.json"
     source.write_text("{ broken", encoding="utf-8")
@@ -181,7 +241,10 @@ def test_unreadable_legacy_translation_secret_fails_without_losing_reference(
     assert not (isolated_profiles / "subtitle_profiles.json").exists()
 
 
-@pytest.mark.parametrize("secret_name", ["api_key", "authorization", "password", "secret"])
+@pytest.mark.parametrize("secret_name", [
+    "api_key", "authorization", "password", "secret", "access_token",
+    "auth_token", "refresh_token",
+])
 def test_parameters_cannot_expose_credentials_in_snapshots(isolated_profiles, secret_name):
     params = json.dumps({"nested": {secret_name: "must-not-leak"}})
     with pytest.raises(ValueError, match="敏感"):
