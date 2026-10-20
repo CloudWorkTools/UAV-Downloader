@@ -189,7 +189,7 @@ LM Studio 模型清單使用官方 REST `GET /api/v0/models` 的 `{object: "list
 - [x] 僅在服務與模型版本已確認時記錄真實 LocalAI VAD／ASR 與 LocalAI／Ollama／LM Studio 文字服務相容性；否則列為未驗證。模型品質須使用固定代表音訊及參考文字，fixture 結果不能作為品質驗收。
 - [x] 更新使用說明，並從執行中的版本擷取畫面；隱去私人媒體、位址、路徑與憑證。
 - [ ] 生產環境部署驗證尚未執行。已完成隔離候選主機驗證，包含正式唯讀測試映像、瀏覽器流程、Web health/assets/settings 端點及 Samba 來源與發布檢查；此結果不代表 live 驗證。若之後部署，只透過 `python3 scripts/deploy_remote.py`，並獨立記錄結果。
-- [x] Standards、Spec 與整體程式審查發現均已處理。整合 PR #19 維持 draft，合併後關聯 issue #18 才會關閉。
+- [x] Standards、Spec 與整體程式審查發現均已處理。PR #19 提供整合審查，合併後關聯 issue #18 才會關閉。
 
 ## 自我檢查
 
@@ -205,4 +205,4 @@ LM Studio 模型清單使用官方 REST `GET /api/v0/models` 的 `{object: "list
 - `scripts/check_web.sh` 主機與唯讀來源正式映像各通過 866 個 Python 測試（3 個略過），且所有 CJS／Chrome 流程通過。正式流程包含成功的 legacy startup migration fixture 請求、`retry_wait` 取消、發布重試清除舊錯誤。
 - 本機 `scripts/check_web_container.sh` 通過；本機及隔離候選的 `scripts/check_smb_batch_container.sh` 以真實 Samba LIST 來源、直接發布及 upload alias 發布通過，且保留 staging。隔離候選主機沒有 `curl`，因此未將其 shell Web checker 記為通過；已用 Python 標準函式庫對相同 health、資產與設定端點執行等價檢查並通過。未掛載真實 NAS。
 - 新截圖：`docs/assets/web-independent-subtitles-desktop.png`、`docs/assets/web-independent-subtitles-mobile.png`。實際 LocalAI／Ollama／LM Studio 服務及模型品質尚未驗證。
-- 隔離候選驗證已完成，臨時映像標籤、容器、Samba 測試映像及暫存目錄均已清除。未執行生產 live rollout，未變更生產服務。實際模型服務／模型品質與真實 NAS mount 尚未驗證。PR #19 維持 draft，issue #18 未關閉。
+- 隔離候選驗證已完成，臨時映像標籤、容器、Samba 測試映像及暫存目錄均已清除。未執行生產 live rollout，未變更生產服務。實際模型服務／模型品質與真實 NAS mount 尚未驗證。PR #19 提供整合審查，合併後關聯 issue #18 才會關閉。
