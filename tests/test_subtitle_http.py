@@ -325,6 +325,28 @@ def test_local_video_scan_keeps_support_for_deep_paths(subtitle_http, monkeypatc
     assert manager.list_partial is False
 
 
+def test_local_video_scan_marks_elapsed_budget_as_partial(subtitle_http, monkeypatch):
+    from uav_downloader.daemon import subtitle_files
+    from uav_downloader.core import history
+
+    _, server, tmp_path = subtitle_http
+    root = tmp_path / 'slow-root'
+    root.mkdir()
+    (root / 'first.mp4').write_bytes(b'first')
+    (root / 'second.mp4').write_bytes(b'second')
+    manager = server.subtitle_file_manager
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [str(root)])
+    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={}))
+    monkeypatch.setattr(subtitle_files.nas, 'load_settings', lambda **_kwargs: {'enabled': False})
+    ticks = iter((0, 1, 2, 3, 9))
+    monkeypatch.setattr(subtitle_files.time, 'monotonic', lambda: next(ticks, 9))
+
+    listed = manager.list_videos(max_entries=100)
+
+    assert len(listed) == 1
+    assert manager.list_partial is True
+
+
 def test_download_start_snapshots_selected_profiles_without_changing_legacy_subtitles(subtitle_http):
     request, server, _ = subtitle_http
     profile = profiles.StageProfile(

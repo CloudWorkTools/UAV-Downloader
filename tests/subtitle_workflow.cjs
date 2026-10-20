@@ -1026,7 +1026,8 @@ async function B6() {
   assert.equal((await cdp.selector(retryTestId)).disabled, false, 'storage-only retry is enabled after publication failure');
   const retryPublicationId = retryTestId.slice('subtitle-publication-retry-'.length);
   await click(retryTestId);
-  await cdp.until(`document.getElementById('subtitle-publications')?.textContent.includes('已發布')`);
+  await cdp.until(`window.subtitleTasks.state.publications.find(item=>item.publication_id===${JSON.stringify(retryPublicationId)})?.publish_status==='published'
+    && !Object.hasOwn(window.subtitleTasks.state.publications.find(item=>item.publication_id===${JSON.stringify(retryPublicationId)}),'error')`);
   const clearedRetry = await cdp.evaluate(`window.subtitleTasks.state.publications.find(item=>item.publication_id===${JSON.stringify(retryPublicationId)})||null`);
   assert.equal(clearedRetry.publish_status, 'published');
   assert.equal(Object.hasOwn(clearedRetry, 'error'), false,

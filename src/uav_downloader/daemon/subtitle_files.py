@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import time
 
 from uav_downloader.core import config
 from uav_downloader.core.storage import SMB_PATH_ROOT, storage_fs, storage_open
@@ -459,6 +460,14 @@ class SubtitleFileManager:
         self._listed = {}
         candidates = {}
         scan_remaining = max_entries
+        scan_deadline = time.monotonic() + 8.0
+
+        def scan_expired():
+            if time.monotonic() >= scan_deadline:
+                self.list_partial = True
+                return True
+            return False
+
         history = get_history_manager()
         for index, entry in enumerate(history._entries.values()):
             if index >= max_entries:
@@ -469,26 +478,25 @@ class SubtitleFileManager:
                 continue
             candidates[path] = ('history', entry.get('title', ''))
         for root in self._configured_roots():
-            if scan_remaining <= 0:
+            if scan_remaining <= 0 or scan_expired():
                 self.list_partial = True
                 break
             try:
                 root = self._absolute_without_links(root)
-                def walk_error(error, current_root=root):
-                    self.list_errors.append({'source': 'local', 'root': current_root,
-                                             'error': '下載或掛載目錄離線或無讀取權限'})
-                pending = [(root, 0)]
-                while pending and scan_remaining > 0:
-                    current, depth = pending.pop()
+                pending = [root]
+                while pending and scan_remaining > 0 and not scan_expired():
+                    current = pending.pop()
                     try:
                         with os.scandir(current) as entries:
                             for entry in entries:
+                                if scan_expired():
+                                    break
                                 scan_remaining -= 1
                                 try:
                                     if entry.is_symlink():
                                         pass
                                     elif entry.is_dir(follow_symlinks=False):
-                                        pending.append((entry.path, depth + 1))
+                                        pending.append(entry.path)
                                     elif (entry.is_file(follow_symlinks=False)
                                           and Path(entry.name).suffix.lower() in _VIDEO_EXTENSIONS):
                                         candidates.setdefault(entry.path, ('configured', ''))
@@ -523,17 +531,20 @@ class SubtitleFileManager:
                 self.list_errors.append({'source': origin, 'root': os.path.dirname(path),
                                          'error': '影片離線或無讀取權限'})
         settings = nas.load_settings(secret=True)
-        if settings.get('enabled') and settings.get('mode') in ('smb', 'upload'):
+        if (settings.get('enabled') and settings.get('mode') in ('smb', 'upload')
+                and scan_remaining > 0 and not scan_expired()):
             root = nas.smb_destination()
             try:
                 with nas.open_smb_storage(settings, root):
                     filesystem = storage_fs(root)
                     pending = [(root, '', 0)]
-                    while pending and scan_remaining > 0:
+                    while pending and scan_remaining > 0 and not scan_expired():
                         current, relative_dir, depth = pending.pop()
                         try:
                             with filesystem.scandir(current) as entries:
                                 for entry in entries:
+                                    if scan_expired():
+                                        break
                                     scan_remaining -= 1
                                     name = entry.name
                                     path = os.path.join(current, name)
