@@ -392,6 +392,18 @@ def transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check
     parameters = profile.get('parameters')
     if not isinstance(parameters, dict) or set(parameters) - {'prompt', 'temperature'}:
         raise ValueError('辨識模型參數不受支援')
+    prompt = parameters.get('prompt')
+    if prompt is not None and (not isinstance(prompt, str) or len(prompt) > 4096 or '\x00' in prompt):
+        raise ValueError('辨識模型參數 prompt 格式無效')
+    temperature = parameters.get('temperature')
+    if temperature is not None:
+        try:
+            valid_temperature = (type(temperature) in (int, float)
+                                 and math.isfinite(temperature) and 0 <= temperature <= 2)
+        except (OverflowError, TypeError):
+            valid_temperature = False
+        if not valid_temperature:
+            raise ValueError('辨識模型參數 temperature 格式或範圍無效')
     if not profile.get('base_url') or not profile.get('model'):
         raise ValueError('請設定辨識模型服務與模型')
     language = str(language or '').strip()

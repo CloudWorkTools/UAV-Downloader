@@ -17,6 +17,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 from urllib.parse import quote, urlsplit
@@ -654,8 +655,8 @@ def transform_segments(operation, segments, profile_snapshot, target_language=No
                 or not segment.text.strip() or type(segment.start) not in (int, float)
                 or type(segment.end) not in (int, float)
                 or not math.isfinite(segment.start) or not math.isfinite(segment.end)
-                or segment.start < 0 or segment.start >= segment.end or len(segment.text) > 16384
-                or '\x00' in segment.text):
+                or segment.start < 0 or segment.start >= segment.end
+                or not _valid_subtitle_text(segment.text)):
             raise LlmTranslationError('字幕片段 ID、文字或時間無效')
         ids.add(segment.segment_id)
     if operation == 'translation' and (
@@ -728,13 +729,20 @@ def transform_segments(operation, segments, profile_snapshot, target_language=No
             raise LlmTranslationError(f'{provider} 回傳格式無效') from None
         if (not isinstance(decoded, list) or len(decoded) != len(batch_segments)
                 or any(not isinstance(value, dict) or set(value) != {'id', 'text'}
-                       or value['id'] != segment.segment_id or not isinstance(value['text'], str)
-                       or not value['text'].strip()
+                       or value['id'] != segment.segment_id
+                       or not _valid_subtitle_text(value['text'])
                        for value, segment in zip(decoded, batch_segments))):
-            raise LlmTranslationError(f'{provider} 回傳片段 ID 不符')
+            raise LlmTranslationError(f'{provider} 回傳片段 ID 或字幕文字無效')
         output.extend(SubtitleSegment(segment.segment_id, segment.start, segment.end, value['text'].strip())
                       for segment, value in zip(batch_segments, decoded))
     return output
+
+
+def _valid_subtitle_text(text):
+    """Accept readable subtitle text while rejecting oversized/control payloads."""
+    return (isinstance(text, str) and bool(text.strip()) and len(text) <= 16384
+            and not any(unicodedata.category(char) == 'Cc' and char not in '\t\n\r'
+                        for char in text))
 
 
 def _validate_text_parameters(provider, parameters):

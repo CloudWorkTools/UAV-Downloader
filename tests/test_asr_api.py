@@ -168,6 +168,35 @@ def test_stage_asr_does_not_clamp_invalid_seconds(tmp_path, api_server):
         asr.transcribe_stage(str(wav), [SpeechInterval(1, 2)], snapshot, 'ja', lambda: False)
 
 
+@pytest.mark.parametrize('parameters', [
+    {'prompt': {'unexpected': 'object'}},
+    {'prompt': 'x' * 4097},
+    {'prompt': 'contains\x00nul'},
+    {'temperature': True},
+    {'temperature': '0.4'},
+    {'temperature': {'value': 0.4}},
+    {'temperature': float('nan')},
+    {'temperature': -0.1},
+    {'temperature': 2.1},
+])
+def test_stage_asr_rejects_invalid_multipart_parameter_values_before_request(
+        tmp_path, api_server, parameters):
+    settings, _, requests, _ = api_server
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 2)
+    profile = json.loads(ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'],
+        'parameters': parameters,
+    }), None, 'snapshot').profile_json)
+    snapshot = ProfileSnapshot(json.dumps(profile), None, 'snapshot')
+    chunk = asr.plan_transcription_chunks(str(wav), [SpeechInterval(0, 2)])[0]
+    with pytest.raises(ValueError, match='參數'):
+        asr.transcribe_chunk(str(wav), chunk, snapshot, 'ja')
+    assert requests == []
+
+
 def test_stage_asr_overlap_preserves_context_without_duplicate_boundary_segments(
         tmp_path, monkeypatch, api_server):
     settings, responses, requests, _ = api_server
