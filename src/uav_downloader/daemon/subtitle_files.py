@@ -89,6 +89,8 @@ class SubtitleFileManager:
         except engine.SubtitleError as exc:
             if isinstance(exc.__cause__, OSError):
                 raise OSError('字幕影片來源離線或無讀取權限') from None
+            if exc.args == ('Downloaded video file changed during subtitle setup',):
+                raise ValueError('字幕來源影片已變更，請重新選取') from None
             raise
 
     @staticmethod

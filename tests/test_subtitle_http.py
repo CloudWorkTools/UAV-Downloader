@@ -746,6 +746,42 @@ def test_registered_video_identity_io_failure_is_safe_in_list_and_submission(sub
     assert '/private/nas' not in json.dumps(listing)
 
 
+def test_video_identity_change_error_is_safe_in_list_and_submission(subtitle_http, monkeypatch):
+    from uav_downloader.core import history
+    from uav_downloader.daemon import subtitle_files
+
+    request, server, tmp_path = subtitle_http
+    root = tmp_path / 'videos'
+    root.mkdir()
+    (root / 'movie.mp4').write_bytes(b'video')
+    manager = server.subtitle_file_manager
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [str(root)])
+    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={}))
+    monkeypatch.setattr(subtitle_files.nas, 'load_settings', lambda **_kwargs: {'enabled': False})
+    status, listing = request('/api/subtitles/videos')
+    assert status == 200
+    video_id = next(item['video_id'] for item in listing['videos'] if item['name'] == 'movie.mp4')
+    profiles.save_profile(profiles.StageProfile(
+        profile_id='identity-change-vad', display_name='VAD', kind='vad', provider='localai',
+        capabilities=('vad',), base_url='http://127.0.0.1:1234/v1', model='vad-model',
+        parameters_json='{}'))
+    monkeypatch.setattr(subtitle_files.engine, '_media_identity', lambda _path: (_ for _ in ()).throw(
+        subtitle_files.engine.SubtitleError('Downloaded video file changed during subtitle setup')))
+
+    status, result = request('/api/subtitles/tasks', 'POST', {
+        'video_id': video_id, 'selected_stages': ['vad'],
+        'profile_ids': {'vad': 'identity-change-vad'}})
+    assert status == 400
+    assert result['error'] == '字幕來源影片已變更，請重新選取'
+    assert str(root) not in json.dumps(result)
+
+    status, listing = request('/api/subtitles/videos')
+    assert status == 200
+    assert listing['videos'] == []
+    assert listing['errors'][0]['error'] == '影片離線或無讀取權限'
+    assert str(root) not in json.dumps(listing)
+
+
 def test_migrated_legacy_quality_profile_passes_real_correction_probe_without_sending_quality(
         subtitle_http, monkeypatch):
     from uav_downloader.subtitles import settings

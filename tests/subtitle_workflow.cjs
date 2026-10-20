@@ -700,7 +700,7 @@ async function B4() {
   await click(`subtitle-action-settings-${unstartedId}`);
   await cdp.until(`document.querySelector('[data-testid="subtitle-task-${unstartedId}"]')?.textContent.includes('Fixture VAD Alternate')`);
   const appliedSnapshot = await cdp.evaluate(`document.querySelector('[data-testid="subtitle-task-${unstartedId}"]')?.innerText || ''`);
-  assert.match(appliedSnapshot, /已保存階段設定：vad · localai \/ fixture-vad-alt/,
+  assert.match(appliedSnapshot, /已保存階段設定：語音區間 · localai \/ fixture-vad-alt/,
     'apply-only-unstarted updates the visible stage/provider/model snapshot');
   await cdp.evaluate(`document.querySelector('[data-testid="subtitle-task-${unstartedId}"] details summary')?.click()`);
   const expandedTaskSnapshot = await cdp.evaluate(`document.querySelector('[data-testid="subtitle-task-${unstartedId}"] details[open]')?.textContent || ''`);
