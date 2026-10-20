@@ -187,7 +187,6 @@ def test_official_provider_profiles_reject_custom_hosts(
 @pytest.mark.parametrize(
     "url",
     [
-        "http://example.com/v1",
         "ftp://example.com/v1",
         "https://user:pass@example.com/v1",
         "https://example.com/v1?key=secret",
@@ -201,6 +200,15 @@ def test_unsafe_api_urls_are_rejected(isolated_settings, url):
             base_url=url,
             model="model",
         )
+
+
+def test_external_http_translation_endpoint_is_allowed(isolated_settings):
+    loaded = settings.save_translation_profile(
+        settings.OPENAI_COMPATIBLE,
+        base_url="http://192.168.1.25:11434/v1",
+        model="qwen",
+    )
+    assert loaded.base_url == "http://192.168.1.25:11434/v1"
 
 
 def test_corrupt_or_plaintext_secret_is_never_returned(isolated_settings):

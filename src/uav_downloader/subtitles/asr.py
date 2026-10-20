@@ -68,6 +68,28 @@ def _validate(value):
     return result
 
 
+def _encrypt_secret(secret):
+    folder = _folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    key_path = folder / 'asr.key'
+    try:
+        descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(os.urandom(32))
+    cipher = AES.new(key_path.read_bytes(), AES.MODE_GCM)
+    encrypted, tag = cipher.encrypt_and_digest(secret.encode('utf-8'))
+    return base64.b64encode(cipher.nonce + tag + encrypted).decode('ascii')
+
+
+def _decrypt_secret(encoded):
+    data = base64.b64decode(encoded, validate=True)
+    cipher = AES.new((_folder() / 'asr.key').read_bytes(), AES.MODE_GCM, nonce=data[:16])
+    return cipher.decrypt_and_verify(data[32:], data[16:32]).decode('utf-8')
+
+
 def load_settings(*, secret=False):
     with _LOCK:
         raw = _read()
@@ -78,9 +100,7 @@ def load_settings(*, secret=False):
             result['api_key'] = environment_key
             if raw.get('api_key_encrypted'):
                 try:
-                    data = base64.b64decode(raw['api_key_encrypted'], validate=True)
-                    cipher = AES.new((_folder() / 'asr.key').read_bytes(), AES.MODE_GCM, nonce=data[:16])
-                    result['api_key'] = cipher.decrypt_and_verify(data[32:], data[16:32]).decode('utf-8')
+                    result['api_key'] = _decrypt_secret(raw['api_key_encrypted'])
                 except Exception:
                     raise ValueError('辨識 API 金鑰無法解密，請重新輸入') from None
         return result
@@ -101,17 +121,7 @@ def save_settings(value):
         folder = _folder()
         folder.mkdir(parents=True, exist_ok=True)
         if key and not clear:
-            key_path = folder / 'asr.key'
-            try:
-                descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                pass
-            else:
-                with os.fdopen(descriptor, 'wb') as stream:
-                    stream.write(os.urandom(32))
-            cipher = AES.new(key_path.read_bytes(), AES.MODE_GCM)
-            encrypted, tag = cipher.encrypt_and_digest(key.encode('utf-8'))
-            raw['api_key_encrypted'] = base64.b64encode(cipher.nonce + tag + encrypted).decode('ascii')
+            raw['api_key_encrypted'] = _encrypt_secret(key)
         fd, temporary = tempfile.mkstemp(dir=folder, prefix='.asr-')
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -277,7 +287,7 @@ def _recognize(source, start, stop, settings, folder, request_path, log_path,
     return segments
 
 
-def transcribe(settings, wav_path, output_base, log_path, cancel_check, progress_callback):
+def transcribe(settings, wav_path, output_base, log_path, cancel_check=None, progress_callback=None):
     from uav_downloader.subtitles import engine
 
     cache = _folder() / 'asr-cache'
