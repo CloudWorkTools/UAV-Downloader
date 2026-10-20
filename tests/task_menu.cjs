@@ -11,6 +11,7 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'uav-task-menu-'));
 try {
   const page = path.join(temporary, 'test.html');
   fs.writeFileSync(page, fixture + '<script>' +
+    fs.readFileSync('uav-web/frontend/download-batch.js', 'utf8') +
     fs.readFileSync('uav-web/frontend/video-selection.js', 'utf8') +
     fs.readFileSync('uav-web/frontend/task-selection.js', 'utf8') + script + `
     const check = (condition, message) => { if (!condition) throw new Error(message); };

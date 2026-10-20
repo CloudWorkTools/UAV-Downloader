@@ -1,3 +1,10 @@
+// Decode SMB URL paths for display only; requests retain the original destination.
+window.formatStoragePath = value => {
+  const path = String(value ?? '');
+  if (!path.startsWith('smb://')) return path;
+  try { return decodeURIComponent(path); } catch { return path; }
+};
+
 window.createDownloadBatch = ({getQuery, onTasks}) => {
   const dialog = document.getElementById('download-batch-dialog');
   const form = document.getElementById('download-batch-form');
@@ -36,8 +43,8 @@ window.createDownloadBatch = ({getQuery, onTasks}) => {
       const data = await request({action:'preview', ...options});
       if (version !== revision || !dialog.open) return;
       preview = data;
-      field('base-destination').textContent = data.base_destination;
-      field('destination').textContent = data.destination;
+      field('base-destination').textContent = window.formatStoragePath(data.base_destination);
+      field('destination').textContent = window.formatStoragePath(data.destination);
       field('conflict').hidden = !data.exists;
       field('naming-row').hidden = options.policy !== 'new' || options.storage === 'settings';
       field('status').textContent = data.busy ? '此資料夾有未完成任務，請使用新的名稱。' : !data.can_submit ? '此名稱已存在，請修改名稱。' :
