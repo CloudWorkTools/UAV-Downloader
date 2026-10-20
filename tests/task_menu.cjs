@@ -18,6 +18,13 @@ try {
     (async () => {
       const task = {task_id:'menu-test', status:'downloading', name:'Test video', progress:10, total_segments:100};
       renderTasks([task]);
+      check(document.getElementById('queue-batch-actions').hidden, 'Batch actions must start hidden');
+      document.getElementById('queue-selection-mode').click();
+      check(!document.getElementById('queue-batch-actions').hidden, 'Selection mode must expose batch controls');
+      document.getElementById('select-tasks-button').click();
+      check(document.getElementById('queue-selection-count').textContent === '已選 1 項', 'Selected count must update');
+      document.getElementById('queue-selection-mode').click();
+      check(document.getElementById('queue-batch-actions').hidden && !document.querySelector('#tasks-container input').checked, 'Leaving selection must clear checks');
       const menu = document.querySelector('#tasks-container details');
       menu.querySelector('summary').click();
       await new Promise(resolve => setTimeout(resolve, 0));

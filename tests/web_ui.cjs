@@ -139,7 +139,7 @@ async function run() {
   context.renderTasks([{task_id:'failed-cleanup', status:'failed', error:'清除失敗：Permission denied <folder>'}]);
   assert.doesNotMatch(element('tasks-container').innerHTML, /style="width:/, 'Zero-progress failures do not show an empty progress bar');
   assert.doesNotMatch(element('tasks-container').innerHTML, /break-all mt-1/, 'Full storage paths stay in the tooltip');
-  assert.match(element('tasks-container').innerHTML, /text-rose-400 truncate/);
+  assert.match(element('tasks-container').innerHTML, /text-rose-400 whitespace-pre-wrap break-words/);
   assert.match(element('tasks-container').innerHTML, /<p role="alert"[^>]*>清除失敗：Permission denied &lt;folder&gt;<\/p>/);
   context.renderTasks([{task_id:'subtitle-error', status:'completed', error:'影片已完成，但字幕生成失敗: 時間戳'}]);
   assert.match(element('tasks-container').innerHTML, /retry_subtitles/);

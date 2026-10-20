@@ -50,6 +50,12 @@
     #category-groups button { width: 100%; text-align: left; height: auto; min-height: 40px; padding: 6px 8px; overflow-wrap: anywhere; }
     #video-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); }
     #category-sidebar { max-height: 45dvh; overflow-y: auto; }
+    [hidden] { display: none !important; }
+    #tab-queue { min-width: 0; overflow-wrap: anywhere; }
+    #tasks-container > div { min-width: 0; max-width: 100%; }
+    #tasks-container input[type="checkbox"] { display: none; }
+    #tasks-container.selecting input[type="checkbox"] { display: block; }
+    .task-info-popup { overflow-wrap: anywhere; max-height: 60dvh; overflow-y: auto; }
     .storage-path { white-space: normal; overflow-wrap: anywhere; }
     @media (max-width: 639px) {
       #tab-browse .browse-toolbar { padding: 12px; gap: 8px; }
@@ -57,6 +63,7 @@
       .browse-search #category-select { width: 100%; min-width: 0; max-width: none; padding-inline: 8px; }
       .browse-search #search-input { grid-column: span 2; width: 100%; min-width: 0; }
       .browse-search button { width: 100%; min-width: 0; padding-inline: 6px; }
+      #tasks-container .task-info-popup { position: fixed; left: 16px; right: 16px; top: 25%; width: auto; max-width: none; }
       #download-batch-dialog { padding: 16px; }
     }
     @media (min-width: 900px) {
@@ -175,32 +182,27 @@
 
     <!-- TAB 2: DOWNLOAD QUEUE -->
     <section id="tab-queue" class="tab-content hidden space-y-6">
-      <div class="flex flex-wrap gap-3 justify-between items-center bg-[#1a1a22] p-4 rounded-xl border border-[#2e2e3a]">
-        <div>
-          <h2 class="text-base font-bold text-white">任務佇列管理</h2>
-          <p class="text-xs text-gray-400">暫停保留片段；取消會清除該任務檔案；移除紀錄保留完成的影片</p>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button>
-          <button id="edit-tasks-button" hidden onclick="taskSelection.edit()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">修改所選設定</button>
-          <button id="resume-unfinished-button" onclick="resumeUnfinishedTasks()" disabled title="不用勾選，繼續等待中、已暫停或失敗的任務；執行中的任務不會重複啟動" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg disabled:opacity-40">續傳未完成</button>
-          <button id="pause-tasks-button" hidden onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button>
-          <button id="resume-tasks-button" hidden onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button>
-          <button id="retry-tasks-button" hidden onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重新開始所選</button>
+      <div class="queue-toolbar bg-[#1a1a22] p-3 rounded-xl border border-[#2e2e3a]">
+        <div class="flex items-center gap-2">
+          <h2 id="queue-title" class="min-w-0 flex-1 text-base font-bold text-white">下載佇列</h2>
+          <button id="queue-selection-mode" onclick="taskSelection.toggleMode()" disabled class="h-11 px-3 text-xs rounded-lg bg-[#282832] border border-[#3e3e4e] disabled:opacity-40">選取</button>
+          <button onclick="openQuickDownloadModal()" class="h-11 px-3 text-xs whitespace-nowrap rounded-lg bg-brand-600 text-white">＋ 新增</button>
           <details class="relative">
-            <summary class="h-10 px-3.5 flex items-center cursor-pointer bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg">更多操作</summary>
-            <div class="absolute right-0 top-full mt-2 z-30 w-48 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
-          <button id="remove-duplicate-tasks-button" onclick="removeDuplicateTasks()" disabled title="移除已略過及同番號的多餘清單紀錄，保留檔案、歷史及可續傳任務" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">移除重複番號</button>
+            <summary class="h-10 px-3.5 flex items-center cursor-pointer bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg"><span aria-hidden="true">⋯</span><span class="sr-only">更多操作</span></summary>
+            <div onclick="if (event.target.closest('button')) this.closest('details').open = false" class="absolute right-0 top-full mt-2 z-30 w-48 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
+          <button id="resume-unfinished-button" onclick="resumeUnfinishedTasks()" disabled title="不用勾選，繼續等待中、已暫停或失敗的任務；執行中的任務不會重複啟動" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg disabled:opacity-40">續傳未完成</button>
+<button id="remove-duplicate-tasks-button" onclick="removeDuplicateTasks()" disabled title="移除已略過及同番號的多餘清單紀錄，保留檔案、歷史及可續傳任務" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">移除重複番號</button>
           <button id="clear-completed-button" onclick="clearCompletedTasks()" disabled title="只從下載清單移除已完成紀錄，保留影片及下載歷史" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">清除已完成項目</button>
           <button onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
             </div>
           </details>
-          <button id="cancel-tasks-button" hidden onclick="taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消下載 (0)</button>
-          <button onclick="openQuickDownloadModal()" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg transition font-medium">
-            ➕ 新增網址
-          </button>
+        </div>
+        <div id="queue-batch-actions" hidden class="mt-3 flex flex-wrap items-center gap-2" aria-label="所選任務操作">
+<button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button><span id="queue-selection-count" role="status" class="text-xs text-gray-300">已選 0 項</span><button id="pause-tasks-button" hidden onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button><button id="resume-tasks-button" hidden onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button><button id="retry-tasks-button" hidden onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重新開始所選</button><button id="edit-tasks-button" hidden onclick="taskSelection.edit()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">修改所選設定</button>
+          <details class="relative"><summary class="h-11 px-3 flex items-center text-xs cursor-pointer">更多 ▾</summary><div class="absolute right-0 top-full z-30 w-48 p-2 rounded-lg bg-[#282832] border border-[#3e3e4e]"><button id="cancel-tasks-button" hidden onclick="if(confirm('取消所選下載將清除這些任務的下載檔案；若要保留片段，請改用暫停。確定取消？')) taskSelection.cancel()" disabled class="h-10 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消下載 (0)</button></div></details>
         </div>
       </div>
+      <details class="text-xs text-gray-400"><summary class="cursor-pointer py-1">操作說明 ⓘ</summary><p class="mt-2">暫停保留片段；取消會清除該任務檔案；移除紀錄保留完成的影片。</p></details>
 
       <div id="nas-space-queue" class="hidden space-y-2 bg-[#1a1a22] border border-[#2e2e3a] rounded-xl p-4">
         <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="text-sm font-semibold text-white">NAS 空間</h3><button type="button" onclick="NasSettings.refreshSpace()" class="text-xs text-brand-500 hover:text-white">更新容量</button></div>
@@ -999,9 +1001,9 @@
             <div class="flex flex-wrap sm:flex-nowrap justify-between items-center gap-2">
               ${taskSelection.canCancel(t) || taskSelection.canAction(t, 'retry') ? `<input type="checkbox" data-task-id="${t.task_id}" aria-label="選取 ${safe(t.name || t.url)}" onchange="taskSelection.toggle('${t.task_id}', this.checked)" ${taskSelection.has(t.task_id) ? 'checked' : ''} class="mt-1 w-4 h-4 shrink-0 accent-brand-600">` : ''}
               <div class="flex-1 min-w-0 flex items-center gap-2">
-                <h4 title="${safe(downloadInfo)}" class="text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
+                <h4 title="${safe(downloadInfo)}" class="min-w-0 flex-1 text-sm font-semibold text-white truncate">${safe(t.name || t.url)}</h4>
                 ${/^https?:\/\//i.test(t.url || '') ? `<a href="${safe(t.url)}" target="_blank" rel="noopener noreferrer" class="shrink-0 text-xs px-2 py-1 bg-[#282832] hover:bg-brand-600 hover:text-white rounded border border-[#3e3e4e] transition text-gray-200" aria-label="開啟原片：${safe(t.name || t.url)}（另開分頁）">原片連結 ↗</a>` : ''}
-                <span class="relative inline-block group shrink-0"><button type="button" aria-label="${safe(downloadInfo)}" class="text-xs text-brand-500 px-1" title="下載資訊">ⓘ</button><span role="tooltip" class="hidden group-hover:block group-focus-within:block absolute left-0 top-full mt-1 z-50 w-72 max-w-[75vw] p-3 bg-[#282832] border border-[#3e3e4e] rounded-lg shadow-xl text-xs text-gray-200 whitespace-pre-wrap break-words">${safe(downloadInfo)}</span></span>
+                <span class="relative inline-block group shrink-0"><button type="button" aria-label="${safe(downloadInfo)}" class="text-xs text-brand-500 px-1" title="下載資訊">ⓘ</button><span role="tooltip" class="task-info-popup hidden group-hover:block group-focus-within:block absolute left-0 top-full mt-1 z-50 w-72 max-w-[75vw] p-3 bg-[#282832] border border-[#3e3e4e] rounded-lg shadow-xl text-xs text-gray-200 whitespace-pre-wrap break-words">${safe(downloadInfo)}</span></span>
               </div>
               <div class="w-full sm:w-auto flex flex-wrap justify-end items-center gap-2">
                 ${statusBadge}
@@ -1018,7 +1020,7 @@
               </div>
             </div>
             ${t.folder_policy ? `<p class="text-xs text-gray-400 storage-path" title="${safe(t.final_dest || t.dest)}">儲存至：${safe(window.formatStoragePath(t.final_dest || t.dest))}</p>` : ''}
-            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 truncate">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 truncate">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
+            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 whitespace-pre-wrap break-words">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
             <!-- Progress Bar -->
             ${t.total_segments > 0 && !['completed', 'skipped', 'cancelled'].includes(t.status) ? `<div class="space-y-1">
               <div class="w-full bg-[#282832] h-1 rounded-full overflow-hidden">
