@@ -84,7 +84,12 @@ class SubtitleFileManager:
 
     @staticmethod
     def _media_identity(path):
-        return engine._media_identity(path)
+        try:
+            return engine._media_identity(path)
+        except engine.SubtitleError as exc:
+            if isinstance(exc.__cause__, OSError):
+                raise OSError('字幕影片來源離線或無讀取權限') from None
+            raise
 
     @staticmethod
     def _nas_identity(settings):
