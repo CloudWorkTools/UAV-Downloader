@@ -5432,18 +5432,23 @@ def generate_subtitles(video_path: str, mode,
 def _filter_asr_sound_descriptions(segments):
     from uav_downloader.subtitles import domain
 
-    music_cues = {
-        domain.normalize_cue(cue) for cue in (
+    known_sound_descriptions = {
+        domain.normalize_cue(cue).casefold() for cue in (
             '[音楽]', '(音楽)', '（音楽）', '[BGM]', '(BGM)',
             '（BGM）', '[music]', '(music)', '（music）',
             '[background music]', '(background music)',
             '[音樂]', '（音樂）', '[背景音樂]', '(背景音樂)',
+            '[breathing]', '(breathing)', '[heavy breathing]',
+            '(heavy breathing)', '[panting]', '(panting)',
+            '[laughter]', '(laughter)', '[laughing]', '(laughing)',
+            '[laughs]', '(laughs)', '[moaning]', '(moaning)',
+            '[groaning]', '(groaning)',
         )
     }
 
     def is_sound_description(text):
         normalized = domain.normalize_cue(text)
-        if normalized in music_cues:
+        if normalized.casefold() in known_sound_descriptions:
             return True
         known_description = domain.normalize_nonlexical(text, 'en')
         return bool(known_description and known_description.startswith('[')
