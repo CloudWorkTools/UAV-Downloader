@@ -435,8 +435,9 @@ async function selectResults(videoId) {
 }
 
 async function resultRow(stage) {
+  const stageLabel = {vad: '語音區間', asr: '語音辨識', correction: '字幕校正', translation: '字幕翻譯'}[stage] || stage;
   const selector = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(${JSON.stringify(` · ${stage} · `)}))?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(${JSON.stringify(` · ${stageLabel} · `)}))?.dataset.testid || null)()`);
   assert.ok(selector, `saved ${stage} result must be visible`);
   return selector;
 }
@@ -922,7 +923,7 @@ async function B5() {
   assert.equal(englishRedoCalls[0].language, 'en', 'English result is created for the same video before Traditional Chinese redo');
   await clickId('subtitle-refresh');
   const englishResult = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(' · translation · en'))?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕翻譯 · en'))?.dataset.testid || null)()`);
   assert.ok(englishResult, 'same-video English translation result is visible');
   await cdp.evaluate(`document.querySelector('[data-testid="${englishResult}"] button')?.click()`);
   await cdp.until(`document.querySelector('[data-testid="subtitle-preview"]')?.textContent.includes('en:')`);
@@ -973,7 +974,7 @@ async function B6() {
   await clearFixture();
   await selectResults(videoIds['subtitle-fixture-a.mp4']);
   const translation = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(' · translation · zh-TW · '))?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕翻譯 · zh-TW · '))?.dataset.testid || null)()`);
   assert.ok(translation, 'B6 selects a Traditional Chinese translation result compatible with zh-TW publication');
   const translationSelector = `[data-testid="${translation}"]`;
   await cdp.evaluate(`document.querySelector('${translationSelector} button')?.click()`);
@@ -981,7 +982,7 @@ async function B6() {
   await check('subtitle-download', 'download result');
   const before = (await fixtureRecords()).length;
   const previousCorrection = await cdp.evaluate(`(() => [...document.querySelectorAll('[data-testid="subtitle-results"] [data-testid^="subtitle-result-"]')]
-    .find(row => row.querySelector('h3')?.textContent.includes(' · correction · ') && row.querySelectorAll('button').length >= 3)?.dataset.testid || null)()`);
+    .find(row => row.querySelector('h3')?.textContent.includes(' · 字幕校正 · ') && row.querySelectorAll('button').length >= 3)?.dataset.testid || null)()`);
   assert.ok(previousCorrection, 'previous correction version can be restored');
   await cdp.respondToNextDialog({accept: true, promptText: ''});
   await cdp.evaluate(`document.querySelector('[data-testid="${previousCorrection}"] button:nth-of-type(3)')?.click()`);

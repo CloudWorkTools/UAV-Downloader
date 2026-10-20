@@ -325,24 +325,36 @@ def test_local_video_scan_keeps_support_for_deep_paths(subtitle_http, monkeypatc
     assert manager.list_partial is False
 
 
-def test_local_video_scan_marks_elapsed_budget_as_partial(subtitle_http, monkeypatch):
+def test_video_identity_work_respects_elapsed_scan_budget(subtitle_http, monkeypatch):
     from uav_downloader.daemon import subtitle_files
     from uav_downloader.core import history
 
     _, server, tmp_path = subtitle_http
-    root = tmp_path / 'slow-root'
+    root = tmp_path / 'history-root'
     root.mkdir()
-    (root / 'first.mp4').write_bytes(b'first')
-    (root / 'second.mp4').write_bytes(b'second')
+    paths = [root / 'first.mp4', root / 'second.mp4']
+    for path in paths:
+        path.write_bytes(b'video')
     manager = server.subtitle_file_manager
-    monkeypatch.setattr(manager, '_configured_roots', lambda: [str(root)])
-    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={}))
+    monkeypatch.setattr(manager, '_configured_roots', lambda: [])
+    monkeypatch.setattr(history, 'get_history_manager', lambda: SimpleNamespace(_entries={
+        str(index): {'file_path': str(path), 'title': path.name}
+        for index, path in enumerate(paths)}))
     monkeypatch.setattr(subtitle_files.nas, 'load_settings', lambda **_kwargs: {'enabled': False})
-    ticks = iter((0, 1, 2, 3, 9))
-    monkeypatch.setattr(subtitle_files.time, 'monotonic', lambda: next(ticks, 9))
+    now = [0]
+    monkeypatch.setattr(subtitle_files.time, 'monotonic', lambda: now[0])
+    identities = []
+
+    def slow_identity(path):
+        identities.append(path)
+        now[0] = 9
+        return f'identity-{len(identities)}'
+
+    monkeypatch.setattr(manager, '_media_identity', slow_identity)
 
     listed = manager.list_videos(max_entries=100)
 
+    assert identities == [str(paths[0])]
     assert len(listed) == 1
     assert manager.list_partial is True
 

@@ -516,6 +516,8 @@ class SubtitleFileManager:
                                          'error': '下載或掛載目錄離線或無讀取權限'})
         result = []
         for path, (origin, title) in candidates.items():
+            if scan_expired():
+                break
             try:
                 root = os.path.dirname(path)
                 checked, _ = self._validate_local(path, [root])
