@@ -239,7 +239,8 @@ class TaskManager:
             from uav_downloader.subtitles.profiles import ProfileSnapshot
             snapshots = subtitle_request.get('profile_snapshots')
             stages = subtitle_request.get('selected_stages')
-            if (not isinstance(subtitle_request.get('video_id'), str) or not subtitle_request['video_id']
+            if (('video_id' in subtitle_request and subtitle_request['video_id'] is not None
+                 and (not isinstance(subtitle_request['video_id'], str) or not subtitle_request['video_id']))
                     or not isinstance(stages, (list, tuple)) or not stages
                     or any(stage not in ('vad', 'asr', 'correction', 'translation') for stage in stages)
                     or not isinstance(snapshots, dict)):
@@ -255,8 +256,8 @@ class TaskManager:
                 for key, value in snapshots.items()
             }
             subtitle_request = {key: subtitle_request[key] for key in (
-                'video_id', 'selected_stages', 'target_languages', 'profile_snapshots',
-                'input_result_id', 'allow_reasoning') if key in subtitle_request}
+                'video_id', 'selected_stages', 'target_languages', 'output_languages',
+                'profile_snapshots', 'input_result_id', 'allow_reasoning') if key in subtitle_request}
             try:
                 subtitle_request = json.loads(json.dumps(
                     subtitle_request, ensure_ascii=False, allow_nan=False))
@@ -956,11 +957,39 @@ class TaskManager:
                 for key, value in request['profile_snapshots'].items()
             }
             video_path = os.path.join(task.dest, f'{task.name}.mp4')
+            from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+            manager = getattr(self, '_subtitle_file_manager', None)
+            if manager is None:
+                manager = self._subtitle_file_manager = SubtitleFileManager()
+            settings = task.nas_settings or {}
+            if settings.get('enabled') and settings.get('mode') == 'smb':
+                current = nas.load_settings(secret=True)
+                if manager._nas_identity(current) != manager._nas_identity(settings):
+                    raise ValueError('NAS 設定已變更，無法註冊字幕影片來源')
+                source = manager.register_smb(video_path, storage_root=task.dest,
+                                              nas_settings=current, output_mode='smb')
+            elif settings.get('enabled') and settings.get('mode') == 'upload':
+                current = nas.load_settings(secret=True)
+                if manager._nas_identity(current) != manager._nas_identity(settings):
+                    raise ValueError('NAS 設定已變更，無法驗證已上傳影片')
+                root = nas.smb_destination()
+                with nas.open_smb_storage(current, root):
+                    remote_video = os.path.join(root, os.path.basename(video_path))
+                    source = manager.register_upload(
+                        video_path, allowed_roots=[task.dest], nas_settings=current,
+                        remote_root=root, remote_video_path=remote_video)
+            else:
+                roots = [task.dest]
+                if task.staging_dir:
+                    roots.append(task.staging_dir)
+                source = manager.register(video_path, allowed_roots=roots,
+                                          output_mode='local')
             self._subtitle_task_manager.submit(
-                request.get('video_id'), request.get('selected_stages'), snapshots,
+                source.video_id, request.get('selected_stages'), snapshots,
                 request.get('target_languages', []), video_path=video_path,
                 input_result_id=request.get('input_result_id'),
-                allow_reasoning=request.get('allow_reasoning', False))
+                allow_reasoning=request.get('allow_reasoning', False),
+                output_languages=request.get('output_languages', []))
         except Exception:
             logging.exception('影片已下載完成，但無法提交字幕工作')
             task.error = '影片完成，字幕未能加入佇列'

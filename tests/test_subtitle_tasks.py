@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 from pathlib import Path
 import threading
 import time
@@ -31,8 +32,16 @@ TEXT_SNAPSHOT = ProfileSnapshot(
 def manager(tmp_path, monkeypatch):
     from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
 
+    class Sources:
+        @contextmanager
+        def resolve(self, _video_id):
+            yield SimpleNamespace(video_path='/tmp/resolved-video.mp4')
+
+        def publish_result(self, *_args, **_kwargs):
+            raise AssertionError('test did not request subtitle publication')
+
     monkeypatch.setattr(SubtitleTaskManager, 'start_dispatcher', lambda self: None)
-    return SubtitleTaskManager(state_path=tmp_path / 'subtitle_tasks.json')
+    return SubtitleTaskManager(state_path=tmp_path / 'subtitle_tasks.json', source_manager=Sources())
 
 
 def submit(manager, **kwargs):
@@ -49,6 +58,134 @@ def test_submit_persists_once_and_deduplicates_an_unfinished_request(manager):
     assert duplicate['task_id'] == first['task_id']
     assert manager.list_tasks()[0]['task_id'] == first['task_id']
     assert len(json.loads(manager._state_path.read_text())['tasks']) == 1
+
+
+def test_output_languages_are_separate_from_translation_targets(manager):
+    task = manager.submit('video-1', ['translation'], {'translation': TEXT_SNAPSHOT}, ['en'],
+                          output_languages=['ja'])
+    assert task['target_languages'] == ['en']
+    assert task['output_languages'] == ['ja']
+
+
+def test_retry_publish_reuses_result_without_calling_model(manager, monkeypatch):
+    from uav_downloader.subtitles import engine, results
+
+    task = submit(manager)
+    manager._tasks[task['task_id']]['status'] = 'completed'
+    manager._tasks[task['task_id']]['publish_status'] = {
+        'en': {'status': 'failed', 'result_id': 'saved-result'}}
+    manager._save()
+    monkeypatch.setattr(results, 'get', lambda _video, result_id: SimpleNamespace(
+        result_id=result_id, video_id='video-1', stage='translation', language='en',
+        segments=(), content_available=True))
+    published = []
+    manager._source_manager.publish_result = lambda *_a, **_k: published.append('write') or {'path': 'movie.en.srt'}
+    monkeypatch.setattr(engine, 'run_stage', lambda *_a, **_k: pytest.fail('retry_publish called a model stage'))
+
+    retried = manager.retry_publish(task['task_id'], 'en')
+
+    assert published == ['write']
+    assert retried['status'] == 'completed'
+    assert retried['publish_status']['en']['status'] == 'published'
+
+
+def test_model_success_and_publish_failure_are_independent_and_retry_write_only(manager, monkeypatch):
+    from uav_downloader.subtitles import engine, results
+
+    task = manager.submit('video-1', ['translation'], {'translation': TEXT_SNAPSHOT}, ['en'],
+                          output_languages=['en'])
+    generated = SimpleNamespace(result_id='generated-result', video_id='video-1', stage='translation',
+                                language='en', segments=(), content_available=True)
+    monkeypatch.setattr(results, 'adopted', lambda *_a: SimpleNamespace(
+        result_id='asr-source', stage='asr', content_available=True, stale=False))
+    monkeypatch.setattr(results, 'get', lambda _video, _result_id=None: generated)
+    model_calls = []
+    def run_stage(*_args, commit_guard, **_kwargs):
+        model_calls.append(1)
+        return commit_guard(lambda: generated)
+    monkeypatch.setattr(engine, 'run_stage', run_stage)
+    writes = []
+    def fail_once(*_args, **_kwargs):
+        writes.append('attempt')
+        if len(writes) == 1:
+            raise OSError('NAS unavailable')
+        return {'path': 'movie.en.srt'}
+    manager._source_manager.publish_result = fail_once
+
+    manager._run_task(task['task_id'])
+    failed = manager.get_task(task['task_id'])
+    assert failed['status'] == 'completed'
+    assert failed['publish_status']['en']['status'] == 'failed'
+    assert len(model_calls) == 1
+
+    monkeypatch.setattr(engine, 'run_stage', lambda *_a, **_k: pytest.fail('write retry invoked model'))
+    retried = manager.retry_publish(task['task_id'], 'en')
+    assert retried['publish_status']['en']['status'] == 'published'
+    assert len(model_calls) == 1
+    assert len(writes) == 2
+
+
+def test_retry_publish_waits_for_same_video_task_lock(manager, monkeypatch):
+    from uav_downloader.subtitles import results
+
+    task = submit(manager)
+    manager._tasks[task['task_id']]['status'] = 'completed'
+    manager._tasks[task['task_id']]['publish_status'] = {
+        'en': {'status': 'failed', 'result_id': 'saved-result'}}
+    manager._save()
+    lock = manager._video_locks.setdefault('video-1', threading.Lock())
+    lock.acquire()
+    looked_up = threading.Event()
+    monkeypatch.setattr(results, 'get', lambda *_a: looked_up.set() or SimpleNamespace(
+        result_id='saved-result', video_id='video-1', stage='translation',
+        language='en', segments=(), content_available=True))
+    manager._source_manager.publish_result = lambda *_a, **_k: {'path': 'movie.en.srt'}
+    worker = threading.Thread(target=manager.retry_publish, args=(task['task_id'], 'en'))
+    worker.start()
+
+    assert not looked_up.wait(.05)
+    lock.release()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert looked_up.is_set()
+
+
+def test_restore_publish_failure_is_persisted_and_retried_after_restart(manager, monkeypatch):
+    from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+    from uav_downloader.subtitles import engine, results
+
+    restored = SimpleNamespace(result_id='prior-result', video_id='video-1', stage='asr',
+                               language=None, segments=(), content_available=True)
+    monkeypatch.setattr(results, 'restore_previous', lambda *_a: restored)
+    monkeypatch.setattr(results, 'get', lambda *_a: restored)
+    writes = []
+    def fail_then_publish(*_args, **_kwargs):
+        writes.append('write')
+        if len(writes) == 1:
+            raise OSError('storage offline')
+        return {'path': 'movie.ja.srt'}
+    manager._source_manager.publish_result = fail_then_publish
+    monkeypatch.setattr(engine, 'run_stage', lambda *_a, **_k: pytest.fail('restore retry called a model'))
+
+    failed = manager.restore_previous('video-1', 'asr')
+    assert failed['restore_status'] == 'restored'
+    assert failed['publish_status'] == 'failed'
+    assert failed['publication_id'].startswith('subtitle_pub_')
+
+    saved = json.loads(manager._state_path.read_text())
+    saved['publications'][failed['publication_id']]['publish_status'] = 'publishing'
+    manager._state_path.write_text(json.dumps(saved))
+
+    restarted = SubtitleTaskManager(state_path=manager._state_path,
+                                    source_manager=manager._source_manager)
+    assert restarted.get_publication(failed['publication_id'])['publish_status'] == 'failed'
+    retried = restarted.retry_restored_publish(failed['publication_id'])
+
+    assert retried['restore_status'] == 'restored'
+    assert retried['publish_status'] == 'published'
+    assert writes == ['write', 'write']
+    persisted = json.loads(manager._state_path.read_text())
+    assert persisted['publications'][failed['publication_id']]['publish_status'] == 'published'
 
 
 def test_reorder_moves_only_waiting_work_and_redo_gets_a_new_execution_id(manager):
