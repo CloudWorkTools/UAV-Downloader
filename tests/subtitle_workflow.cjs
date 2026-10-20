@@ -443,6 +443,7 @@ async function resultRow(stage) {
 }
 
 async function redoOnlyStage(taskId, stage, profileId, inputStage = null, language = 'zh-TW') {
+  const stageLabels = {vad: '語音區間', asr: '語音辨識', correction: '字幕校正', translation: '字幕翻譯'};
   const beforeIds = await appTaskIds();
   await click(`subtitle-action-redo-${taskId}`);
   await cdp.until(`document.getElementById('subtitle-redo-dialog')?.open`);
@@ -453,13 +454,13 @@ async function redoOnlyStage(taskId, stage, profileId, inputStage = null, langua
   if (inputStage) {
     await cdp.until(`document.getElementById('subtitle-redo-input')?.options.length > 1`);
     inputResultId = await cdp.evaluate(`(() => [...document.getElementById('subtitle-redo-input').options]
-      .find(option=>option.textContent.trim().startsWith(${JSON.stringify(inputStage)}))?.value || null)()`);
+      .find(option=>option.textContent.trim().startsWith(${JSON.stringify(stageLabels[inputStage] || inputStage)}))?.value || null)()`);
     assert.ok(inputResultId, `${stage} redo exposes an explicit ${inputStage} upstream result`);
     await cdp.selectId('subtitle-redo-input', inputResultId);
   }
   if (stage === 'translation') await fillId('subtitle-redo-language', language);
   const summary = await cdp.evaluate(`document.getElementById('subtitle-redo-summary')?.textContent || ''`);
-  assert.ok(summary.includes(stage), `redo summary names the requested ${stage} stage`);
+  assert.ok(summary.includes(stageLabels[stage] || stage), `redo summary names the requested ${stage} stage`);
   if (inputResultId) assert.ok(summary.includes(inputResultId), `redo summary names selected upstream result ${inputResultId}`);
   await clickId('subtitle-redo-confirm');
   await clickId('subtitle-redo-confirm');
@@ -691,7 +692,7 @@ async function B4() {
   assert.equal(batchIds.length, 3, 'batch selection creates three independent subtitle tasks');
   await waitUntil(async () => {
     const rendered = await cdp.evaluate(`document.querySelector('[data-testid="subtitle-task-list"]')?.innerText || ''`);
-    return /running/i.test(rendered) && (rendered.match(/queued/gi) || []).length >= 2 ? rendered : false;
+    return rendered.includes('處理中') && (rendered.match(/排隊中/g) || []).length >= 2 ? rendered : false;
   }, 'visible running task and queued siblings', 10000);
   await cdp.selectId('subtitle-stage-profile-vad', 'workflow-vad-alt');
   const unstartedId = await cdp.evaluate(`window.subtitleTasks.state.tasks.find(item=>item.status==='queued'&&!item.ever_started&&!item.inputs?.length)?.task_id`);
@@ -841,7 +842,7 @@ async function B4() {
   scenarioDetails.B4 = {...retryEvidence, beforeRestartRequests};
   await restartRuntime();
   await click('subtitle-tab');
-  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${interruptedTaskId}"]')?.textContent.includes('waiting_for_resume')`);
+  await cdp.until(`document.querySelector('[data-testid="subtitle-task-${interruptedTaskId}"]')?.textContent.includes('等待手動續跑')`);
   const resumeButton = await cdp.selector(`subtitle-action-resume-${interruptedTaskId}`);
   assert.equal(resumeButton.hidden, false, 'service restart exposes an explicit manual resume action');
   await fixture.reset();
