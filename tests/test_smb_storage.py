@@ -92,11 +92,13 @@ def test_smb_writes_seek_and_exclusive_publish(smb):
     assert (smb.folder / 'video.mp4').read_bytes()[4:8] == b'abcd'
 
 
-def test_subtitle_publication_uses_virtual_smb_root_and_one_sidecar(smb, tmp_path, monkeypatch):
+@pytest.mark.parametrize('mode', ['smb', 'upload'])
+def test_subtitle_publication_uses_virtual_smb_root_and_one_sidecar(smb, tmp_path, monkeypatch, mode):
     from types import SimpleNamespace
     from uav_downloader.daemon.subtitle_files import SubtitleFileManager
     from uav_downloader.subtitles.models import SubtitleSegment
-    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(smb.settings))
+    settings = {**smb.settings, 'mode': mode}
+    monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(settings))
     monkeypatch.setattr('uav_downloader.core.history.get_history_manager',
                         lambda: SimpleNamespace(_entries={}))
 

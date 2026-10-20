@@ -427,7 +427,7 @@ class SubtitleFileManager:
                 self.list_errors.append({'source': origin, 'root': os.path.dirname(path),
                                          'error': '影片離線或無讀取權限'})
         settings = nas.load_settings(secret=True)
-        if settings.get('enabled') and settings.get('mode') == 'smb':
+        if settings.get('enabled') and settings.get('mode') in ('smb', 'upload'):
             root = nas.smb_destination()
             try:
                 with nas.open_smb_storage(settings, root):

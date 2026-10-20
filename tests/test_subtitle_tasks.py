@@ -125,6 +125,31 @@ def test_model_success_and_publish_failure_are_independent_and_retry_write_only(
     assert len(writes) == 2
 
 
+def test_retry_publish_waits_for_same_video_task_lock(manager, monkeypatch):
+    from uav_downloader.subtitles import results
+
+    task = submit(manager)
+    manager._tasks[task['task_id']]['status'] = 'completed'
+    manager._tasks[task['task_id']]['publish_status'] = {
+        'en': {'status': 'failed', 'result_id': 'saved-result'}}
+    manager._save()
+    lock = manager._video_locks.setdefault('video-1', threading.Lock())
+    lock.acquire()
+    looked_up = threading.Event()
+    monkeypatch.setattr(results, 'get', lambda *_a: looked_up.set() or SimpleNamespace(
+        result_id='saved-result', video_id='video-1', stage='translation',
+        language='en', segments=(), content_available=True))
+    manager._source_manager.publish_result = lambda *_a, **_k: {'path': 'movie.en.srt'}
+    worker = threading.Thread(target=manager.retry_publish, args=(task['task_id'], 'en'))
+    worker.start()
+
+    assert not looked_up.wait(.05)
+    lock.release()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert looked_up.is_set()
+
+
 def test_reorder_moves_only_waiting_work_and_redo_gets_a_new_execution_id(manager):
     first = submit(manager)
     second = submit(manager, video_id='video-2')

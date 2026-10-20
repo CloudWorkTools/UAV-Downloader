@@ -712,16 +712,17 @@ class SubtitleTaskManager:
                 raise ValueError('字幕發布目前無法重試')
             video_id, result_id = task['video_id'], entry['result_id']
         from uav_downloader.subtitles import results
-        result = results.get(video_id, result_id)
-        if result is None:
-            raise ValueError('字幕結果不存在')
-        published = self._source_manager.publish_result(video_id, result, language)
-        with self._lock:
-            task = self._tasks[task_id]
-            task['publish_status'][language] = {'status': 'published', 'result_id': result_id,
-                                                'path': published['path']}
-            task['updated_at'] = time.time()
-            self._save_locked()
+        with self._video_locks.setdefault(video_id, threading.Lock()):
+            result = results.get(video_id, result_id)
+            if result is None:
+                raise ValueError('字幕結果不存在')
+            published = self._source_manager.publish_result(video_id, result, language)
+            with self._lock:
+                task = self._tasks[task_id]
+                task['publish_status'][language] = {'status': 'published', 'result_id': result_id,
+                                                    'path': published['path']}
+                task['updated_at'] = time.time()
+                self._save_locked()
         return self.get_task(task_id)
 
     def restore_previous(self, video_id, stage, language=None, *, output_language=None,
@@ -734,10 +735,11 @@ class SubtitleTaskManager:
         output_language = output_language or (language if stage == 'translation' else 'ja')
         if output_language not in ('ja', 'en', 'zh-TW'):
             raise ValueError('字幕輸出語言無效')
-        with self._source_manager.resolve(video_id):
-            restored = results.restore_previous(video_id, stage, language)
-            published = self._source_manager.publish_result(
-                video_id, restored, output_language, replace_existing=replace_existing)
+        with self._video_locks.setdefault(video_id, threading.Lock()):
+            with self._source_manager.resolve(video_id):
+                restored = results.restore_previous(video_id, stage, language)
+                published = self._source_manager.publish_result(
+                    video_id, restored, output_language, replace_existing=replace_existing)
         return {'video_id': video_id, 'result_id': restored.result_id,
                 'language': output_language, 'publish_status': 'published',
                 'path': published['path']}
