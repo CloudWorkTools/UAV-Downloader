@@ -95,7 +95,7 @@ async function stopChild(child, processGroup = false) {
 
 function makeMedia() {
   const ffmpeg = process.env.FFMPEG || 'ffmpeg';
-  for (const name of ['subtitle-fixture-a.mp4', 'subtitle-fixture-b.mp4', 'subtitle-fixture-c.mp4', 'subtitle-fixture-d.mp4']) {
+  for (const name of ['subtitle-fixture-a.mp4', 'subtitle-fixture-b.mp4', 'subtitle-fixture-c.mp4', 'subtitle-fixture-d.mp4', 'subtitle-fixture-history.mp4']) {
     command(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
       'color=c=black:s=320x240:r=15:d=3', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
       '-shortest', '-c:v', 'mpeg4', '-q:v', '8', '-c:a', 'aac', '-y', path.join(downloadsDir, name)]);
@@ -106,6 +106,27 @@ function makeMedia() {
   command(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
     'color=c=black:s=320x240:r=15:d=3', '-f', 'lavfi', '-i', 'aevalsrc=0:d=3:s=16000',
     '-shortest', '-c:v', 'mpeg4', '-q:v', '10', '-c:a', 'aac', '-y', path.join(downloadsDir, 'subtitle-fixture-silent.mp4')]);
+}
+
+function seedLegacyStartupData(fixtureUrl, direct) {
+  const productDataDir = path.join(direct ? root : configDir, 'appdata', 'UAV Downloader');
+  fs.mkdirSync(productDataDir, {recursive: true});
+  const legacyAsrPath = path.join(configDir, 'asr.json');
+  const legacyTranslationPath = path.join(productDataDir, 'translation_api.json');
+  const legacyAsr = JSON.stringify({base_url: fixtureUrl, model: 'legacy-asr'});
+  const legacyTranslation = JSON.stringify({schema: 1, selected_provider: 'openai-compatible', profiles: {
+    'openai-compatible': {base_url: fixtureUrl, model: 'legacy-text', api_key_protected: ''},
+  }});
+  fs.writeFileSync(legacyAsrPath, legacyAsr);
+  fs.writeFileSync(legacyTranslationPath, legacyTranslation);
+  const historyPath = path.join(productDataDir, 'download_history.json');
+  const historyVideo = path.join(direct ? downloadsDir : '/downloads', 'subtitle-fixture-history.mp4');
+  fs.writeFileSync(historyPath, JSON.stringify({version: 1, entries: {
+    'w8-history-source': {url: 'https://example.invalid/w8-history-source', title: 'subtitle-fixture-history.mp4',
+      code: 'W8-HISTORY-SOURCE', clean_title: 'subtitle fixture history mp4', dest_dir: downloadsDir,
+      file_path: historyVideo, site: 'fixture', downloaded_at: '2026-10-20T00:00:00Z'},
+  }}));
+  return {legacyAsrPath, legacyTranslationPath, legacyAsr, legacyTranslation};
 }
 
 function chromeExecutable() {
@@ -274,11 +295,12 @@ async function clearFixture() { await fixture.reset(); }
 async function assertStages(expected) {
   const records = fixtureEvidenceByCase.B2 || [];
   const actual = records.filter(item => ['vad', 'asr', 'correction', 'translation'].includes(item.kind)).map(item => item.kind);
-  assert.deepEqual(actual.slice(-expected.length), expected);
+  assert.deepEqual(actual.slice(0, expected.length), expected);
   return records;
 }
 
 let fixtureBaseUrl;
+let legacyFixture;
 let selectedVideoId = null;
 let frontendStyleEvidence = null;
 const videoIds = {};
@@ -518,6 +540,11 @@ async function B2() {
   await cdp.until(`document.querySelector('[data-testid="subtitle-panel"]') && !document.querySelector('[data-testid="subtitle-panel"]').classList.contains('hidden')`);
   await check('subtitle-videos', 'server-side video list');
   await cdp.until(`document.body.textContent.includes('subtitle-fixture-a.mp4')`);
+  const videoSources = await cdp.evaluate(`fetch('/api/subtitles/videos').then(response=>response.json()).then(data=>data.videos.map(video=>({name:video.name,source:video.source,video_id:video.video_id})))`);
+  const configuredSource = videoSources.find(video => video.name === 'subtitle-fixture-a.mp4');
+  const historySource = videoSources.find(video => video.name === 'subtitle-fixture-history.mp4');
+  assert.equal(configuredSource?.source, 'configured', 'configured-root media remains selectable as a configured source');
+  assert.equal(historySource?.source, 'history', 'a completed download-history record is listed as a history source');
   const defaults = await cdp.evaluate(`({stages:['vad','asr','correction','translation'].filter(stage=>document.getElementById('subtitle-stage-enabled-'+stage)?.checked),outputs:[...document.querySelectorAll('input[name="subtitle-output-language"]:checked')].map(input=>input.value)})`);
   assert.deepEqual(defaults, {stages: ['vad', 'asr'], outputs: ['ja']},
     'new-run defaults enable VAD and ASR with Japanese output only');
@@ -536,6 +563,59 @@ async function B2() {
   const calls = await fixtureRecords();
   assert.deepEqual(calls.filter(item => ['vad', 'asr', 'correction', 'translation'].includes(item.kind)).map(item => item.kind),
     ['vad', 'asr', 'correction', 'translation'], 'submitted full pipeline reaches each configured fixture stage');
+  await clearVideoSelection();
+  await setPipeline({stages: ['vad']});
+  const historyVideoId = await selectVideoByName('subtitle-fixture-history.mp4');
+  await submitSelected();
+  await cdp.until(`document.querySelectorAll('[data-testid^="subtitle-task-subtitle_"]').length === 2`);
+  const historyTaskId = (await appTaskIds()).find(id => id !== taskId);
+  await waitTaskStatus(historyTaskId, 'completed');
+  const historyTask = await cdp.evaluate(`window.subtitleTasks.state.tasks.find(item=>item.task_id===${JSON.stringify(historyTaskId)})`);
+  assert.equal(historyTask.video_id, historyVideoId, 'history selection creates a subtitle task for the selected source');
+  assert.equal((await fixtureRecords()).filter(item => ['vad', 'asr', 'correction', 'translation'].includes(item.kind)).length, 5,
+    'history selection runs only its requested subtitle stage after the configured-root task');
+  const downloadTasks = await cdp.evaluate(`fetch('/api/download/tasks').then(response=>response.json())`);
+  assert.equal(downloadTasks.tasks?.length || 0, 0, 'subtitle selection does not create a download task');
+  videoIds['subtitle-fixture-a.mp4'] = configuredSource.video_id;
+  selectedVideoId = configuredSource.video_id;
+}
+
+async function legacyStartupMigration() {
+  await click('subtitle-tab');
+  await cdp.until(`document.querySelector('[data-testid="subtitle-profile-list"]')?.textContent.includes('Legacy openai-compatible')`);
+  await cdp.evaluate(`(()=>{const row=[...document.querySelectorAll('#subtitle-profile-list > div')].find(item=>item.textContent.includes('Legacy openai-compatible'));row?.querySelector('button')?.click();})()`);
+  const editor = await cdp.evaluate(`({id:document.getElementById('subtitle-profile-id')?.value||'',model:document.getElementById('subtitle-profile-model')?.value||'',parameters:JSON.parse(document.getElementById('subtitle-profile-parameters')?.value||'{}')})`);
+  assert.deepEqual(editor, {id: 'legacy-text-openai_compatible', model: 'legacy-text', parameters: {quality: 'balanced'}},
+    'the browser can select and inspect the migrated legacy text profile');
+  await cdp.selectId('subtitle-test-stage', 'correction');
+  await cdp.setChecked('subtitle-test-allow-reasoning', true);
+  cdp.respondToNextDialog({accept: true});
+  await click('subtitle-test-profile');
+  await cdp.until(`document.getElementById('subtitle-settings-status')?.textContent.includes('格式未確認')`);
+  assert.equal((await fixtureRecords()).length, 0, 'the browser reports the known migration failure before sending an external request');
+  const profilesResponse = await fetch(new URL('/api/subtitles/profiles', runtime.url));
+  assert.equal(profilesResponse.status, 200, 'legacy startup profile migration is exposed through the browser API');
+  const profiles = (await profilesResponse.json()).profiles;
+  assert.ok(profiles.some(profile => profile.profile_id === 'legacy-asr' && profile.kind === 'asr'),
+    'legacy ASR settings become a selectable subtitle profile');
+  const migratedText = profiles.find(profile => profile.profile_id === 'legacy-text-openai_compatible');
+  assert.ok(migratedText && migratedText.kind === 'text' && migratedText.model === 'legacy-text',
+    'legacy text settings become a selectable subtitle profile');
+  assert.deepEqual(migratedText.parameters, {quality: 'balanced'},
+    'legacy text quality is retained in the migrated profile');
+  assert.equal(fs.readFileSync(legacyFixture.legacyAsrPath, 'utf8'), legacyFixture.legacyAsr,
+    'migration preserves the original ASR settings bytes');
+  assert.equal(fs.readFileSync(legacyFixture.legacyTranslationPath, 'utf8'), legacyFixture.legacyTranslation,
+    'migration preserves the original translation settings bytes');
+  const probe = await fetch(new URL('/api/subtitles/profiles/test', runtime.url), {method: 'POST',
+    headers: {'content-type': 'application/json'}, body: JSON.stringify({action: 'test', profile_id: migratedText.profile_id,
+      stage: 'correction', confirm_external_call: true, allow_reasoning: true})}).then(response => response.json());
+  assert.equal(probe.success, false, 'current known legacy quality incompatibility remains visible instead of being called compatible');
+  assert.equal(probe.test_status, 'failed', 'the migrated profile probe reports the known quality incompatibility as a failed probe');
+  assert.equal((await fixtureRecords()).length, 0, 'the known migration failure is rejected before sending an external request');
+  await cdp.setChecked('subtitle-test-allow-reasoning', false);
+  scenarioDetails.Migration = {legacyFilesPreserved: true, migratedProfiles: ['legacy-asr', migratedText.profile_id],
+    legacyTextProbe: 'KNOWN_PRODUCT_FAILURE: migrated quality=balanced is rejected by the new text parameter validator before the fixture request'};
 }
 
 async function B3() {
@@ -763,6 +843,7 @@ async function B5() {
   const restoredFocus = await cdp.evaluate(`document.activeElement?.dataset.testid || document.activeElement?.id || ''`);
   assert.equal(restoredFocus, `subtitle-action-redo-${originalTask}`, 'closing redo restores keyboard focus to its trigger after background refresh');
   await click(`subtitle-action-redo-${originalTask}`);
+  await cdp.until(`document.getElementById('subtitle-redo-dialog')?.open`);
   await cdp.selectId('subtitle-redo-stage', 'correction');
   await cdp.until(`document.getElementById('subtitle-redo-profile')?.options.length > 0 && document.getElementById('subtitle-redo-input')?.options.length > 1`);
   await cdp.selectId('subtitle-redo-profile', 'workflow-text');
@@ -1070,11 +1151,17 @@ const runPromise = (async () => {
   const chromeVersion = command(chromeExecutable(), ['--version']);
   fixturePort = await fixture.listen();
   makeMedia();
+  const direct = fs.existsSync('/usr/local/bin/uav-web');
+  fixtureBaseUrl = direct ? `http://127.0.0.1:${fixturePort}/v1` : `http://host.docker.internal:${fixturePort}/v1`;
+  legacyFixture = seedLegacyStartupData(fixtureBaseUrl, direct);
   runtime = await startApp();
   fixtureBaseUrl = runtime.fixtureUrl;
   await waitForApp(runtime.url);
   await startChrome(runtime.url);
   await assertStyledFrontend();
+  currentCase = 'LegacyStartupMigration';
+  await legacyStartupMigration();
+  evidence.push({case: currentCase, result: 'PASS_WITH_KNOWN_PRODUCT_FAILURE', fixture: [], details: scenarioDetails.Migration});
   const scenarios = [B1, B2, B3, B4, B5, B6, B7, B8];
   for (const scenario of scenarios) {
     currentCase = scenario.name;
