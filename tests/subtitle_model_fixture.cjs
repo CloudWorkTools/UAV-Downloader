@@ -89,14 +89,28 @@ function createFixture({host = '0.0.0.0'} = {}) {
         const prompt = body?.messages?.find(item => item.role === 'user')?.content || '';
         const target = prompt.match(/Translate faithfully into ([A-Za-z-]+)\./)?.[1] || null;
         const operation = /^Correct transcription/.test(prompt) ? 'correction' : 'translation';
-        record.kind = operation;
-        record.language = target;
-        const cues = parsePromptCues(prompt);
-        record.cueCount = cues.length;
-        record.inputFromCorrection = cues.some(cue => cue.text.startsWith('修正:'));
-        const updated = cues.map(cue => ({id: cue.id, text: operation === 'correction'
-          ? `修正:${cue.text}` : `${target || '譯'}:${cue.text}`}));
-        reply = {choices: [{message: {content: JSON.stringify(updated)}}]};
+        const thinking = body?.metadata?.enable_thinking;
+        if (prompt.includes('"probe-1"') && thinking === 'false') {
+          record.kind = 'reasoning-probe-false';
+          record.reasoningEnabled = false;
+          reply = {choices: [{finish_reason: 'stop', message: {
+            content: '[{"id":"probe-1","text":"こんにちは"}]'}}]};
+        } else if (prompt.includes('"probe-1"') && thinking === 'true') {
+          record.kind = 'reasoning-probe-true';
+          record.reasoningEnabled = true;
+          reply = {choices: [{finish_reason: 'length', message: {
+            content: '', reasoning: 'bounded synthetic reasoning signal'}}]};
+        } else {
+          record.kind = operation;
+          record.reasoningEnabled = thinking === 'false' ? false : thinking === 'true' ? true : null;
+          record.language = target;
+          const cues = parsePromptCues(prompt);
+          record.cueCount = cues.length;
+          record.inputFromCorrection = cues.some(cue => cue.text.startsWith('修正:'));
+          const updated = cues.map(cue => ({id: cue.id, text: operation === 'correction'
+            ? `修正:${cue.text}` : `${target || '譯'}:${cue.text}`}));
+          reply = {choices: [{finish_reason: 'stop', message: {content: JSON.stringify(updated)}}]};
+        }
       } else {
         status = 404;
         reply = {error: 'unknown fixture route'};

@@ -494,6 +494,8 @@ def test_http_auth_error_is_specific_and_does_not_echo_url_or_secret(manager, mo
     ('value', '字幕上游結果已過期，請先更新', '上游字幕結果已過期'),
     ('llm', '此模型服務停用思考能力未確認，請明確允許思考 at https://private/?token=secret',
      '尚未確認思考控制'),
+    ('llm', '此 LocalAI 設定尚未通過停用思考驗證，請先重新驗證 at https://private/?token=secret',
+     '尚未確認思考控制'),
     ('value', '模型服務 API 金鑰無法解密，請重新輸入: secret https://private.example',
      '請重新輸入 API 金鑰'),
 ])

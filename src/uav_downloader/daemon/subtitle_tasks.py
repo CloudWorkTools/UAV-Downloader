@@ -92,7 +92,7 @@ def _safe_error(stage, error):
     if any(term in lowered for term in ('已過期', '過期', 'stale', 'outdated')):
         return f'{prefix}：上游字幕結果已過期，請更新結果或明確選擇舊版本'
     if any(term in lowered for term in (
-            '思考能力未確認', '未確認此模型支援 thinking', 'reasoning control',
+            '思考能力未確認', '尚未通過停用思考驗證', '未確認此模型支援 thinking', 'reasoning control',
             'thinking control', 'reasoning is not confirmed')):
         return f'{prefix}：尚未確認思考控制，請切換相容模型或明確允許思考'
     if any(term in lowered for term in ('invalid response', 'invalid json', 'response format', 'returned an invalid')):
