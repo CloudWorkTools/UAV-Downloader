@@ -224,7 +224,7 @@ def test_lmstudio_model_discovery_uses_documented_v0_catalog_shape():
                       'manual_entry_allowed': True}
 
 
-def test_unknown_reasoning_control_requires_separate_explicit_permission(subtitle_http, monkeypatch):
+def test_localai_profile_test_persists_profile_specific_false_true_verification(subtitle_http, monkeypatch):
     from uav_downloader.daemon import subtitle_http as api
 
     request, _, _ = subtitle_http
@@ -233,21 +233,56 @@ def test_unknown_reasoning_control_requires_separate_explicit_permission(subtitl
         capabilities=('correction',), base_url='http://127.0.0.1:1234/v1',
         model='text-model', parameters_json='{}'))
     calls = []
-    monkeypatch.setattr(api, '_test_profile', lambda *args, **kwargs: calls.append(args) or {
-        'success': True, 'format_pass': True, 'quality': 'unverified'})
+    monkeypatch.setattr(api.llm if hasattr(api, 'llm') else __import__(
+        'uav_downloader.subtitles.llm', fromlist=['verify_localai_reasoning_control']),
+        'verify_localai_reasoning_control', lambda snapshot, stage: calls.append((snapshot, stage)) or {
+            'success': True, 'test_status': 'passed', 'format_pass': True,
+            'reasoning_control': 'supported', 'quality': 'unverified',
+            'reason_code': 'reasoning contrast passed',
+            'scope': 'localai false/true contrast'})
     status, result = request('/api/subtitles/profiles/test', 'POST', {
         'profile_id': 'localai-text', 'stage': 'correction', 'confirm_external_call': True})
     assert status == 200
-    assert result['test_status'] == 'not_run'
-    assert result['reasoning_control'] == 'unknown'
-    assert calls == []
-    status, result = request('/api/subtitles/profiles/test', 'POST', {
-        'profile_id': 'localai-text', 'stage': 'correction',
-        'confirm_external_call': True, 'allow_reasoning': True})
-    assert status == 200
     assert result['success'] is True
-    assert result['reasoning_control'] == 'unknown'
-    assert calls
+    assert result['reasoning_control'] == 'supported'
+    assert len(calls) == 1 and calls[0][1] == 'correction'
+    assert result['reasoning_verification']['status'] == 'supported'
+    status, listed = request('/api/subtitles/profiles')
+    assert status == 200
+    summary = listed['profiles'][0]['reasoning_verification']['correction']
+    assert summary['status'] == 'supported'
+    assert set(summary) == {'status', 'verified_at', 'scope', 'stale_reason'}
+    assert 'binding' not in json.dumps(listed)
+    assert 'attempt_id' not in json.dumps(listed)
+    assert request('/api/subtitles/profiles', 'PUT', {'profiles': [{
+        **profile_payload(profile_id='localai-text', provider='localai', capabilities=['correction']),
+        'reasoning_verification': {'correction': {'status': 'supported'}}} ]})[0] == 400
+
+
+def test_failed_localai_revalidation_revokes_previous_support(subtitle_http, monkeypatch):
+    from uav_downloader.daemon import subtitle_http as api
+    from uav_downloader.subtitles import llm
+
+    request, _, _ = subtitle_http
+    saved = profiles.save_profile(profiles.StageProfile(
+        profile_id='localai-text', display_name='LocalAI', kind='text', provider='localai',
+        capabilities=('correction',), base_url='http://127.0.0.1:1234/v1',
+        model='text-model', parameters_json='{}'))
+    attempt = profiles.begin_reasoning_verification(saved.profile_id, 'correction')
+    assert profiles.record_reasoning_verification(saved.profile_id, 'correction', attempt,
+                                                   status='supported', reason='reasoning contrast passed')
+    monkeypatch.setattr(llm, 'verify_localai_reasoning_control', lambda *_: {
+        'success': False, 'test_status': 'failed', 'format_pass': True,
+        'reasoning_control': 'unsupported', 'quality': 'unverified',
+        'reason_code': 'reasoning signal missing or indistinguishable',
+        'scope': 'localai false/true contrast'})
+    status, result = request('/api/subtitles/profiles/test', 'POST', {
+        'profile_id': 'localai-text', 'stage': 'correction', 'confirm_external_call': True})
+    assert status == 200 and result['success'] is False
+    assert result['reasoning_verification']['status'] == 'unsupported'
+    status, listed = request('/api/subtitles/profiles')
+    assert status == 200
+    assert listed['profiles'][0]['reasoning_verification']['correction']['status'] == 'unsupported'
 
 
 def test_video_listing_returns_safe_paths_and_local_vad_capability(subtitle_http):

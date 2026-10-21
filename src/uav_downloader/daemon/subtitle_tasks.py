@@ -30,13 +30,15 @@ def _snapshot_dict(snapshot):
         'profile_json': snapshot.profile_json,
         'credential_ref': snapshot.credential_ref,
         'snapshot_id': snapshot.snapshot_id,
+        'reasoning_verification_json': snapshot.reasoning_verification_json,
     }
 
 
 def _snapshot_from_dict(value):
     if not isinstance(value, dict):
         raise ValueError('字幕設定快照格式無效')
-    return ProfileSnapshot(value['profile_json'], value.get('credential_ref'), value['snapshot_id'])
+    return ProfileSnapshot(value['profile_json'], value.get('credential_ref'), value['snapshot_id'],
+                           value.get('reasoning_verification_json'))
 
 
 def _request_key(video_id, stages, snapshots, languages, input_result_id):

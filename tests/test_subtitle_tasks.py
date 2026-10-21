@@ -28,6 +28,19 @@ TEXT_SNAPSHOT = ProfileSnapshot(
 )
 
 
+def test_task_snapshot_serialization_preserves_reasoning_verification_binding():
+    from uav_downloader.daemon import subtitle_tasks
+
+    snapshot = ProfileSnapshot(
+        profile_json='{"capabilities":["correction"],"profile_id":"text"}',
+        credential_ref="credential-ref", snapshot_id="snapshot-text",
+        reasoning_verification_json='{"status":"supported","stage":"correction"}')
+
+    restored = subtitle_tasks._snapshot_from_dict(subtitle_tasks._snapshot_dict(snapshot))
+
+    assert restored == snapshot
+
+
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
     from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager

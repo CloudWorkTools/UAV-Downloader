@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 import threading
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
 from typing import Literal
 
@@ -39,10 +43,276 @@ class ProfileSnapshot:
     profile_json: str
     credential_ref: str | None
     snapshot_id: str
+    reasoning_verification_json: str | None = None
 
 
 def _profiles_path() -> Path:
     return asr._folder() / "subtitle_profiles.json"
+
+
+def _reasoning_path() -> Path:
+    return _profiles_path().with_name("subtitle_profile_reasoning.json")
+
+
+def _reasoning_key_path() -> Path:
+    return _profiles_path().with_name("subtitle_profile_reasoning.key")
+
+
+def _reasoning_key() -> bytes:
+    path = _reasoning_key_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            descriptor = os.open(path, flags)
+        else:
+            try:
+                os.fchmod(descriptor, 0o600)
+                key = os.urandom(32)
+                os.write(descriptor, key)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            return key
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
+            raise ValueError("字幕驗證金鑰權限無效")
+        key = os.read(descriptor, 33)
+        if len(key) != 32:
+            raise ValueError("字幕驗證金鑰格式無效")
+        return key
+    finally:
+        os.close(descriptor)
+
+
+def _read_reasoning_raw() -> dict:
+    descriptor = None
+    try:
+        descriptor = os.open(_reasoning_path(), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077 or metadata.st_size > 1024 * 1024:
+            raise ValueError("字幕推理驗證記錄權限無效")
+        chunks = []
+        remaining = 1024 * 1024 + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = json.loads(b"".join(chunks).decode("utf-8"))
+    except FileNotFoundError:
+        return {"schema": 1, "verifications": {}}
+    except ValueError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise ValueError("字幕推理驗證記錄無法讀取") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if (not isinstance(raw, dict) or raw.get("schema") != 1 or
+            not isinstance(raw.get("verifications"), dict)):
+        raise ValueError("字幕推理驗證記錄格式錯誤")
+    return raw
+
+
+def _write_reasoning_raw(raw: dict) -> None:
+    path = _reasoning_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".subtitle-reasoning-")
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(raw, stream, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _profile_parts(profile):
+    if isinstance(profile, StageProfile):
+        value = asdict(profile)
+        parameters = json.loads(value.pop("parameters_json"))
+    elif isinstance(profile, dict):
+        value = dict(profile)
+        parameters = value.get("parameters", {})
+    else:
+        raise ValueError("字幕模型設定檔格式錯誤")
+    return value, parameters
+
+
+def _verification_binding(profile, stage: Stage, credential_ref=None) -> str:
+    value, parameters = _profile_parts(profile)
+    if stage not in ("correction", "translation"):
+        raise ValueError("字幕推理驗證階段無效")
+    if value.get("provider") != "localai" or stage not in value.get("capabilities", ()):
+        raise ValueError("字幕模型設定檔不支援推理驗證")
+    reference = value.get("credential_ref") if credential_ref is None else credential_ref
+    base_url = value.get("base_url", "")
+    try:
+        key = resolve_credential(reference, base_url)
+    except ValueError:
+        raise ValueError("字幕模型服務憑證無法確認") from None
+    secret = _reasoning_key()
+    credential_fingerprint = hmac.new(
+        secret, b"uav-subtitle-credential-v1\0" + key.encode("utf-8"), hashlib.sha256).hexdigest()
+    identity = {
+        "profile_id": value.get("profile_id"), "stage": stage,
+        "provider": value.get("provider"), "base_url": base_url.rstrip("/"),
+        "model": value.get("model"), "parameters": parameters,
+        "credential_fingerprint": credential_fingerprint,
+    }
+    canonical = json.dumps(identity, ensure_ascii=False, sort_keys=True,
+                            separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hmac.new(secret, b"uav-subtitle-reasoning-binding-v1\0" + canonical,
+                    hashlib.sha256).hexdigest()
+
+
+def _verification_key(profile_id: str, stage: Stage) -> str:
+    return f"{profile_id}:{stage}"
+
+
+def _signed_verification(data: dict) -> dict:
+    value = dict(data)
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                           separators=(",", ":"), allow_nan=False).encode("utf-8")
+    value["signature"] = hmac.new(
+        _reasoning_key(), b"uav-subtitle-reasoning-evidence-v1\0" + canonical,
+        hashlib.sha256).hexdigest()
+    return value
+
+
+def _valid_verification(record: object) -> bool:
+    if not isinstance(record, dict) or not isinstance(record.get("signature"), str):
+        return False
+    data = {key: value for key, value in record.items() if key != "signature"}
+    try:
+        expected = _signed_verification(data)["signature"]
+    except (OSError, ValueError):
+        return False
+    return hmac.compare_digest(expected, record["signature"])
+
+
+def _current_profile(profile_id: str) -> StageProfile:
+    profile = next((item for item in load_profiles() if item.profile_id == profile_id), None)
+    if profile is None:
+        raise ValueError("找不到字幕模型設定檔")
+    return profile
+
+
+def _new_verification(profile: StageProfile, stage: Stage, binding: str, status: str,
+                      scope: str, reason: str | None, attempt_id: str | None = None) -> dict:
+    if status not in {"pending", "supported", "unsupported", "unknown"}:
+        raise ValueError("字幕推理驗證狀態無效")
+    if scope != "localai false/true contrast":
+        raise ValueError("字幕推理驗證範圍無效")
+    if reason not in (None, "reasoning contrast passed", "reasoning signal missing or indistinguishable",
+                      "probe failed", "profile changed during probe"):
+        reason = "probe failed" if reason else None
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    data = {"profile_id": profile.profile_id, "stage": stage, "status": status,
+            "binding": binding, "verified_at": now if status != "pending" else None,
+            "scope": scope, "reason": reason, "attempt_id": attempt_id}
+    return _signed_verification(data)
+
+
+def begin_reasoning_verification(profile_id: str, stage: Stage) -> dict:
+    """Invalidate old evidence and atomically start a fresh daemon-side probe."""
+    with _LOCK:
+        profile = _current_profile(profile_id)
+        binding = _verification_binding(profile, stage)
+        attempt_id = os.urandom(16).hex()
+        raw = _read_reasoning_raw()
+        raw["verifications"][_verification_key(profile_id, stage)] = _new_verification(
+            profile, stage, binding, "pending", "localai false/true contrast", None,
+            attempt_id)
+        _write_reasoning_raw(raw)
+        return {"binding": binding, "attempt_id": attempt_id}
+
+
+def record_reasoning_verification(profile_id: str, stage: Stage, attempt: dict, *,
+                                  status: str, reason: str | None = None) -> bool:
+    """Store a test result only if the profile and effective credential still match."""
+    with _LOCK:
+        try:
+            profile = _current_profile(profile_id)
+            current = _verification_binding(profile, stage)
+        except ValueError:
+            return False
+        if not isinstance(attempt, dict):
+            return False
+        raw = _read_reasoning_raw()
+        key = _verification_key(profile_id, stage)
+        pending = raw["verifications"].get(key)
+        binding = attempt.get("binding")
+        attempt_id = attempt.get("attempt_id")
+        if (not _valid_verification(pending) or pending.get("status") != "pending" or
+                pending.get("attempt_id") != attempt_id or not isinstance(binding, str) or
+                pending.get("binding") != binding or
+                not hmac.compare_digest(current, binding)):
+            return False
+        raw["verifications"][key] = _new_verification(
+            profile, stage, binding, status, "localai false/true contrast", reason)
+        _write_reasoning_raw(raw)
+        return True
+
+
+def reasoning_verification(profile: StageProfile, stage: Stage) -> dict:
+    """Return a redacted status for the current profile and effective credential."""
+    result = {"status": "unknown", "verified_at": None,
+              "scope": "localai false/true contrast", "stale_reason": "尚未驗證"}
+    try:
+        raw = _read_reasoning_raw()
+        record = raw["verifications"].get(_verification_key(profile.profile_id, stage))
+        if record is None:
+            return result
+        binding = _verification_binding(profile, stage)
+    except (OSError, ValueError):
+        result["stale_reason"] = "設定或憑證無法確認，請重新驗證"
+        return result
+    if not _valid_verification(record):
+        result["stale_reason"] = "驗證記錄無效，請重新驗證"
+        return result
+    result["verified_at"] = record.get("verified_at")
+    result["scope"] = record.get("scope")
+    if record.get("binding") != binding:
+        result["stale_reason"] = "設定或憑證已變更，請重新驗證"
+        return result
+    if record.get("status") == "supported":
+        result.update(status="supported", stale_reason=None)
+    elif record.get("status") == "unsupported":
+        result.update(status="unsupported", stale_reason="此設定未通過停用思考驗證")
+    elif record.get("status") == "pending":
+        result["stale_reason"] = "驗證進行中"
+    else:
+        result["stale_reason"] = "驗證未完成，請重新驗證"
+    return result
+
+
+def snapshot_reasoning_verified(snapshot: ProfileSnapshot, stage: Stage) -> bool:
+    """Authenticate snapshot evidence and bind it to its captured config and live credential."""
+    if not isinstance(snapshot, ProfileSnapshot) or not snapshot.reasoning_verification_json:
+        return False
+    try:
+        record = json.loads(snapshot.reasoning_verification_json)
+        profile = json.loads(snapshot.profile_json)
+        if (not isinstance(record, dict) or not isinstance(profile, dict) or
+                record.get("status") != "supported" or record.get("stage") != stage or
+                record.get("profile_id") != profile.get("profile_id") or
+                not _valid_verification(record)):
+            return False
+        binding = _verification_binding(profile, stage, snapshot.credential_ref)
+        return hmac.compare_digest(binding, str(record.get("binding", "")))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 def _canonical_parameters(value: str) -> str:
@@ -313,9 +583,22 @@ def snapshot(profile_id: str, stage: Stage) -> ProfileSnapshot:
     parameters = json.loads(public.pop("parameters_json"))
     public["parameters"] = parameters
     encoded = json.dumps(public, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    evidence = None
+    if stage in ("correction", "translation") and profile.provider == "localai":
+        try:
+            record = _read_reasoning_raw()["verifications"].get(
+                _verification_key(profile.profile_id, stage))
+            if isinstance(record, dict) and _valid_verification(record) and record.get("status") == "supported":
+                binding = _verification_binding(profile, stage)
+                if record.get("binding") == binding:
+                    evidence = json.dumps(record, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":"))
+        except (OSError, ValueError):
+            evidence = None
     import hashlib
-    identity = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-    return ProfileSnapshot(encoded, profile.credential_ref, identity)
+    identity_input = encoded if evidence is None else encoded + "\0" + evidence
+    identity = hashlib.sha256(identity_input.encode("utf-8")).hexdigest()
+    return ProfileSnapshot(encoded, profile.credential_ref, identity, evidence)
 
 
 def resolve_credential(credential_ref: str | None, base_url: str) -> str:

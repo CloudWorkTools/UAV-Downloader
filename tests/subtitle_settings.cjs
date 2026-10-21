@@ -16,7 +16,7 @@ const profiles = [
 const request = async (method, path, body) => {
   calls.push({method, path, body});
   if (path === '/api/subtitles/profiles' && method === 'GET') return {profiles};
-  if (path === '/api/subtitles/profiles' && method === 'PUT') return {profiles:body.profiles.map(profile=>({...profile,credential_configured:!!profile.api_key}))};
+  if (path === '/api/subtitles/profiles' && method === 'PUT') return {profiles:body.profiles.map(profile=>({...profile,credential_configured:!!profile.api_key,reasoning_verification:{correction:{status:'unknown',verified_at:null,scope:'localai false/true contrast',stale_reason:'設定或憑證已變更，請重新驗證'}}}))};
   if (path === '/api/subtitles/videos') return {videos:[], errors:[], capabilities:{local_vad:{available:false,reason:'部署未提供獨立 VAD'}}};
   if (path === '/api/subtitles/profiles/test' && body.action==='test' && !body.allow_reasoning) return {success:false,test_status:'not_run',format_pass:null,reasoning_control:'unknown',quality:'unverified',message:'未確認推理控制'};
   return {success:true, profiles};
@@ -48,11 +48,20 @@ async function run() {
   await subtitles.testProfile('text-one', 'correction', {allowReasoning:true});
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), {
     method:'POST', path:'/api/subtitles/profiles/test',
-    body:{action:'test', profile_id:'text-one', stage:'correction', confirm_external_call:true, allow_reasoning:true},
+    body:{action:'test', profile_id:'text-one', stage:'correction', confirm_external_call:true},
   });
   subtitles.state.reasoningControl['text-one']={correction:'supported'};
+  assert.throws(()=>subtitles.downloadRequest({selectedStages:['correction'],profileIds:{correction:'text-one'},targetLanguages:['zh-TW'],outputLanguages:['ja'],allowReasoning:false}),/尚未確認.*停用額外思考/,
+    'transient test state must not authorize normal LocalAI tasks');
+  subtitles.state.profiles.find(profile=>profile.profile_id==='text-one').reasoning_verification={
+    correction:{status:'supported',verified_at:'2026-10-21T00:00:00Z',scope:'localai false/true contrast',stale_reason:null},
+  };
+  assert.ok(subtitles.downloadRequest({selectedStages:['correction'],profileIds:{correction:'text-one'},targetLanguages:['zh-TW'],outputLanguages:['ja'],allowReasoning:false}),
+    'saved profile-specific verification should authorize the ordinary non-reasoning request');
   await subtitles.saveProfile({...profiles[2],model:'changed-model'});
   assert.equal(subtitles.state.reasoningControl['text-one'],undefined,'changing a tested profile runtime invalidates cached capability state');
+  assert.equal(subtitles.state.profiles.find(profile=>profile.profile_id==='text-one').reasoning_verification.correction.status,'unknown',
+    'server save response should replace stale verification with unknown');
   assert.match(context.window.createSubtitleProfileId(),/^profile-[a-z0-9-]+$/,'new-profile IDs must work outside secure contexts without randomUUID');
 
   const pipeline = {

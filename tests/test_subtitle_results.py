@@ -46,6 +46,23 @@ def test_successful_versions_keep_latest_previous_and_adoption_separate(
     assert listed[third.result_id].adopted is True
 
 
+def test_result_snapshot_serialization_preserves_reasoning_verification_binding():
+    snapshot = ProfileSnapshot(
+        profile_json='{"capabilities":["correction"],"profile_id":"text"}',
+        credential_ref="credential-ref", snapshot_id="snapshot-text",
+        reasoning_verification_json='{"status":"supported","stage":"correction"}')
+    record = {
+        'result_id': 'result-1', 'video_id': 'video-1', 'stage': 'correction',
+        'language': None, 'input_result_ids': [], 'profile_snapshot': results._snapshot_to_dict(snapshot),
+        'intervals': None, 'segments': None, 'created_at': 1.0,
+        'content_available': False,
+    }
+
+    restored = results._from_dict(record)
+
+    assert restored.profile_snapshot == snapshot
+
+
 def test_restore_previous_adopts_without_creating_a_successful_version(
         monkeypatch, tmp_path):
     monkeypatch.setattr(results, '_results_root', lambda: tmp_path)
