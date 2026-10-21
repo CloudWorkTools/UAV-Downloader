@@ -14,14 +14,13 @@ import secrets
 import signal
 import subprocess
 import sys
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
 
 OWNER_LABEL = 'io.uav-downloader.evidence-owner'
 DEFAULT_EVIDENCE_ROOT = Path.home() / '.local' / 'state' / 'uav-docker-evidence'
-MAX_TIMEOUT_SECONDS = min(threading.TIMEOUT_MAX, float(2**31 - 1))
+MAX_TIMEOUT_SECONDS = 24 * 60 * 60
 
 
 class EvidenceError(Exception):
@@ -106,9 +105,10 @@ class Evidence:
         finally:
             os.chmod(self.events_path, 0o600)
 
-    def private_file(self, name: str, data: str) -> None:
+    def private_file(self, name: str, data: str, *, exclusive: bool = False) -> None:
         path = self.path / name
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+        fd = os.open(path, flags, 0o600)
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, 'w') as f:
             f.write(data)
@@ -120,15 +120,14 @@ class Evidence:
 class Docker:
     def __init__(self, evidence: Evidence):
         self.evidence = evidence
-        self.call_number = 0
 
-    def save_stderr(self, number: int, operation: str, stderr: str) -> None:
+    def save_stderr(self, call_id: str, operation: str, stderr: str) -> None:
         safe_operation = re.sub(r'[^A-Za-z0-9._-]+', '_', operation)
-        self.evidence.private_file(f'docker-{number:04d}-{safe_operation}.stderr', stderr)
+        self.evidence.private_file(f'docker-{call_id}-{safe_operation}.stderr', stderr, exclusive=True)
 
-    def save_payload_logs(self, number: int, prefix: str, stdout: str, stderr: str) -> None:
-        self.evidence.private_file(f'{prefix}-{number:04d}.stdout', stdout)
-        self.evidence.private_file(f'{prefix}-{number:04d}.stderr', stderr)
+    def save_payload_logs(self, call_id: str, prefix: str, stdout: str, stderr: str) -> None:
+        self.evidence.private_file(f'{prefix}-{call_id}.stdout', stdout, exclusive=True)
+        self.evidence.private_file(f'{prefix}-{call_id}.stderr', stderr, exclusive=True)
         self.evidence.private_file(f'{prefix}.stdout', stdout)
         self.evidence.private_file(f'{prefix}.stderr', stderr)
 
@@ -151,38 +150,39 @@ class Docker:
     def call(self, args: list[str], *, timeout: float = 30, save_logs: bool = False,
              log_prefix: str = 'payload') -> subprocess.CompletedProcess:
         op = self.operation(args)
-        self.call_number += 1
-        call_number = self.call_number
+        call_id = uuid.uuid4().hex
         signature = hashlib.sha256(json.dumps(args).encode()).hexdigest()
-        self.evidence.event(op, 'start', args_sha256=signature)
+        self.evidence.event(op, 'start', call_id=call_id, args_sha256=signature)
         try:
             proc = subprocess.Popen(['docker', *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except OSError as exc:
-            self.evidence.event(op, 'end', args_sha256=signature, failure_type=type(exc).__name__)
+            self.evidence.event(op, 'end', call_id=call_id, args_sha256=signature,
+                                failure_type=type(exc).__name__)
             raise EvidenceError('could not start the Docker CLI') from None
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
             stdout, stderr = proc.communicate()
-            self.evidence.event(op, 'end', args_sha256=signature, timeout=True, signal=None)
-            self.save_stderr(call_number, op, stderr)
+            self.evidence.event(op, 'end', call_id=call_id, args_sha256=signature, timeout=True, signal=None)
+            self.save_stderr(call_id, op, stderr)
             if save_logs:
-                self.save_payload_logs(call_number, log_prefix, stdout, stderr)
+                self.save_payload_logs(call_id, log_prefix, stdout, stderr)
             raise TimeoutError(op)
         except Interrupted as exc:
             proc.kill()
             stdout, stderr = proc.communicate()
-            self.evidence.event(op, 'end', args_sha256=signature, timeout=False, signal=exc.signum)
-            self.save_stderr(call_number, op, stderr)
+            self.evidence.event(op, 'end', call_id=call_id, args_sha256=signature,
+                                timeout=False, signal=exc.signum)
+            self.save_stderr(call_id, op, stderr)
             if save_logs:
-                self.save_payload_logs(call_number, log_prefix, stdout, stderr)
+                self.save_payload_logs(call_id, log_prefix, stdout, stderr)
             raise
-        self.evidence.event(op, 'end', args_sha256=signature, exit_code=proc.returncode)
+        self.evidence.event(op, 'end', call_id=call_id, args_sha256=signature, exit_code=proc.returncode)
         if proc.returncode:
-            self.save_stderr(call_number, op, stderr)
+            self.save_stderr(call_id, op, stderr)
         if save_logs:
-            self.save_payload_logs(call_number, log_prefix, stdout, stderr)
+            self.save_payload_logs(call_id, log_prefix, stdout, stderr)
         return subprocess.CompletedProcess(['docker', *args], proc.returncode, stdout, stderr)
 
 
@@ -464,6 +464,11 @@ def cleanup_resources(docker: Docker, ev: Evidence) -> list[str]:
             if (obj.get('State') or {}).get('Running'):
                 retained.append(resource['id'])
                 resource['cleanup_reason'] = 'running_container_preserved'
+                ev._save_manifest()
+                continue
+            if resource.get('logs_status') == 'failed':
+                retained.append(resource['id'])
+                resource['cleanup_reason'] = 'payload_logs_unavailable'
                 ev._save_manifest()
                 continue
             if not on_expected_daemon(docker, expected):
@@ -807,13 +812,15 @@ def main(argv=None) -> int:
     run_parser = sub.add_parser('run', help='record one owned container execution')
     run_parser.add_argument('--evidence-root', type=Path, default=DEFAULT_EVIDENCE_ROOT)
     run_parser.add_argument('--image', required=True)
-    run_parser.add_argument('--timeout', type=positive_timeout, default=600)
+    run_parser.add_argument('--timeout', type=positive_timeout, default=600,
+                            help='maximum wait in seconds (maximum 86400, or 24 hours)')
     run_parser.add_argument('command', nargs=argparse.REMAINDER)
     pre_parser = sub.add_parser('preflight', help='inspect an image and optionally probe isolated scratch resources')
     pre_parser.add_argument('--evidence-root', type=Path, default=DEFAULT_EVIDENCE_ROOT)
     pre_parser.add_argument('--image', required=True)
     pre_parser.add_argument('--probe', action='store_true')
-    pre_parser.add_argument('--timeout', type=positive_timeout, default=120)
+    pre_parser.add_argument('--timeout', type=positive_timeout, default=120,
+                            help='maximum wait in seconds (maximum 86400, or 24 hours)')
     pre_parser.add_argument('--uid', type=positive_id)
     pre_parser.add_argument('--gid', type=positive_id)
     cleanup_parser = sub.add_parser('cleanup', help='remove only resources proven by a run manifest')

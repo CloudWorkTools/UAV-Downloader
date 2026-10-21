@@ -26,10 +26,12 @@ python3 scripts/docker_evidence.py run --image IMAGE_TAG_OR_ID --timeout 30 -- s
 
 每次執行都會輸出唯一 run ID 與私有 evidence 目錄。Manifest 會在 start 前保存精確容器 ID、名稱、labels 和 Mounts；events 記錄 Docker 呼叫的開始、結束、exit code、timeout 與 signal。容器 stdout/stderr 和 Docker CLI 錯誤診斷留在該目錄的私有檔案，摘要不輸出原始命令、環境變數或 inspect 資料。若映像宣告匿名 volume，cleanup 會保留並列出它們，因此結果會標示 `cleanup_pending`。
 
+`--timeout` 接受大於 0 且不超過 86400 秒（24 小時）的值，避免底層程序等待超時的整數範圍溢位。每次 Docker CLI 呼叫都有獨立 ID，錯誤診斷以不覆寫的私有檔保存。若 payload logs 無法擷取，cleanup 會保留該容器，直到其私有輸出證據可供檢查。
+
 對已完成的 run，可用摘要中的 run ID 清除本工具建立且可驗明的停止容器：
 
 ```bash
 python3 scripts/docker_evidence.py cleanup RUN_ID
 ```
 
-Cleanup 只在 manifest 與目前 daemon/context fingerprint 相符、容器 ID/name/owner label 完全吻合時移除停止容器；執行中、狀態不明、Mounts 未記錄、volume 參照未能完整掃描或匿名 volume 一律保留。它不使用 force、prune、adopt 或既有資源標記功能。Evidence 預設存於 `~/.local/state/uav-docker-evidence`，目錄權限為 `0700`，manifest、events、logs 與 Docker 診斷檔為 `0600`。只有內容為隨機非敏感值的 readonly client sentinel 檔設為 `0444`，供 bind namespace hash 比對。
+Cleanup 只在 manifest 與目前 daemon/context fingerprint 相符、容器 ID/name/owner label 完全吻合時移除停止容器；執行中、狀態不明、Mounts 未記錄、logs 未成功取得、volume 參照未能完整掃描或匿名 volume 一律保留。它不使用 force、prune、adopt 或既有資源標記功能。Evidence 預設存於 `~/.local/state/uav-docker-evidence`，目錄權限為 `0700`，manifest、events、logs 與 Docker 診斷檔為 `0600`。只有內容為隨機非敏感值的 readonly client sentinel 檔設為 `0444`，供 bind namespace hash 比對。

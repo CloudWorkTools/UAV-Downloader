@@ -7,7 +7,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 
@@ -383,6 +382,27 @@ class DockerEvidenceTests(unittest.TestCase):
         self.assertNotIn('logs-secret-error', result.stdout + result.stderr)
         diagnostic = next(Path(summary['evidence_path']).glob('docker-*-logs.stderr'))
         self.assertIn('logs-secret-error', diagnostic.read_text())
+        cleanup = self.invoke('cleanup', summary['run_id'], '--evidence-root', str(self.evidence))
+        self.assertEqual(cleanup.returncode, 1)
+        cleanup_summary = json.loads(cleanup.stdout)
+        self.assertEqual(cleanup_summary['status'], 'cleanup_pending')
+        self.assertEqual(cleanup_summary['retained_resources'], ['container-1'])
+        self.assertFalse(any(call[0] == 'rm' for call in map(json.loads, self.log.read_text().splitlines())))
+
+    def test_repeated_cleanup_failures_keep_unique_diagnostics(self):
+        result = self.run_once()
+        summary = json.loads(result.stdout)
+        for _ in range(2):
+            cleanup = self.invoke('cleanup', summary['run_id'], '--evidence-root', str(self.evidence),
+                                  env={'FAKE_CONTAINER_INSPECT_FAIL': '1'})
+            self.assertEqual(cleanup.returncode, 1)
+            self.assertNotIn('inspect-secret-error', cleanup.stdout + cleanup.stderr)
+        run_dir = Path(summary['evidence_path'])
+        diagnostics = list(run_dir.glob('docker-*-inspect.stderr'))
+        self.assertEqual(len(diagnostics), 2)
+        self.assertEqual(len({path.name for path in diagnostics}), 2)
+        self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in diagnostics))
+        self.assertTrue(all('inspect-secret-error' in path.read_text() for path in diagnostics))
 
     def test_create_failure_reports_manifest_resource_without_exact_id(self):
         result = self.run_once({'FAKE_CREATE_FAIL': '1'})
@@ -398,13 +418,23 @@ class DockerEvidenceTests(unittest.TestCase):
         self.assertIn('create-secret-error', diagnostic.read_text())
 
     def test_invalid_and_unsafe_timeouts_are_rejected_before_docker_calls(self):
-        unsafe = ['nan', 'inf', '-inf', '1e309', str(threading.TIMEOUT_MAX * 2)]
+        unsafe = ['nan', 'inf', '-inf', '1e309', '3000000', '86401']
         for value in unsafe:
             with self.subTest(timeout=value):
                 result = self.invoke('run', '--evidence-root', str(self.evidence), '--image', 'private-image',
                                      '--timeout', value, '--', 'true')
                 self.assertEqual(result.returncode, 2)
                 self.assertFalse(self.log.exists())
+
+    def test_docker_event_start_and_end_share_unique_call_id(self):
+        result = self.run_once()
+        run_dir = Path(json.loads(result.stdout)['evidence_path'])
+        events = [json.loads(line) for line in (run_dir / 'events.jsonl').read_text().splitlines()]
+        by_id = {}
+        for event in events:
+            by_id.setdefault(event['call_id'], set()).add(event['phase'])
+        self.assertTrue(by_id)
+        self.assertTrue(all(phases == {'start', 'end'} for phases in by_id.values()))
 
     def test_readonly_probe_uses_exact_client_path_and_cleans_its_owned_scratch(self):
         result = self.invoke('preflight', '--evidence-root', str(self.evidence), '--image', 'private-image', '--probe')
