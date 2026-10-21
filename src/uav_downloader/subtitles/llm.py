@@ -883,6 +883,7 @@ def verify_localai_reasoning_control(profile_snapshot, stage):
         base = str(profile.get("base_url") or "").rstrip("/")
         if not isinstance(model, str) or not model or not base:
             return unknown
+        _validate_text_parameters("localai", profile.get("parameters", {}))
         endpoint = _provider_endpoint(LlmTranslationSettings(
             enabled=True, provider="localai", model=model, base_url=base))
         key = resolve_credential(profile_snapshot.credential_ref, base)
@@ -891,11 +892,13 @@ def verify_localai_reasoning_control(profile_snapshot, stage):
         job = ("Correct spelling without changing meaning." if stage == "correction" else
                "Translate faithfully into English while preserving subtitle brevity.")
         prompt = job + ' Input: [{"id":"probe-1","text":"こんにちは"}]'
-        parameters = {"temperature": 0, "max_output_tokens": 64}
+        # The probe is intentionally deterministic and bounded regardless of a
+        # profile's production output budget; settings are validated above.
+        parameters = {"temperature": 0, "max_output_tokens": 128}
         headers, disabled_payload = _stage_payload(
             "localai", model, key, parameters, prompt, system, True)
         enabled_payload = json.loads(json.dumps(disabled_payload))
-        enabled_payload["reasoning_effort"] = "medium"
+        enabled_payload["reasoning_effort"] = "low"
         enabled_payload["metadata"]["enable_thinking"] = "true"
         responses = []
         with requests.Session() as session:
@@ -909,44 +912,57 @@ def verify_localai_reasoning_control(profile_snapshot, stage):
                     responses.append(_read_reasoning_probe_response(response))
                 finally:
                     _close_response(response)
-        valid, signals = [], []
-        for envelope in responses:
-            try:
-                choice = envelope["choices"][0]
-                if choice.get("finish_reason") not in (None, "stop", "eos"):
-                    raise ValueError
-                message = choice["message"]
-                content = message.get("content")
-                decoded = json.loads(content, object_pairs_hook=_unique_object)
-                is_valid = (isinstance(decoded, list) and len(decoded) == 1 and
-                            isinstance(decoded[0], dict) and set(decoded[0]) == {"id", "text"} and
-                            decoded[0]["id"] == "probe-1" and _valid_subtitle_text(decoded[0]["text"]))
-                if not is_valid:
-                    raise ValueError
-                valid.append(True)
-                signal = any(isinstance(message.get(field), str) and message[field].strip()
-                             for field in ("reasoning", "reasoning_content"))
-                signals.append(signal)
-            except (AttributeError, IndexError, KeyError, TypeError, ValueError):
-                valid.append(False)
-                signals.append(False)
-        if all(valid) and signals == [False, True]:
+        false_message = _reasoning_probe_message(responses[0], allow_truncated=False)
+        false_content = false_message.get("content")
+        try:
+            decoded = json.loads(false_content, object_pairs_hook=_unique_object)
+        except (TypeError, ValueError):
+            return {**unknown, "format_pass": False,
+                    "message": "停用思考的模型回應格式不符合字幕要求。"}
+        false_format = (isinstance(decoded, list) and len(decoded) == 1 and
+                        isinstance(decoded[0], dict) and set(decoded[0]) == {"id", "text"} and
+                        decoded[0]["id"] == "probe-1" and _valid_subtitle_text(decoded[0]["text"]))
+        if not false_format:
+            return {**unknown, "format_pass": False,
+                    "message": "停用思考的模型回應格式不符合字幕要求。"}
+        false_signal = _has_reasoning_signal(false_message)
+        true_message = _reasoning_probe_message(responses[1], allow_truncated=True)
+        true_signal = _has_reasoning_signal(true_message)
+        if not false_signal and true_signal:
             return {"success": True, "test_status": "passed", "format_pass": True,
                     "reasoning_control": "supported", "quality": "unverified",
                     "message": "LocalAI false/true 對照已確認推理控制。",
                     "reason_code": "reasoning contrast passed",
                     "scope": "localai false/true contrast"}
-        if all(valid):
-            return {"success": False, "test_status": "failed", "format_pass": True,
-                    "reasoning_control": "unsupported", "quality": "unverified",
-                    "message": "模型未呈現可區分的 false/true 推理欄位證據。",
-                    "reason_code": "reasoning signal missing or indistinguishable",
-                    "scope": "localai false/true contrast"}
-        return {**unknown, "format_pass": False,
-                "message": "模型回應格式不符合推理控制驗證要求。"}
+        return {"success": False, "test_status": "failed", "format_pass": True,
+                "reasoning_control": "unsupported", "quality": "unverified",
+                "message": "模型未呈現可區分的 false/true 推理欄位證據。",
+                "reason_code": "reasoning signal missing or indistinguishable",
+                "scope": "localai false/true contrast"}
     except (requests.RequestException, LlmTranslationError, OSError, TypeError, ValueError,
             KeyError, IndexError):
         return unknown
+
+
+def _reasoning_probe_message(envelope, *, allow_truncated):
+    if not isinstance(envelope, dict):
+        raise ValueError("invalid probe envelope")
+    choices = envelope.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        raise ValueError("invalid probe choices")
+    choice = choices[0]
+    finishes = (None, "stop", "eos", "length") if allow_truncated else (None, "stop", "eos")
+    if choice.get("finish_reason") not in finishes:
+        raise ValueError("invalid probe finish reason")
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        raise ValueError("invalid probe message")
+    return message
+
+
+def _has_reasoning_signal(message):
+    return any(isinstance(message.get(field), str) and message[field].strip()
+               for field in ("reasoning", "reasoning_content"))
 
 
 def _read_reasoning_probe_response(response):

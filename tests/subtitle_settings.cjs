@@ -22,14 +22,34 @@ const request = async (method, path, body) => {
   return {success:true, profiles};
 };
 
+function fakeElement(isSelect=false) {
+  return {textContent:'',children:[],options:[],value:'',append(...items){this.children.push(...items);if(isSelect)this.options.push(...items);},
+    replaceChildren(...items){this.children=[...items];if(isSelect)this.options=[...items];},addEventListener(){},setAttribute(){}};
+}
+
 async function run() {
   let confirmations = 0;
+  const confirmationMessages=[];
   let approved = false;
-  const subtitles = context.window.createSubtitleSettings({request, render:()=>{}, confirmExternal:()=>{confirmations++; return approved;}});
+  const subtitles = context.window.createSubtitleSettings({request, render:()=>{}, confirmExternal:message=>{confirmations++;confirmationMessages.push(message);return approved;}});
   await subtitles.load();
   assert.equal(calls.length, 2, 'loading UI data must not probe a model service');
   assert.equal(subtitles.state.localVad.available, false);
   assert.match(subtitles.state.localVad.reason, /獨立 VAD/);
+  subtitles.state.profiles.find(profile=>profile.profile_id==='text-one').reasoning_verification={
+    correction:{status:'supported',verified_at:'2026-10-21T00:00:00Z',scope:'localai false/true contrast',stale_reason:null},
+  };
+  const profileList=fakeElement();
+  const elements={'subtitle-profile-list':profileList};
+  for(const stage of ['vad','asr','correction','translation'])elements[`subtitle-stage-profile-${stage}`]=fakeElement(true);
+  const root={getElementById:id=>elements[id]||null,createElement:()=>fakeElement(),querySelectorAll:()=>[]};
+  subtitles.renderDom(root);
+  const visibleText=JSON.stringify(profileList.children);
+  assert.match(visibleText,/範圍：此模型／連線／參數的開關對照/,
+    'LocalAI verification UI must show the exact profile-scoped evidence range');
+  subtitles.state.profiles.find(profile=>profile.profile_id==='text-one').reasoning_verification={
+    correction:{status:'unknown',verified_at:null,scope:'localai false/true contrast',stale_reason:'尚未驗證'},
+  };
   const edited={...profiles[0],display_name:'Edited',credential_configured:true};
   await subtitles.saveProfile(edited);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).body)),{profiles:[{...profiles[0],display_name:'Edited'}]});
@@ -41,6 +61,8 @@ async function run() {
   assert.equal(await subtitles.discoverModels('text-one'), false);
   assert.equal(confirmations, 2, 'each external request must be confirmed');
   assert.equal(calls.length, beforeExternal, 'cancelled confirmation must make no external request');
+  assert.match(confirmationMessages[0],/兩筆小型合成文字請求.*短暫啟用思考/,
+    'LocalAI confirmation must explain the temporary true-mode contrast probe');
 
   approved = true;
   const blockedReport=await subtitles.testProfile('text-one','correction');

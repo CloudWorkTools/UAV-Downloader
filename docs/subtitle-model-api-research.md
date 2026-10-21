@@ -58,7 +58,7 @@ Silero 後端以模型 YAML 選擇 `backend: silero-vad`，`options` 可設定 `
 
 LocalAI 同一設定文件對 `reasoning.disable` 同時描述「停用 extraction」與驅動 `enable_thinking` 預設。`reasoning.strip_reasoning_only` 則明確是移除輸出推理文字。驗收不能只確認結果沒有 `<think>`；應固定後端與模板，確認非思考參數確實生效。文件亦指出部分模型忽略 `enable_thinking`，須用模型對應的 `reasoning_effort`。[LocalAI 模型設定](https://localai.io/docs/advanced/model-configuration/)。
 
-影匣對 LocalAI 的校正與翻譯設定檔提供配對驗證：以小型合成文字分別送出 `reasoning_effort=none`／`enable_thinking=false` 與明確啟用推理的請求，兩次都須回傳合法字幕 JSON，且只有啟用請求具明確 reasoning 欄位，才保存該設定檔、階段與憑證所對應的成功結果。保存結果不包含 API 金鑰或探測文字；設定變更會使目前驗證失效，字幕任務會沿用當時的設定快照並在執行時再次確認。這項驗證只說明該服務當時呈現的控制行為，服務端更換權重、模板或版本後仍須重新驗證。
+影匣對 LocalAI 的校正與翻譯設定檔提供配對驗證：先驗證設定參數，再以小型合成文字分別送出 `reasoning_effort=none`／`enable_thinking=false` 與明確啟用推理的請求。探測固定用 `temperature=0`、最多 128 個輸出 token，避免採用設定檔中較大的生成額度。正式使用的停用模式必須回傳合法字幕 JSON、正常結束且沒有 reasoning 欄位；啟用模式只作控制欄位對照，須回傳合法 OpenAI 相容回應結構與非空 reasoning 欄位，容許在 token 上限處截斷後續內容。啟用模式的內容不會用作字幕。保存結果不包含 API 金鑰或探測文字；設定變更會使目前驗證失效，字幕任務會沿用當時的設定快照並在執行時再次確認。這項驗證只說明該服務當時呈現的控制行為，服務端更換權重、模板或版本後仍須重新驗證。
 
 Ollama 原生 API 用 `format` 接 JSON Schema，LM Studio 的 Chat Completions 用 `response_format.type=json_schema`。LM Studio 另提醒模型本身可能無法可靠完成結構化任務。LocalAI 可列為文字聊天候選，但本次未完整查證所有後端對 `response_format.json_schema` 的一致支援，不能先標示為通用保證。[Ollama structured outputs](https://docs.ollama.com/capabilities/structured-outputs)、[LM Studio structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output)、[LocalAI 文字生成](https://localai.io/docs/features/text-generation/)。
 

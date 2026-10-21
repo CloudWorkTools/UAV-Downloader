@@ -54,7 +54,11 @@
     async function testProfile(profileId, stage, {allowReasoning=false}={}) {
       const profile = state.profiles.find(item => item.profile_id === profileId);
       if (!profile) throw new Error('請先選擇字幕模型設定檔');
-      if (!confirmExternal(`即將向 ${profile.base_url || '尚未設定的模型服務'} 傳送小型${STAGE_LABELS[stage] || '字幕'}相容性測試。這會呼叫外部服務並可能產生費用。要繼續嗎？`)) return false;
+      const localAiContrast=profile.provider==='localai'&&['correction','translation'].includes(stage);
+      const contrastText=localAiContrast
+        ? '會送出兩筆小型合成文字請求：一筆停用思考，另一筆短暫啟用思考作對照；這只用來驗證設定，正常字幕校正／翻譯仍要求停用思考。'
+        : '';
+      if (!confirmExternal(`即將向 ${profile.base_url || '尚未設定的模型服務'} 傳送小型${STAGE_LABELS[stage] || '字幕'}相容性測試。${contrastText}這會呼叫外部服務並可能產生費用。要繼續嗎？`)) return false;
       const body={action:'test', profile_id:profileId, stage, confirm_external_call:true};
       if(profile.provider!=='localai') body.allow_reasoning=!!allowReasoning;
       const report = await api('POST','/api/subtitles/profiles/test',body);
@@ -125,7 +129,7 @@
               const label=result.status==='supported'?'已驗證停用思考':result.status==='unsupported'?'未通過停用思考驗證':'尚未驗證';
               const when=result.verified_at?` · ${result.verified_at}`:'';
               const stale=result.stale_reason?` · ${result.stale_reason}`:'';
-              return `${STAGE_LABELS[stage]||stage}：${label}${when}${stale}`;
+              return `${STAGE_LABELS[stage]||stage}：${label}（範圍：此模型／連線／參數的開關對照）${when}${stale}`;
             }).join('；') : '';
           const verificationNote=verification?el('span',verification,'basis-full text-xs text-gray-400'):null;
           const edit=el('button','編輯','h-10 rounded border border-[#3e3e4e] px-3 text-sm');
