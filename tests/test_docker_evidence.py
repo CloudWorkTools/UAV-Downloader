@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -42,6 +43,8 @@ elif args[:2] == ['info', '--format']:
 elif args[:2] == ['image', 'inspect']:
     print(json.dumps([{'Id': 'sha256:image-test', 'Config': config()}]))
 elif args and args[0] == 'create':
+    if os.environ.get('FAKE_CREATE_FAIL'):
+        print('create-secret-error', file=sys.stderr); sys.exit(1)
     name = next((args[i + 1] for i, x in enumerate(args[:-1]) if x == '--name'), None)
     labels = [args[i + 1] for i, x in enumerate(args[:-1]) if x == '--label']
     mounts = []
@@ -89,13 +92,22 @@ elif args and args[0] == 'start':
                 state['volumes'][mount['Name']].setdefault('data', {})['uav-probe'] = value
     save()
 elif args and args[0] == 'wait':
-    if os.environ.get('FAKE_WAIT_SLEEP'): time.sleep(float(os.environ['FAKE_WAIT_SLEEP']))
+    if os.environ.get('FAKE_WAIT_SLEEP'):
+        print('wait-private-error', file=sys.stderr)
+        time.sleep(float(os.environ['FAKE_WAIT_SLEEP']))
     c = container(args[-1]); c['status'] = 'exited'
     default_exit = '0' if 'uav-probe' in ' '.join(c.get('command', [])) or 'os.chown' in ' '.join(c.get('command', [])) else '7'
     c['exit'] = int(os.environ.get('FAKE_EXIT', default_exit)); save(); print(c['exit'])
 elif args and args[0] == 'logs':
     if os.environ.get('FAKE_LOGS_FAIL'):
         print('logs-secret-error', file=sys.stderr); sys.exit(1)
+    if os.environ.get('FAKE_LOGS_SIGNAL') and not state.get('signal_log_emitted'):
+        state['signal_log_emitted'] = True; save()
+        print('interrupted-log-stdout')
+        sys.stdout.flush()
+        print('interrupted-log-stderr', file=sys.stderr)
+        state['signal_log_ready'] = True; save()
+        time.sleep(5)
     c = container(args[-1]); command = ' '.join(c.get('command', []))
     if 'uav-client-sentinel' in command:
         bind = next(x for x in c['mounts'] if x['Type'] == 'bind')
@@ -205,6 +217,9 @@ class DockerEvidenceTests(unittest.TestCase):
         stop_index = next(i for i, call in enumerate(calls) if call[0] == 'stop')
         self.assertTrue(any(call[0] == 'inspect' and i < stop_index for i, call in enumerate(calls)))
         self.assertTrue(summary['container_state'] in ('exited', 'pending'))
+        diagnostic = next(Path(summary['evidence_path']).glob('docker-*-wait.stderr'))
+        self.assertEqual(diagnostic.stat().st_mode & 0o777, 0o600)
+        self.assertIn('wait-private-error', diagnostic.read_text())
 
     def test_stop_failure_reports_payload_still_running_and_preserves_container(self):
         result = self.invoke('run', '--evidence-root', str(self.evidence), '--image', 'private-image',
@@ -246,6 +261,35 @@ class DockerEvidenceTests(unittest.TestCase):
         events = [json.loads(line) for line in (Path(summary['evidence_path']) / 'events.jsonl').read_text().splitlines()]
         self.assertTrue(any(event['operation'] == 'wait' and event.get('signal') == signal.SIGTERM
                             for event in events))
+        diagnostic = next(Path(summary['evidence_path']).glob('docker-*-wait.stderr'))
+        self.assertEqual(diagnostic.stat().st_mode & 0o777, 0o600)
+        self.assertIn('wait-private-error', diagnostic.read_text())
+
+    def test_sigterm_during_log_capture_keeps_partial_stdout_and_stderr(self):
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPT), 'run', '--evidence-root', str(self.evidence),
+             '--image', 'private-image', '--timeout', '10', '--', 'python', '-c', 'pass'],
+            cwd=ROOT, env={**self.env, 'FAKE_LOGS_SIGNAL': '1'},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if self.state.exists() and json.loads(self.state.read_text()).get('signal_log_ready'):
+                break
+            if process.poll() is not None:
+                self.fail('evidence command exited before Docker logs started')
+            time.sleep(0.02)
+        else:
+            process.kill()
+            self.fail('Docker logs did not start')
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, stderr)
+        summary = json.loads(stdout)
+        run_dir = Path(summary['evidence_path'])
+        self.assertTrue(any('interrupted-log-stdout' in path.read_text()
+                            for path in run_dir.glob('payload-*.stdout')))
+        self.assertTrue(any('interrupted-log-stderr' in path.read_text()
+                            for path in run_dir.glob('payload-*.stderr')))
 
     def test_cleanup_refuses_when_daemon_fingerprint_changes(self):
         result = self.run_once()
@@ -306,6 +350,11 @@ class DockerEvidenceTests(unittest.TestCase):
         self.assertEqual(summary['status'], 'failed')
         manifest = json.loads((Path(summary['evidence_path']) / 'manifest.json').read_text())
         self.assertEqual(manifest['resources'][0]['state'], 'created')
+        self.assertEqual(summary['pending_resources'][0]['id'], 'container-1')
+        self.assertEqual(summary['cleanup_status'], 'pending')
+        diagnostic = next(Path(summary['evidence_path']).glob('docker-*-start.stderr'))
+        self.assertEqual(diagnostic.stat().st_mode & 0o777, 0o600)
+        self.assertIn('start-secret-error', diagnostic.read_text())
 
     def test_inspect_failure_preserves_container_when_mount_ownership_is_unknown(self):
         result = self.run_once({'FAKE_CONTAINER_INSPECT_FAIL': '1'})
@@ -318,6 +367,9 @@ class DockerEvidenceTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertFalse(any(call[0] == 'start' for call in calls))
         self.assertFalse(any(call[0] == 'rm' for call in calls))
+        self.assertEqual(summary['pending_resources'][0]['id'], 'container-1')
+        self.assertFalse(summary['pending_resources'][0]['mounts_recorded'])
+        self.assertEqual(summary['cleanup_status'], 'pending')
 
     def test_logs_failure_is_recorded_privately_without_changing_payload_result(self):
         result = self.run_once({'FAKE_LOGS_FAIL': '1'})
@@ -326,7 +378,33 @@ class DockerEvidenceTests(unittest.TestCase):
         manifest = json.loads((Path(summary['evidence_path']) / 'manifest.json').read_text())
         self.assertEqual(summary['status'], 'completed')
         self.assertEqual(manifest['resources'][0]['logs_status'], 'failed')
+        self.assertEqual(summary['logs_status'], 'failed')
+        self.assertIn('private evidence', summary['logs_warning'])
         self.assertNotIn('logs-secret-error', result.stdout + result.stderr)
+        diagnostic = next(Path(summary['evidence_path']).glob('docker-*-logs.stderr'))
+        self.assertIn('logs-secret-error', diagnostic.read_text())
+
+    def test_create_failure_reports_manifest_resource_without_exact_id(self):
+        result = self.run_once({'FAKE_CREATE_FAIL': '1'})
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('create-secret-error', result.stdout + result.stderr)
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary['cleanup_status'], 'pending')
+        self.assertIsNone(summary['pending_resources'][0]['id'])
+        manifest = json.loads((Path(summary['evidence_path']) / 'manifest.json').read_text())
+        self.assertIsNone(manifest['resources'][0]['id'])
+        diagnostic = next(Path(summary['evidence_path']).glob('docker-*-create.stderr'))
+        self.assertEqual(diagnostic.stat().st_mode & 0o777, 0o600)
+        self.assertIn('create-secret-error', diagnostic.read_text())
+
+    def test_invalid_and_unsafe_timeouts_are_rejected_before_docker_calls(self):
+        unsafe = ['nan', 'inf', '-inf', '1e309', str(threading.TIMEOUT_MAX * 2)]
+        for value in unsafe:
+            with self.subTest(timeout=value):
+                result = self.invoke('run', '--evidence-root', str(self.evidence), '--image', 'private-image',
+                                     '--timeout', value, '--', 'true')
+                self.assertEqual(result.returncode, 2)
+                self.assertFalse(self.log.exists())
 
     def test_readonly_probe_uses_exact_client_path_and_cleans_its_owned_scratch(self):
         result = self.invoke('preflight', '--evidence-root', str(self.evidence), '--image', 'private-image', '--probe')

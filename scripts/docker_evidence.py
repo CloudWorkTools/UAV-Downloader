@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -13,12 +14,14 @@ import secrets
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
 
 OWNER_LABEL = 'io.uav-downloader.evidence-owner'
 DEFAULT_EVIDENCE_ROOT = Path.home() / '.local' / 'state' / 'uav-docker-evidence'
+MAX_TIMEOUT_SECONDS = min(threading.TIMEOUT_MAX, float(2**31 - 1))
 
 
 class EvidenceError(Exception):
@@ -65,6 +68,7 @@ class Evidence:
         temp = self.path / '.manifest.tmp'
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
+            os.fchmod(fd, 0o600)
             with os.fdopen(fd, 'w') as f:
                 json.dump(self.manifest, f, sort_keys=True, indent=2)
                 f.write('\n')
@@ -94,6 +98,7 @@ class Evidence:
                   'operation': operation, 'phase': phase, **fields}
         fd = os.open(self.events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
+            os.fchmod(fd, 0o600)
             with os.fdopen(fd, 'a') as f:
                 f.write(json.dumps(record, sort_keys=True) + '\n')
                 f.flush()
@@ -104,6 +109,7 @@ class Evidence:
     def private_file(self, name: str, data: str) -> None:
         path = self.path / name
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, 'w') as f:
             f.write(data)
             f.flush()
@@ -114,6 +120,17 @@ class Evidence:
 class Docker:
     def __init__(self, evidence: Evidence):
         self.evidence = evidence
+        self.call_number = 0
+
+    def save_stderr(self, number: int, operation: str, stderr: str) -> None:
+        safe_operation = re.sub(r'[^A-Za-z0-9._-]+', '_', operation)
+        self.evidence.private_file(f'docker-{number:04d}-{safe_operation}.stderr', stderr)
+
+    def save_payload_logs(self, number: int, prefix: str, stdout: str, stderr: str) -> None:
+        self.evidence.private_file(f'{prefix}-{number:04d}.stdout', stdout)
+        self.evidence.private_file(f'{prefix}-{number:04d}.stderr', stderr)
+        self.evidence.private_file(f'{prefix}.stdout', stdout)
+        self.evidence.private_file(f'{prefix}.stderr', stderr)
 
     @staticmethod
     def operation(args: list[str]) -> str:
@@ -134,33 +151,38 @@ class Docker:
     def call(self, args: list[str], *, timeout: float = 30, save_logs: bool = False,
              log_prefix: str = 'payload') -> subprocess.CompletedProcess:
         op = self.operation(args)
+        self.call_number += 1
+        call_number = self.call_number
         signature = hashlib.sha256(json.dumps(args).encode()).hexdigest()
         self.evidence.event(op, 'start', args_sha256=signature)
-        proc = subprocess.Popen(['docker', *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            proc = subprocess.Popen(['docker', *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except OSError as exc:
+            self.evidence.event(op, 'end', args_sha256=signature, failure_type=type(exc).__name__)
+            raise EvidenceError('could not start the Docker CLI') from None
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
             stdout, stderr = proc.communicate()
             self.evidence.event(op, 'end', args_sha256=signature, timeout=True, signal=None)
+            self.save_stderr(call_number, op, stderr)
             if save_logs:
-                self.evidence.private_file(f'{log_prefix}.stdout', stdout)
-                self.evidence.private_file(f'{log_prefix}.stderr', stderr)
+                self.save_payload_logs(call_number, log_prefix, stdout, stderr)
             raise TimeoutError(op)
         except Interrupted as exc:
             proc.kill()
-            proc.communicate()
+            stdout, stderr = proc.communicate()
             self.evidence.event(op, 'end', args_sha256=signature, timeout=False, signal=exc.signum)
+            self.save_stderr(call_number, op, stderr)
+            if save_logs:
+                self.save_payload_logs(call_number, log_prefix, stdout, stderr)
             raise
-        except KeyboardInterrupt:
-            proc.kill()
-            proc.communicate()
-            self.evidence.event(op, 'end', args_sha256=signature, timeout=False, signal='SIGINT')
-            raise Interrupted(signal.SIGINT)
         self.evidence.event(op, 'end', args_sha256=signature, exit_code=proc.returncode)
+        if proc.returncode:
+            self.save_stderr(call_number, op, stderr)
         if save_logs:
-            self.evidence.private_file(f'{log_prefix}.stdout', stdout)
-            self.evidence.private_file(f'{log_prefix}.stderr', stderr)
+            self.save_payload_logs(call_number, log_prefix, stdout, stderr)
         return subprocess.CompletedProcess(['docker', *args], proc.returncode, stdout, stderr)
 
 
@@ -304,6 +326,8 @@ def capture_logs(docker: Docker, ev: Evidence, resource: dict, prefix: str) -> N
     try:
         result = docker.call(['logs', resource['id']], save_logs=True, log_prefix=prefix)
         resource['logs_status'] = 'captured' if result.returncode == 0 else 'failed'
+    except Interrupted:
+        raise
     except (EvidenceError, TimeoutError):
         resource['logs_status'] = 'failed'
     ev._save_manifest()
@@ -495,6 +519,21 @@ def cleanup_resources(docker: Docker, ev: Evidence) -> list[str]:
     return retained
 
 
+def pending_resources(ev: Evidence) -> list[dict]:
+    return [{'kind': resource.get('kind'), 'id': resource.get('id'), 'name': resource.get('name'),
+             'mounts_recorded': resource.get('mounts_recorded', resource.get('kind') == 'volume'),
+             'state': resource.get('state')}
+            for resource in ev.manifest['resources'] if not resource.get('removed')]
+
+
+def add_log_status(summary: dict, resource: dict | None) -> None:
+    if not resource or not resource.get('logs_status'):
+        return
+    summary['logs_status'] = resource['logs_status']
+    if resource['logs_status'] == 'failed':
+        summary['logs_warning'] = 'Docker logs were unavailable; inspect the private evidence directory.'
+
+
 def new_volume_name(ev: Evidence, suffix: str) -> str:
     return f'uav-evidence-{ev.run_id[:12]}-{suffix}'
 
@@ -541,7 +580,7 @@ def preflight(args) -> int:
                 env={'PUID': '0', 'PGID': '0', 'CONFIG_DIR': config_dir, 'APPDATA': appdata_dir},
                 mounts=mounts, name_suffix='prepare')
             code, state = start_and_wait(docker, ev, bootstrap, args.timeout)
-            if code != 0 or state != 'exited':
+            if code != 0 or state != 'exited' or bootstrap.get('logs_status') != 'captured':
                 raise EvidenceError('scratch volume ownership preparation failed')
             nonce = secrets.token_hex(24)
             expected_payload_hash = hashlib.sha256(nonce.encode()).hexdigest()
@@ -556,7 +595,7 @@ def preflight(args) -> int:
                 env={'PUID': str(uid), 'PGID': str(gid), 'CONFIG_DIR': config_dir, 'APPDATA': appdata_dir},
                 mounts=mounts, name_suffix='writer')
             code, state = start_and_wait(docker, ev, writer, args.timeout)
-            if code != 0 or state != 'exited':
+            if code != 0 or state != 'exited' or writer.get('logs_status') != 'captured':
                 raise EvidenceError('target entrypoint could not write or read the probe paths')
             writer_out = (ev.path / 'writer.stdout').read_text()
             if f'identity:{uid}:{gid}' not in writer_out:
@@ -574,7 +613,7 @@ def preflight(args) -> int:
                 env={'PUID': str(uid), 'PGID': str(gid), 'CONFIG_DIR': config_dir, 'APPDATA': appdata_dir},
                 mounts=mounts, name_suffix='reader')
             code, state = start_and_wait(docker, ev, reader, args.timeout)
-            if code != 0 or state != 'exited':
+            if code != 0 or state != 'exited' or reader.get('logs_status') != 'captured':
                 raise EvidenceError('target entrypoint could not read its probe paths')
             reader_out = (ev.path / 'reader.stdout').read_text()
             if f'identity:{uid}:{gid}' not in reader_out:
@@ -603,6 +642,9 @@ def preflight(args) -> int:
         ev._save_manifest()
         summary['manifest_status'] = ev.manifest.get('status')
         summary['evidence_path'] = str(ev.path)
+        pending = pending_resources(ev)
+        if pending:
+            summary['pending_resources'] = pending
     print(json.dumps(summary, sort_keys=True))
     return 0 if summary['status'] == 'passed' and summary.get('cleanup', 'complete') == 'complete' else 1
 
@@ -637,6 +679,7 @@ def run(args) -> int:
         summary.update({'payload_exit_code': code, 'container_state': state,
                         'container_id': resource['id'], 'container_name': resource['name'],
                         'daemon_fingerprint': ev.manifest['daemon_context_fingerprint']})
+        add_log_status(summary, resource)
         if ev.manifest.get('cleanup_status'):
             summary['cleanup_status'] = ev.manifest['cleanup_status']
         if signum is not None:
@@ -654,6 +697,12 @@ def run(args) -> int:
         summary.update({'signal': signum, 'container_state': state,
                         'container_id': resource.get('id') if resource else None,
                         'payload_exit_code': code})
+        add_log_status(summary, resource)
+        pending = pending_resources(ev)
+        if pending:
+            summary['pending_resources'] = pending
+            summary['cleanup_status'] = 'pending'
+            ev.update(cleanup_status='pending', pending_resources=pending)
         ev.update(status='interrupted', signal=signum)
     except (EvidenceError, OSError, TimeoutError, ValueError) as exc:
         summary['error'] = str(exc) if isinstance(exc, EvidenceError) else type(exc).__name__
@@ -667,6 +716,12 @@ def run(args) -> int:
                 state, code = 'pending', None
             summary.update({'container_state': state, 'container_id': resource.get('id'),
                             'payload_exit_code': code})
+        add_log_status(summary, resource)
+        pending = pending_resources(ev)
+        if pending:
+            summary['pending_resources'] = pending
+            summary['cleanup_status'] = 'pending'
+            ev.update(cleanup_status='pending', pending_resources=pending)
     finally:
         ev._save_manifest()
         summary['evidence_path'] = str(ev.path)
@@ -730,8 +785,9 @@ def positive_timeout(value: str) -> float:
         result = float(value)
     except ValueError:
         raise argparse.ArgumentTypeError('timeout must be a positive number') from None
-    if result <= 0:
-        raise argparse.ArgumentTypeError('timeout must be a positive number')
+    if not math.isfinite(result) or result <= 0 or result > MAX_TIMEOUT_SECONDS:
+        raise argparse.ArgumentTypeError(
+            f'timeout must be finite, positive, and no greater than {MAX_TIMEOUT_SECONDS:g} seconds')
     return result
 
 
