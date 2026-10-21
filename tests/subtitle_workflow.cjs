@@ -499,11 +499,23 @@ async function B1() {
     'LocalAI profile verification sends the bounded false/true synthetic pair');
   assert.deepEqual(verificationRecords.map(item => item.reasoningEnabled), [false, true]);
   assert.ok(verificationRecords.every(item => item.authMatchesExpected), 'both probes use the configured credential');
+  await cdp.selectId('subtitle-test-stage', 'translation');
+  cdp.respondToNextDialog({accept: true});
+  await click('subtitle-test-profile');
+  await waitUntil(async () => (await fixtureRecords()).length === 4, 'correction and translation verification requests');
+  await cdp.until(`document.getElementById('subtitle-settings-status')?.textContent.includes('格式符合')`);
+  const bothStageVerificationRecords = await fixtureRecords();
+  assert.deepEqual(bothStageVerificationRecords.map(item => [item.stage, item.kind]), [
+    ['correction', 'reasoning-probe-false'], ['correction', 'reasoning-probe-true'],
+    ['translation', 'reasoning-probe-false'], ['translation', 'reasoning-probe-true'],
+  ], 'correction and translation each receive their own bounded false/true verification');
   await cdp.command('Page.reload');
   await cdp.until(`document.querySelector('[data-testid="subtitle-profile-list"]')?.textContent.includes('Fixture Text')`);
   const persistedProfiles = await cdp.evaluate(`fetch('/api/subtitles/profiles').then(response=>response.json())`);
-  assert.equal(persistedProfiles.profiles.find(item => item.profile_id === 'workflow-text')
-    ?.reasoning_verification?.correction?.status, 'supported', 'server evidence survives page reload');
+  const persistedVerification = persistedProfiles.profiles.find(item => item.profile_id === 'workflow-text')
+    ?.reasoning_verification;
+  assert.equal(persistedVerification?.correction?.status, 'supported', 'correction evidence survives page reload');
+  assert.equal(persistedVerification?.translation?.status, 'supported', 'translation evidence survives page reload');
   const pageText = await cdp.evaluate('document.body.innerText');
   assert.ok(!pageText.includes('uav-test-secret-never-log'), 'API key must not appear in UI');
   const keyValue = await cdp.evaluate(`document.getElementById('subtitle-profile-key')?.value || ''`);
@@ -567,8 +579,11 @@ async function B2() {
   const taskId = (await taskIds())[0];
   await waitTaskStatus(taskId, 'completed');
   const calls = await fixtureRecords();
-  assert.deepEqual(calls.filter(item => ['vad', 'asr', 'correction', 'translation'].includes(item.kind)).map(item => item.kind),
+  const stageCalls = calls.filter(item => ['vad', 'asr', 'correction', 'translation'].includes(item.kind));
+  assert.deepEqual(stageCalls.map(item => item.kind),
     ['vad', 'asr', 'correction', 'translation'], 'submitted full pipeline reaches each configured fixture stage');
+  assert.ok(stageCalls.filter(item => ['correction', 'translation'].includes(item.kind))
+    .every(item => item.reasoningEnabled === false), 'normal correction and translation requests keep reasoning disabled');
   await clearVideoSelection();
   await setPipeline({stages: ['vad']});
   const historyVideoId = await selectVideoByName('subtitle-fixture-history.mp4');
