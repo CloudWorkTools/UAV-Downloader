@@ -167,6 +167,231 @@ def test_external_translation_is_disabled_by_default(monkeypatch):
             ['こんにちは'], llm.LlmTranslationSettings(), api_key='secret')
 
 
+def test_localai_reasoning_probe_requires_explicit_false_true_contrast(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from uav_downloader.subtitles import profiles
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    requests_seen = []
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            requests_seen.append(payload)
+            enabled = payload.get('metadata', {}).get('enable_thinking')
+            message = {'content': '[{"id":"probe-1","text":"測試"}]'}
+            if enabled == 'true':
+                message['reasoning'] = 'brief synthetic reasoning signal'
+            body = json.dumps({'choices':[{'finish_reason':'stop','message':message}]}).encode()
+            self.send_response(200); self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(profiles, 'resolve_credential', lambda *_args: 'fixture-secret')
+    profile = {'profile_id':'text-probe','kind':'text','provider':'localai',
+               'capabilities':['correction','translation'],
+               'base_url':f'http://127.0.0.1:{server.server_port}/v1',
+               'model':'fixture','parameters':{'max_output_tokens':4096}}
+    snapshot = ProfileSnapshot(json.dumps(profile), 'fixture-ref', 'snapshot')
+    try:
+        report = llm.verify_localai_reasoning_control(snapshot, 'correction')
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    assert report['reasoning_control'] == 'supported'
+    assert report['format_pass'] is True
+    assert len(requests_seen) == 2
+    by_mode = {item['metadata']['enable_thinking']: item for item in requests_seen}
+    assert by_mode['false']['reasoning_effort'] == 'none'
+    assert by_mode['false']['max_tokens'] == 128
+    assert by_mode['true']['reasoning_effort'] == 'low'
+    assert by_mode['true']['max_tokens'] == 128
+    assert 'fixture-secret' not in json.dumps(report)
+
+
+def test_localai_reasoning_probe_does_not_infer_support_from_missing_field(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from uav_downloader.subtitles import profiles
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            body = json.dumps({'choices':[{'finish_reason':'stop','message':{
+                'content':'[{"id":"probe-1","text":"測試"}]'}}]}).encode()
+            self.send_response(200); self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(profiles, 'resolve_credential', lambda *_args: '')
+    profile = {'profile_id':'text-probe','kind':'text','provider':'localai',
+               'capabilities':['correction'], 'base_url':f'http://127.0.0.1:{server.server_port}/v1',
+               'model':'fixture','parameters':{}}
+    snapshot = ProfileSnapshot(json.dumps(profile), None, 'snapshot')
+    try:
+        report = llm.verify_localai_reasoning_control(snapshot, 'correction')
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    assert report['reasoning_control'] != 'supported'
+    assert report['success'] is False
+
+
+def test_localai_reasoning_probe_validates_profile_parameters_before_request(monkeypatch):
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    monkeypatch.setattr(llm, '_provider_endpoint', lambda *_: pytest.fail(
+        'invalid profile settings must not reach the model service'))
+    profile = {'profile_id':'text-probe','kind':'text','provider':'localai',
+               'capabilities':['correction'], 'base_url':'http://127.0.0.1:1234/v1',
+               'model':'fixture','parameters':{'temperature':1.5}}
+    snapshot = ProfileSnapshot(json.dumps(profile), None, 'snapshot')
+    report = llm.verify_localai_reasoning_control(snapshot, 'correction')
+    assert report['reasoning_control'] == 'unknown'
+    assert report['reason_code'] == 'probe failed'
+
+
+def test_localai_reasoning_probe_accepts_bounded_true_reasoning_after_false_json(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from uav_downloader.subtitles import profiles
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    requests_seen = []
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args): pass
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            enabled = payload['metadata']['enable_thinking'] == 'true'
+            requests_seen.append(enabled)
+            message = ({'content': '[{"id":"probe-1","text":"測試"}]'} if not enabled else
+                       {'content': '', 'reasoning': 'bounded synthetic reasoning signal'})
+            finish = 'length' if enabled else 'stop'
+            body = json.dumps({'choices':[{'finish_reason':finish,'message':message}]}).encode()
+            self.send_response(200); self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(profiles, 'resolve_credential', lambda *_args: '')
+    profile = {'profile_id':'text-probe','kind':'text','provider':'localai',
+               'capabilities':['correction'], 'base_url':f'http://127.0.0.1:{server.server_port}/v1',
+               'model':'fixture','parameters':{}}
+    try:
+        report = llm.verify_localai_reasoning_control(
+            ProfileSnapshot(json.dumps(profile), None, 'snapshot'), 'correction')
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    assert requests_seen == [False, True]
+    assert report['reasoning_control'] == 'supported'
+    assert report['format_pass'] is True
+
+
+@pytest.mark.parametrize(('false_finish', 'true_reply', 'expected'), [
+    ('length', {'choices':[{'finish_reason':'length','message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
+    (None, {'choices':[{'finish_reason':'stop','message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
+    ('eos', {'choices':[{'finish_reason':'stop','message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
+    ('stop', {'choices':[]}, 'unknown'),
+    ('stop', {'choices':[{'message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
+    ('stop', {'choices':[{'finish_reason':'eos','message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
+])
+def test_localai_reasoning_probe_rejects_false_truncation_or_bad_true_envelope(
+        monkeypatch, false_finish, true_reply, expected):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from uav_downloader.subtitles import profiles
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    calls = [0]
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            if calls[0] == 0:
+                reply = {'choices':[{'finish_reason':false_finish,'message':{
+                    'content':'[{"id":"probe-1","text":"測試"}]'}}]}
+            else:
+                reply = true_reply
+            calls[0] += 1
+            body = json.dumps(reply).encode()
+            self.send_response(200); self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(profiles, 'resolve_credential', lambda *_args: '')
+    profile = {'profile_id':'text-probe','kind':'text','provider':'localai',
+               'capabilities':['correction'], 'base_url':f'http://127.0.0.1:{server.server_port}/v1',
+               'model':'fixture','parameters':{}}
+    try:
+        report = llm.verify_localai_reasoning_control(
+            ProfileSnapshot(json.dumps(profile), None, 'snapshot'), 'correction')
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    assert report['reasoning_control'] == expected
+    assert report['success'] is False
+
+
+def test_localai_normal_transform_requires_matching_profile_verification(monkeypatch, tmp_path):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from uav_downloader.subtitles import profiles
+    from uav_downloader.subtitles.models import SubtitleSegment
+
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path / 'config'))
+    requested = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args): pass
+        def do_POST(self):
+            requested.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+            body = json.dumps({'choices': [{'finish_reason': 'stop', 'message': {
+                'content': '[{"id":"s1","text":"fixed"}]'}}]}).encode()
+            self.send_response(200); self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f'http://127.0.0.1:{server.server_port}/v1'
+    profile = profiles.save_profile(profiles.StageProfile(
+        profile_id='localai-transform', display_name='LocalAI', kind='text', provider='localai',
+        capabilities=('correction',), base_url=base, model='fixture', parameters_json='{}'))
+    snapshot = profiles.snapshot(profile.profile_id, 'correction')
+    segment = SubtitleSegment('s1', 1.0, 2.0, 'raw')
+    try:
+        with pytest.raises(llm.LlmTranslationError, match='驗證'):
+            llm.transform_segments('correction', [segment], snapshot, allow_reasoning=False)
+        assert requested == []
+
+        attempt = profiles.begin_reasoning_verification(profile.profile_id, 'correction')
+        assert profiles.record_reasoning_verification(
+            profile.profile_id, 'correction', attempt, status='supported',
+            reason='reasoning contrast passed')
+        verified = profiles.snapshot(profile.profile_id, 'correction')
+        result = llm.transform_segments('correction', [segment], verified, allow_reasoning=False)
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    assert result == [SubtitleSegment('s1', 1.0, 2.0, 'fixed')]
+    assert len(requested) == 1
+    assert requested[0]['reasoning_effort'] == 'none'
+    assert requested[0]['metadata']['enable_thinking'] == 'false'
+
+
 @pytest.mark.parametrize('provider', sorted(llm.SUPPORTED_PROVIDERS))
 def test_settings_accept_all_supported_providers(provider):
     settings = _settings(provider.upper())

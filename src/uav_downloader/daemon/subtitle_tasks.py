@@ -30,13 +30,15 @@ def _snapshot_dict(snapshot):
         'profile_json': snapshot.profile_json,
         'credential_ref': snapshot.credential_ref,
         'snapshot_id': snapshot.snapshot_id,
+        'reasoning_verification_json': snapshot.reasoning_verification_json,
     }
 
 
 def _snapshot_from_dict(value):
     if not isinstance(value, dict):
         raise ValueError('字幕設定快照格式無效')
-    return ProfileSnapshot(value['profile_json'], value.get('credential_ref'), value['snapshot_id'])
+    return ProfileSnapshot(value['profile_json'], value.get('credential_ref'), value['snapshot_id'],
+                           value.get('reasoning_verification_json'))
 
 
 def _request_key(video_id, stages, snapshots, languages, input_result_id):
@@ -90,7 +92,7 @@ def _safe_error(stage, error):
     if any(term in lowered for term in ('已過期', '過期', 'stale', 'outdated')):
         return f'{prefix}：上游字幕結果已過期，請更新結果或明確選擇舊版本'
     if any(term in lowered for term in (
-            '思考能力未確認', '未確認此模型支援 thinking', 'reasoning control',
+            '思考能力未確認', '尚未通過停用思考驗證', '未確認此模型支援 thinking', 'reasoning control',
             'thinking control', 'reasoning is not confirmed')):
         return f'{prefix}：尚未確認思考控制，請切換相容模型或明確允許思考'
     if any(term in lowered for term in ('invalid response', 'invalid json', 'response format', 'returned an invalid')):

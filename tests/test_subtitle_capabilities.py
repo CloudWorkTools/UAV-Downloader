@@ -41,7 +41,7 @@ def test_localai_reasoning_capability_reports_template_control_limit():
 @pytest.mark.parametrize('provider', ['localai', 'openai-compatible'])
 def test_unknown_reasoning_control_blocks_required_disable_before_network(provider, monkeypatch):
     monkeypatch.setattr(llm.requests, 'Session', lambda: pytest.fail('unknown must block before network'))
-    with pytest.raises(llm.LlmTranslationError, match='未確認'):
+    with pytest.raises(llm.LlmTranslationError, match='停用思考'):
         llm.transform_segments('correction', [SubtitleSegment('a', 1, 2, '文字')],
                                snapshot(provider), require_reasoning_disabled=True)
 

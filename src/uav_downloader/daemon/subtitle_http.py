@@ -37,6 +37,10 @@ def _public_profile(profile):
     value['parameters'] = json.loads(value.pop('parameters_json'))
     value.pop('credential_ref', None)
     value['credential_configured'] = bool(profile.credential_ref)
+    if profile.provider == 'localai' and profile.kind == 'text':
+        value['reasoning_verification'] = {
+            stage: profiles.reasoning_verification(profile, stage)
+            for stage in ('correction', 'translation') if stage in profile.capabilities}
     return value
 
 
@@ -199,6 +203,31 @@ def _profile_test(body):
     allow_reasoning = body.get('allow_reasoning', False)
     if not isinstance(allow_reasoning, bool):
         raise ApiError(400, '推理模式選項無效')
+    if stage in ('correction', 'translation') and profile.provider == 'localai':
+        from uav_downloader.subtitles import llm
+
+        try:
+            attempt = profiles.begin_reasoning_verification(profile_id, stage)
+            snapshot = profiles.snapshot(profile_id, stage)
+            report = llm.verify_localai_reasoning_control(snapshot, stage)
+            supported = report.get('reasoning_control') == 'supported'
+            unsupported = report.get('reasoning_control') == 'unsupported'
+            recorded = profiles.record_reasoning_verification(
+                profile_id, stage, attempt,
+                status='supported' if supported else 'unsupported' if unsupported else 'unknown',
+                reason=report.get('reason_code'))
+        except Exception:
+            # Keep probe failures generic at the HTTP boundary and fail closed.
+            report = {'success': False, 'test_status': 'failed', 'format_pass': None,
+                      'reasoning_control': 'unknown', 'quality': 'unverified',
+                      'message': 'LocalAI 推理控制驗證未完成，請檢查設定後重新驗證。'}
+            recorded = False
+        if not recorded:
+            report = {**report, 'success': False, 'reasoning_control': 'unknown',
+                      'message': '設定在驗證期間已變更或驗證未完成，請重新驗證。'}
+        report['reasoning_verification'] = profiles.reasoning_verification(
+            next((item for item in profiles.load_profiles() if item.profile_id == profile_id), profile), stage)
+        return report
     if stage in ('correction', 'translation') and profile.provider not in ('lmstudio', 'ollama') and not allow_reasoning:
         return {'success': False, 'test_status': 'not_run', 'format_pass': None,
                 'reasoning_control': 'unknown', 'quality': 'unverified',

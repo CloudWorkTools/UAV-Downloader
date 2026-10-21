@@ -123,7 +123,8 @@ def _snapshot_to_dict(snapshot: ProfileSnapshot) -> dict:
         raise ValueError('字幕設定快照格式無效')
     return {'profile_json': json.dumps(profile, ensure_ascii=False, sort_keys=True,
                                        separators=(',', ':'), allow_nan=False),
-            'credential_ref': snapshot.credential_ref, 'snapshot_id': snapshot.snapshot_id}
+            'credential_ref': snapshot.credential_ref, 'snapshot_id': snapshot.snapshot_id,
+            'reasoning_verification_json': snapshot.reasoning_verification_json}
 
 
 def _result_dict(result: StageResult, content=True) -> dict:
@@ -177,7 +178,8 @@ def _from_dict(record: dict, stale=False, adopted=False) -> StageResult:
         input_result_ids=tuple(record['input_result_ids']),
         profile_snapshot=ProfileSnapshot(snapshot['profile_json'],
                                          snapshot.get('credential_ref'),
-                                         snapshot['snapshot_id']),
+                                         snapshot['snapshot_id'],
+                                         snapshot.get('reasoning_verification_json')),
         intervals=tuple(_decode_value(record['intervals']))
             if record.get('content_available') and record.get('intervals') is not None else None,
         segments=tuple(_decode_value(record['segments']))

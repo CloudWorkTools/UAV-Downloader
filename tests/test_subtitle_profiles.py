@@ -200,6 +200,71 @@ def test_translation_environment_only_reference_fails_when_key_disappears(
         profiles.resolve_credential(migrated.credential_ref, migrated.base_url)
 
 
+def test_localai_reasoning_evidence_is_private_persistent_and_bound_to_snapshot(
+        isolated_profiles):
+    text_profile = profiles.StageProfile(
+        profile_id="local-text", display_name="Local text", kind="text", provider="localai",
+        capabilities=("correction", "translation"), base_url="http://127.0.0.1:1234/v1",
+        model="qwen", parameters_json='{"temperature":0}')
+    saved = profiles.save_profile(text_profile, api_key="credential-one")
+
+    binding = profiles.begin_reasoning_verification(saved.profile_id, "correction")
+    assert profiles.record_reasoning_verification(
+        saved.profile_id, "correction", binding, status="supported") is True
+    current = profiles.reasoning_verification(saved, "correction")
+    assert current["status"] == "supported"
+    assert current["scope"] == "localai false/true contrast"
+    assert current["verified_at"]
+
+    snapshot = profiles.snapshot(saved.profile_id, "correction")
+    assert profiles.snapshot_reasoning_verified(snapshot, "correction") is True
+    assert snapshot.reasoning_verification_json
+    profiles_path = isolated_profiles / "subtitle_profiles.json"
+    evidence_path = isolated_profiles / "subtitle_profile_reasoning.json"
+    assert "credential-one" not in profiles_path.read_text()
+    assert "credential-one" not in evidence_path.read_text()
+    assert (evidence_path.stat().st_mode & 0o777) == 0o600
+    assert (isolated_profiles / "subtitle_profile_reasoning.key").stat().st_mode & 0o777 == 0o600
+
+    # Reads are from disk, so the evidence remains available after process restart.
+    assert profiles.reasoning_verification(profiles.load_profiles()[0], "correction")["status"] == "supported"
+
+    changed = profiles.save_profile(profiles.StageProfile(
+        **{**asdict(saved), "parameters_json": '{"temperature":0.2}'}))
+    assert profiles.reasoning_verification(changed, "correction")["status"] == "unknown"
+    # A queued snapshot keeps the exact old configuration binding.
+    assert profiles.snapshot_reasoning_verified(snapshot, "correction") is True
+
+    rotated = profiles.save_profile(text_profile, api_key="credential-two")
+    assert profiles.reasoning_verification(rotated, "correction")["status"] == "unknown"
+    assert profiles.snapshot_reasoning_verified(snapshot, "correction") is False
+
+
+def test_newer_reasoning_probe_attempt_cannot_be_overwritten_by_older_result(
+        isolated_profiles):
+    text_profile = profiles.StageProfile(
+        profile_id="local-text", display_name="Local text", kind="text", provider="localai",
+        capabilities=("correction",), base_url="http://127.0.0.1:1234/v1",
+        model="qwen", parameters_json="{}")
+    saved = profiles.save_profile(text_profile)
+
+    initial = profiles.begin_reasoning_verification(saved.profile_id, "correction")
+    assert profiles.record_reasoning_verification(
+        saved.profile_id, "correction", initial, status="supported") is True
+    captured = profiles.snapshot(saved.profile_id, "correction")
+
+    older = profiles.begin_reasoning_verification(saved.profile_id, "correction")
+    assert profiles.reasoning_verification(saved, "correction")["status"] == "unknown"
+    assert profiles.snapshot_reasoning_verified(captured, "correction") is True
+    newer = profiles.begin_reasoning_verification(saved.profile_id, "correction")
+    assert profiles.record_reasoning_verification(
+        saved.profile_id, "correction", older, status="supported") is False
+    assert profiles.record_reasoning_verification(
+        saved.profile_id, "correction", newer, status="unknown",
+        reason="probe failed") is True
+    assert profiles.reasoning_verification(saved, "correction")["status"] == "unknown"
+
+
 def test_invalid_translation_environment_key_does_not_migrate_as_no_key(
         isolated_profiles, monkeypatch):
     source = isolated_profiles / "translation_api.json"

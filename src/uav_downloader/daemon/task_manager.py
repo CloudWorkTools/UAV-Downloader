@@ -953,7 +953,8 @@ class TaskManager:
             if self._subtitle_task_manager is None:
                 raise RuntimeError('字幕工作佇列尚未接入')
             snapshots = {
-                key: ProfileSnapshot(value['profile_json'], value.get('credential_ref'), value['snapshot_id'])
+                key: ProfileSnapshot(value['profile_json'], value.get('credential_ref'), value['snapshot_id'],
+                                     value.get('reasoning_verification_json'))
                 for key, value in request['profile_snapshots'].items()
             }
             video_path = os.path.join(task.dest, f'{task.name}.mp4')
