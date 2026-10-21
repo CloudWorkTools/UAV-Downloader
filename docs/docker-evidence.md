@@ -12,6 +12,8 @@ python3 scripts/docker_evidence.py preflight --image IMAGE_TAG_OR_ID
 
 加上 `--probe` 會建立本次專用的標記 volume 與短命容器，使用映像預設 entrypoint 測試 client-side readonly sentinel bind、`CONFIG_DIR`/`APPDATA` 寫入及跨容器 hash 讀回。工具只在新建的 scratch volume 上準備 `APPDATA` 擁有者，摘要會記錄 UID/GID 與此前提；它不驗證既有路徑權限。無法證明 bind 路徑可見或 readback 不符時會失敗並保留診斷資料。
 
+`--probe` 需要目標映像內有 Python，且預設 entrypoint 支援 `PUID`/`PGID`（UAV Downloader Web 正式映像符合）；不相容時會回報診斷失敗。唯讀 preflight 與 `run` 則分別依映像 metadata 與映像內可執行命令運作。
+
 ```bash
 python3 scripts/docker_evidence.py preflight --image IMAGE_TAG_OR_ID --probe
 ```
