@@ -298,7 +298,15 @@ def test_localai_reasoning_probe_accepts_bounded_true_reasoning_after_false_json
 @pytest.mark.parametrize(('false_finish', 'true_reply', 'expected'), [
     ('length', {'choices':[{'finish_reason':'length','message':{
         'content':'','reasoning':'signal'}}]}, 'unknown'),
+    (None, {'choices':[{'finish_reason':'stop','message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
+    ('eos', {'choices':[{'finish_reason':'stop','message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
     ('stop', {'choices':[]}, 'unknown'),
+    ('stop', {'choices':[{'message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
+    ('stop', {'choices':[{'finish_reason':'eos','message':{
+        'content':'','reasoning':'signal'}}]}, 'unknown'),
 ])
 def test_localai_reasoning_probe_rejects_false_truncation_or_bad_true_envelope(
         monkeypatch, false_finish, true_reply, expected):

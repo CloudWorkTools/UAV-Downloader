@@ -951,7 +951,7 @@ def _reasoning_probe_message(envelope, *, allow_truncated):
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
         raise ValueError("invalid probe choices")
     choice = choices[0]
-    finishes = (None, "stop", "eos", "length") if allow_truncated else (None, "stop", "eos")
+    finishes = ("stop", "length") if allow_truncated else ("stop",)
     if choice.get("finish_reason") not in finishes:
         raise ValueError("invalid probe finish reason")
     message = choice.get("message")
