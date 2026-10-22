@@ -10,11 +10,16 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = ROOT / '.deploy.local.json'
 SPEACHES_IMAGE = 'ghcr.io/speaches-ai/speaches@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8'
 
 
-def load_config(path=CONFIG):
+def load_config(path=None):
+    if path is None:
+        path = ROOT / '.deploy.local.json'
+        if not path.exists():
+            first = subprocess.check_output(
+                ['git', 'worktree', 'list', '--porcelain', '-z'], cwd=ROOT, text=True).split('\0', 1)[0]
+            path = Path(first.removeprefix('worktree ')) / '.deploy.local.json'
     config = json.loads(path.read_text())
     if ipaddress.ip_address(config['host']).version != 4:
         raise ValueError('Deployment requires an IPv4 address')
@@ -75,6 +80,11 @@ try:
         from uav_downloader.daemon.storage_smoke import check_batch_smb
         if not check_batch_smb(settings):
             raise RuntimeError('SMB batch check did not run')
+        print(stage + ': OK', flush=True)
+        stage = 'NAS MP4 Unicode remux/faststart/seek/cleanup'
+        from uav_downloader.daemon.storage_smoke import check_mp4_smb
+        if not check_mp4_smb(settings):
+            raise RuntimeError('SMB MP4 check did not run')
         print(stage + ': OK', flush=True)
     if settings['enabled'] and settings['mode'] == 'upload':
         stage = 'Destination write/cleanup'
@@ -169,6 +179,22 @@ if bundle and install_firecrawl:
 REMOTE_INSTALL = REMOTE_INSTALL.replace('STORAGE_PROBE)', repr(STORAGE_PROBE) + ')')
 
 
+def check_image(image):
+    test_image = image + '-tests'
+    try:
+        subprocess.run(['docker', 'build', '-f', 'Dockerfile.web-tests',
+                        '--build-arg', 'APP_IMAGE=' + image, '-t', test_image, '.'], cwd=ROOT, check=True)
+        subprocess.run(['docker', 'run', '--rm', '--user', '1000:1000',
+                        '--mount', f'type=bind,source={ROOT},target=/workspace,readonly',
+                        '--workdir', '/workspace', test_image], cwd=ROOT, check=True)
+        subprocess.run(['bash', 'scripts/check_web_container.sh', image], cwd=ROOT, check=True)
+        subprocess.run(['bash', 'scripts/check_smb_batch_container.sh', image], cwd=ROOT, check=True)
+    finally:
+        subprocess.run(['docker', 'image', 'rm', test_image], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, check=False)
+    print('Candidate image checks: OK', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--with-firecrawl', action='store_true', default=True, help='Build and deploy the private Firecrawl stack (default)')
@@ -185,11 +211,12 @@ def main():
     bundle = base64.b64encode(json.dumps({
         'docker-compose.yml': (ROOT / 'docker-compose.yml').read_text(),
     }).encode()).decode()
-    subprocess.run([*ssh, 'docker info >/dev/null'], check=True)
     if options.with_firecrawl:
         subprocess.run(['docker', 'buildx', 'version'], check=True)
-    subprocess.run(['docker', 'pull', SPEACHES_IMAGE], check=True)
     subprocess.run(['docker', 'build', '-f', 'Dockerfile.web', '-t', image, '.'], cwd=ROOT, check=True)
+    check_image(image)
+    subprocess.run([*ssh, 'docker info >/dev/null'], check=True)
+    subprocess.run(['docker', 'pull', SPEACHES_IMAGE], check=True)
     with tempfile.TemporaryDirectory(prefix='uav-deploy-') as temporary:
         if options.with_firecrawl:
             for component, folder in [('api', 'api'), ('browser', 'playwright-service-ts'), ('postgres', 'nuq-postgres')]:

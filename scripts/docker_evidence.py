@@ -287,18 +287,41 @@ def image_metadata(docker: Docker, image: str, ev: Evidence) -> dict:
 
 def create_container(docker: Docker, ev: Evidence, image_id: str, command: list[str], *,
                      env: dict[str, str] | None = None, mounts: list[tuple[str, str, bool]] | None = None,
-                     name_suffix: str = 'run') -> dict:
+                     bind_mounts: list[tuple[str, str, bool]] | None = None,
+                     network: str = 'none', user: tuple[int, int] | None = None,
+                     workdir: str | None = None, name_suffix: str = 'run') -> dict:
+    if network not in ('none', 'bridge'):
+        raise EvidenceError('unsupported Docker network')
+    if user is not None and (len(user) != 2 or any(type(value) is not int or value < 0 for value in user)):
+        raise EvidenceError('container user must be a non-negative UID/GID pair')
+    if workdir is not None and not safe_container_path(workdir):
+        raise EvidenceError('container workdir must be a safe absolute path')
+    checked_binds = []
+    for source, destination, readonly in bind_mounts or []:
+        source_path = Path(source)
+        if (not source_path.is_absolute() or not source_path.is_dir()
+                or not re.fullmatch(r'/[A-Za-z0-9._/-]+', str(source_path))
+                or not safe_container_path(destination) or type(readonly) is not bool):
+            raise EvidenceError('bind mounts must use an existing absolute source and safe absolute destination')
+        checked_binds.append((str(source_path.resolve()), destination, readonly))
     name = f'uav-evidence-{ev.run_id[:12]}-{name_suffix}'
     labels = {OWNER_LABEL: ev.token}
     resource = {'kind': 'container', 'id': None, 'name': name, 'labels': labels,
                 'mounts': [], 'mounts_recorded': False, 'removed': False}
     ev.add_resource(resource)
-    args = ['create', '--network', 'none', '--name', name, '--label', f'{OWNER_LABEL}={ev.token}']
+    args = ['create', '--network', network, '--name', name, '--label', f'{OWNER_LABEL}={ev.token}']
     for key, value in (env or {}).items():
         args.extend(['--env', f'{key}={value}'])
     for volume, destination, readonly in (mounts or []):
         spec = f'type=volume,src={volume},dst={destination}' + (',readonly' if readonly else '')
         args.extend(['--mount', spec])
+    for source, destination, readonly in checked_binds:
+        spec = f'type=bind,src={source},dst={destination}' + (',readonly' if readonly else '')
+        args.extend(['--mount', spec])
+    if user is not None:
+        args.extend(['--user', f'{user[0]}:{user[1]}'])
+    if workdir is not None:
+        args.extend(['--workdir', workdir])
     if ev.manifest['kind'] == 'preflight':
         sentinel = ev.path / 'client-sentinel'
         args.extend(['--mount', f'type=bind,src={sentinel},dst=/run/uav-client-sentinel,readonly'])

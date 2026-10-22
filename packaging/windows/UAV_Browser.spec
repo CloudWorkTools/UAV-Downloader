@@ -23,7 +23,7 @@ hiddenimports = [
 # Collect package data (cloudscraper browser profiles, certifi certs, customtkinter themes)
 for pkg in [
         'cloudscraper', 'certifi', 'customtkinter', 'curl_cffi',
-        'imageio_ffmpeg', 'ctranslate2', 'sentencepiece', 'opencc']:
+        'imageio_ffmpeg', 'ctranslate2', 'sentencepiece', 'opencc', 'av']:
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 

@@ -151,9 +151,13 @@ def _request(settings, wav_path, language='ja', parameters=None, stage_errors=Fa
         base_url = settings['base_url'].rstrip('/')
         endpoint = (base_url if base_url.endswith('/audio/transcriptions')
                     else base_url + '/audio/transcriptions')
+        form_parameters = dict(parameters or {})
+        timestamp_granularities = form_parameters.pop('timestamp_granularities', None)
         data = {'model': settings['model'], 'language': language,
                 'response_format': 'verbose_json', 'timestamp_granularities[]': 'segment'}
-        data.update(parameters or {})
+        if timestamp_granularities is not None:
+            data['timestamp_granularities[]'] = timestamp_granularities
+        data.update(form_parameters)
         with open(wav_path, 'rb') as audio, session.post(
                 endpoint, headers=headers,
                 files={'file': ('audio.wav', audio, 'audio/wav')},
@@ -471,7 +475,8 @@ def transcribe_chunk(audio_path, chunk, profile_snapshot, language, cancel_check
 
 def validate_asr_parameters(parameters):
     """Validate the supported public ASR parameters without making a request."""
-    if not isinstance(parameters, dict) or set(parameters) - {'prompt', 'temperature'}:
+    if not isinstance(parameters, dict) or set(parameters) - {
+            'prompt', 'temperature', 'timestamp_granularities'}:
         raise ValueError('辨識模型參數不受支援')
     prompt = parameters.get('prompt')
     if prompt is not None and (not isinstance(prompt, str) or len(prompt) > 4096 or '\x00' in prompt):
@@ -485,6 +490,15 @@ def validate_asr_parameters(parameters):
             valid_temperature = False
         if not valid_temperature:
             raise ValueError('辨識模型參數 temperature 格式或範圍無效')
+    if 'timestamp_granularities' in parameters:
+        timestamp_granularities = parameters['timestamp_granularities']
+        allowed = {'segment', 'word'}
+        if (not isinstance(timestamp_granularities, list)
+                or not 1 <= len(timestamp_granularities) <= 2
+                or any(not isinstance(item, str) or item not in allowed
+                       for item in timestamp_granularities)
+                or len(set(timestamp_granularities)) != len(timestamp_granularities)):
+            raise ValueError('辨識模型參數 timestamp_granularities 格式無效')
     return parameters
 
 

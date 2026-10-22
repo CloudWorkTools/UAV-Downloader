@@ -30,10 +30,12 @@ VAD 放在影匣可讓不同 ASR 服務共用分段策略，但增加影匣的�
 | URL 與方法 | `POST /v1/audio/transcriptions` | 上傳音訊辨識 |
 | multipart 欄位 | `file`、`model`、`language=ja` | 指定音訊、模型與日語提示 |
 | 輸出格式 | `response_format=verbose_json` | 保留片段時間與文字 |
-| 時間粒度 | `timestamp_granularities[]=segment` | 取得字幕片段，支援程度仍依後端 |
+| 時間粒度 | 預設 `timestamp_granularities[]=segment`；設定檔可選 `segment`、`word` | 取得字幕片段；需啟用較細時間戳的後端可明確請求兩者 |
 | 必要回傳 | `segments[]` 含 `start`、`end`、`text` | 影匣驗證秒單位時間軸後才接受 |
 
 來源：[LocalAI ASR](https://localai.io/docs/features/audio-to-text/)、[transcription endpoint 原始碼](https://github.com/mudler/LocalAI/blob/master/core/http/endpoints/openai/transcription.go)。模型可以轉錄文字，不代表該後端能產生要求的時間粒度；必須另外驗證非空片段與合法時間。
+
+ASR 設定檔的 `timestamp_granularities` 僅接受不重複的 `segment`／`word` 清單，省略時維持 `segment` 預設。需要字詞時間戳的後端可設定 JSON `"timestamp_granularities": ["segment", "word"]`；影匣仍只採用 `segments[]`，並嚴格檢查每段時間不超過輸入音訊長度。後端不支援 `word` 時應省略此設定。影匣不使用 `word` 陣列直接產生字幕片段。
 
 官方頁面的較早 JSON 範例含 `end=9640000000`，與秒單位契約不一致。查閱時 `master` 原始碼的 `verbose_json` 路徑以 `seg.Start.Seconds()`、`seg.End.Seconds()` 組成回傳。原始碼提供目前實作的秒單位依據，卻不能證明已部署映像包含相同實作。影匣應以短音訊測試確認版本，不應按數值大小自動猜測並換算單位。[文件範例](https://localai.io/docs/features/audio-to-text/)、[原始碼](https://github.com/mudler/LocalAI/blob/master/core/http/endpoints/openai/transcription.go)。
 
@@ -63,6 +65,8 @@ LocalAI 同一設定文件對 `reasoning.disable` 同時描述「停用 extracti
 Ollama 原生 API 用 `format` 接 JSON Schema，LM Studio 的 Chat Completions 用 `response_format.type=json_schema`。LM Studio 另提醒模型本身可能無法可靠完成結構化任務。LocalAI 可列為文字聊天候選，但本次未完整查證所有後端對 `response_format.json_schema` 的一致支援，不能先標示為通用保證。[Ollama structured outputs](https://docs.ollama.com/capabilities/structured-outputs)、[LM Studio structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output)、[LocalAI 文字生成](https://localai.io/docs/features/text-generation/)。
 
 建議校正與翻譯皆輸入帶穩定 ID 的片段，輸出只接受同組 ID 與非空文字，並由影匣驗證遺漏、重複及額外項目。JSON Schema 能約束格式，字幕語意與時間對齊仍需影匣驗證。非思考要求無法由指定服務與模型落實時，應顯示「未確認」，不應默默忽略。
+
+文字設定檔可選擇 `batch_size`（整數 1–20，預設 20）限制影匣每次送給模型的字幕段數。這是影匣本地分批設定，與 `max_output_tokens` 等生成額度各自獨立，且不會傳給模型 API；輸出長度與字幕結構驗證維持原有規則。
 
 ## 模型候選與驗收界線
 

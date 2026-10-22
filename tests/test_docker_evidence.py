@@ -1,6 +1,7 @@
 """Private Docker evidence and ownership checks."""
 
 import json
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -9,10 +10,14 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts' / 'docker_evidence.py'
+SPEC = importlib.util.spec_from_file_location('docker_evidence_module', SCRIPT)
+docker_evidence = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(docker_evidence)
 FAKE_DOCKER = r'''#!/usr/bin/env python3
 import hashlib, json, os, re, sys, time
 from pathlib import Path
@@ -176,6 +181,36 @@ class DockerEvidenceTests(unittest.TestCase):
         return self.invoke('run', '--evidence-root', str(self.evidence), '--image', 'private-image',
                            '--timeout', '10', '--', 'python', '-c', "print('command-secret')",
                            env=extra_env)
+
+    def test_create_container_can_match_readonly_bridge_ci_run(self):
+        source = self.base / 'source'
+        source.mkdir()
+        ev = docker_evidence.Evidence(self.evidence, 'canonical-web-check')
+        docker = docker_evidence.Docker(ev)
+
+        with patch.dict(os.environ, self.env):
+            resource = docker_evidence.create_container(
+                docker, ev, 'sha256:image-test', [], network='bridge',
+                bind_mounts=[(str(source), '/workspace', True)], user=(1234, 2345),
+                workdir='/workspace')
+
+        create = next(json.loads(line) for line in self.log.read_text().splitlines()
+                      if json.loads(line)[0] == 'create')
+        self.assertEqual(create[create.index('--network') + 1], 'bridge')
+        self.assertEqual(create[create.index('--user') + 1], '1234:2345')
+        self.assertEqual(create[create.index('--workdir') + 1], '/workspace')
+        self.assertIn(f'type=bind,src={source},dst=/workspace,readonly', create)
+        self.assertEqual(resource['mounts_recorded'], True)
+        self.assertTrue(any(mount['Destination'] == '/workspace' and not mount['RW']
+                            for mount in resource['mounts']))
+
+    def test_create_container_rejects_unapproved_network_before_docker_call(self):
+        ev = docker_evidence.Evidence(self.evidence, 'canonical-web-check')
+        docker = docker_evidence.Docker(ev)
+        with patch.dict(os.environ, self.env):
+            with self.assertRaises(docker_evidence.EvidenceError):
+                docker_evidence.create_container(docker, ev, 'sha256:image-test', [], network='host')
+        self.assertFalse(self.log.exists())
 
     def test_run_records_exact_mounts_before_start_and_keeps_raw_output_private(self):
         result = self.run_once()

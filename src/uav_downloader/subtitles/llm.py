@@ -779,10 +779,15 @@ def _validate_text_parameters(provider, parameters):
         'lmstudio': {'temperature', 'top_p', 'top_k', 'min_p', 'repeat_penalty',
                      'max_output_tokens', 'context_length'},
     }.get(provider)
+    if allowed is not None:
+        allowed = allowed | {'batch_size'}
     if (allowed is None or not isinstance(parameters, dict)
             or set(parameters) - allowed - {'quality'}
             or ('quality' in parameters and parameters['quality'] not in ('fast', 'balanced', 'quality'))):
         raise LlmTranslationError('模型參數不受支援')
+    batch_size = parameters.get('batch_size', 20)
+    if type(batch_size) is not int or not 1 <= batch_size <= 20:
+        raise LlmTranslationError('batch_size 必須是 1 到 20 的整數')
     for name, value in parameters.items():
         # ``quality`` is legacy metadata. It remains in migrated profiles but
         # has no remote-provider equivalent and is omitted from wire payloads.
@@ -803,6 +808,7 @@ def _validate_text_parameters(provider, parameters):
 
 def _segment_batches(segments, parameters):
     output_limit = parameters.get('max_output_tokens', parameters.get('num_predict', 4096))
+    batch_limit = parameters.get('batch_size', 20)
     # Reserve half the output budget for translation expansion and JSON IDs;
     # keep both individual segments and complete requests below that estimate.
     char_limit = max(1, output_limit // 2)
@@ -811,7 +817,7 @@ def _segment_batches(segments, parameters):
         length = len(segment.text)
         if length > char_limit:
             raise LlmTranslationError('字幕片段超過單次模型輸出預算')
-        if batch and (len(batch) >= 20 or size + length > char_limit):
+        if batch and (len(batch) >= batch_limit or size + length > char_limit):
             batches.append(batch)
             batch, size = [], 0
         batch.append(segment)
@@ -822,7 +828,8 @@ def _segment_batches(segments, parameters):
 
 
 def _stage_payload(provider, model, key, parameters, prompt, system, disable_reasoning):
-    parameters = {name: value for name, value in parameters.items() if name != 'quality'}
+    parameters = {name: value for name, value in parameters.items()
+                  if name not in {'quality', 'batch_size'}}
     headers = {'Content-Type': 'application/json'}
     if key:
         headers['Authorization'] = 'Bearer ' + key

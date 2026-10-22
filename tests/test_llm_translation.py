@@ -129,6 +129,118 @@ def _settings(provider='openai', **kwargs):
     return llm.LlmTranslationSettings(**values)
 
 
+def test_stage_profile_batch_size_controls_local_planning_and_defaults_to_twenty():
+    from uav_downloader.subtitles.models import SubtitleSegment
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    segments = [SubtitleSegment(f'seg-{i}', i, i + 1, 'text') for i in range(21)]
+    base = {'kind': 'text', 'provider': 'openai-compatible', 'model': 'fixture',
+            'capabilities': ['correction']}
+    default = ProfileSnapshot(json.dumps({**base, 'parameters': {}}), None, 'default')
+    smaller = ProfileSnapshot(json.dumps({**base, 'parameters': {'batch_size': 2}}), None, 'small')
+
+    assert [len(batch) for batch in llm.plan_transform_batches(segments, default)] == [20, 1]
+    assert [len(batch) for batch in llm.plan_transform_batches(segments, smaller)] == [2] * 10 + [1]
+
+
+@pytest.mark.parametrize('provider', sorted(llm.SUPPORTED_PROVIDERS))
+def test_stage_profile_batch_size_is_local_and_never_sent_to_provider(provider):
+    _, payload = llm._stage_payload(
+        provider, 'fixture', 'fixture-key', {'batch_size': 2, 'temperature': 0},
+        'prompt', 'system', True)
+
+    def contains_batch_size(value):
+        if isinstance(value, dict):
+            return 'batch_size' in value or any(contains_batch_size(item) for item in value.values())
+        if isinstance(value, list):
+            return any(contains_batch_size(item) for item in value)
+        return False
+
+    assert not contains_batch_size(payload)
+
+
+def test_stage_profile_batch_size_runs_three_ordered_requests_and_preserves_timestamps(monkeypatch):
+    from uav_downloader.subtitles import profiles
+    from uav_downloader.subtitles.models import SubtitleSegment
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    requests_seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            requests_seen.append(payload)
+            prompt = payload['messages'][1]['content']
+            items = json.loads(prompt.split('Input: ', 1)[1])
+            content = json.dumps([{'id': item['id'], 'text': f"fixed-{item['id']}"}
+                                  for item in items])
+            body = json.dumps({'choices': [{'finish_reason': 'stop',
+                                            'message': {'content': content}}]}).encode()
+            self.send_response(200); self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = f'http://127.0.0.1:{server.server_port}/chat/completions'
+    monkeypatch.setattr(llm, '_provider_endpoint', lambda _settings: endpoint)
+    monkeypatch.setattr(profiles, 'resolve_credential', lambda *_args: '')
+    snapshot = ProfileSnapshot(json.dumps({
+        'kind': 'text', 'provider': 'openai-compatible', 'base_url': endpoint,
+        'model': 'fixture', 'capabilities': ['correction'],
+        'parameters': {'batch_size': 2, 'max_output_tokens': 4096, 'temperature': 0}}),
+        None, 'small-batches')
+    segments = [SubtitleSegment(f'seg-{i}', i, i + 0.5, f'raw-{i}') for i in range(6)]
+    try:
+        result = llm.transform_segments('correction', segments, snapshot, allow_reasoning=True)
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    assert result == [SubtitleSegment(segment.segment_id, segment.start, segment.end,
+                                      f'fixed-{segment.segment_id}') for segment in segments]
+    assert len(requests_seen) == 3
+    assert [len(json.loads(payload['messages'][1]['content'].split('Input: ', 1)[1]))
+            for payload in requests_seen] == [2, 2, 2]
+    assert all('batch_size' not in json.dumps(payload) for payload in requests_seen)
+
+
+@pytest.mark.parametrize('batch_size', [True, None, 2.0, 0, 21])
+def test_invalid_stage_profile_batch_size_fails_before_provider_request(monkeypatch, batch_size):
+    from uav_downloader.subtitles.models import SubtitleSegment
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    requests_seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            requests_seen.append(self.rfile.read(int(self.headers['Content-Length'])))
+            self.send_response(500); self.end_headers()
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = f'http://127.0.0.1:{server.server_port}/chat/completions'
+    monkeypatch.setattr(llm, '_provider_endpoint', lambda _settings: endpoint)
+    snapshot = ProfileSnapshot(json.dumps({
+        'kind': 'text', 'provider': 'openai-compatible', 'base_url': endpoint,
+        'model': 'fixture', 'capabilities': ['correction'],
+        'parameters': {'batch_size': batch_size}}), None, 'invalid-batch-size')
+    try:
+        with pytest.raises(llm.LlmTranslationError):
+            llm.transform_segments('correction', [SubtitleSegment('seg-1', 1, 2, 'raw')],
+                                   snapshot, allow_reasoning=True)
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    assert requests_seen == []
+
+
 def _openai_response(items):
     return FakeResponse(payload={
         'choices': [{
