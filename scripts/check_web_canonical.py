@@ -37,7 +37,8 @@ def validate_source(*, head: str, expected: str, status: str, uid: int, gid: int
 
 
 def validate_image(obj: dict, *, image_id: str, tag: str, source_sha: str, run_id: str,
-                   base_app_image_id: str | None = None) -> None:
+                   base_app_image_id: str | None = None,
+                   base_app_layers: list[str] | None = None) -> None:
     config = obj.get('Config') or {}
     labels = config.get('Labels') or {}
     if obj.get('Id') != image_id or tag not in (obj.get('RepoTags') or []):
@@ -46,6 +47,22 @@ def validate_image(obj: dict, *, image_id: str, tag: str, source_sha: str, run_i
         raise evidence.EvidenceError('built image source/run labels do not match this evidence run')
     if base_app_image_id is not None and labels.get(BASE_IMAGE_LABEL) != base_app_image_id:
         raise evidence.EvidenceError('test image was not built from the pinned app image ID')
+    if base_app_layers is not None:
+        layers = ((obj.get('RootFS') or {}).get('Layers'))
+        if (not base_app_layers or not isinstance(layers, list)
+                or layers[:len(base_app_layers)] != base_app_layers):
+            raise evidence.EvidenceError('test image root filesystem does not descend from the app image')
+
+
+def validate_app_tag_stable(before: dict, after: dict, *, tag: str,
+                            image_id: str, layers: list[str]) -> None:
+    if (before.get('Id') != image_id or after.get('Id') != image_id
+            or tag not in (before.get('RepoTags') or [])
+            or after.get('RepoTags') != before.get('RepoTags')):
+        raise evidence.EvidenceError('app image tag changed during test image build')
+    if ((before.get('RootFS') or {}).get('Layers') != layers
+            or (after.get('RootFS') or {}).get('Layers') != layers):
+        raise evidence.EvidenceError('app image root filesystem changed during test image build')
 
 
 def validate_test_container(obj: dict, *, container_id: str, image_id: str,
@@ -101,9 +118,10 @@ def build_image(docker: evidence.Docker, args: list[str], label: str, timeout: f
         raise evidence.EvidenceError(f'{label} image build failed; inspect private evidence')
 
 
-def test_image_build_command(tag: str, source_sha: str, run_id: str, app_image_id: str) -> list[str]:
+def test_image_build_command(tag: str, source_sha: str, run_id: str,
+                             app_image_tag: str, app_image_id: str) -> list[str]:
     args = ['build', '-f', str(ROOT / 'Dockerfile.web-tests'), '--build-arg',
-            f'APP_IMAGE={app_image_id}', '-t', tag]
+            f'APP_IMAGE={app_image_tag}', '-t', tag]
     for label in (f'{SOURCE_LABEL}={source_sha}', f'{RUN_LABEL}={run_id}',
                   f'{BASE_IMAGE_LABEL}={app_image_id}'):
         args.extend(['--label', label])
@@ -151,10 +169,14 @@ def execute(args: argparse.Namespace) -> int:
         app_image_id = app.get('image_id')
         if not isinstance(app_image_id, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', app_image_id):
             raise evidence.EvidenceError('app image did not provide an immutable image ID')
-        validate_image(inspect_image(docker, app_image_id), image_id=app_image_id, tag=app_tag,
+        app_inspect = inspect_image(docker, app_tag)
+        validate_image(app_inspect, image_id=app_image_id, tag=app_tag,
                        source_sha=head, run_id=run_id)
+        app_layers = ((app_inspect.get('RootFS') or {}).get('Layers'))
+        if not isinstance(app_layers, list) or not app_layers:
+            raise evidence.EvidenceError('app image did not provide root filesystem layers')
 
-        test_build = test_image_build_command(test_tag, head, run_id, app_image_id)
+        test_build = test_image_build_command(test_tag, head, run_id, app_tag, app_image_id)
         ev.update(app_image_id=app_image_id, app_image_tag=app_tag,
                   test_image_tag=test_tag, test_build_base_image_id=app_image_id)
         build_image(docker, test_build, 'test-build', args.timeout)
@@ -163,7 +185,11 @@ def execute(args: argparse.Namespace) -> int:
         if not isinstance(test_image_id, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', test_image_id):
             raise evidence.EvidenceError('test image did not provide an immutable image ID')
         validate_image(inspect_image(docker, test_image_id), image_id=test_image_id, tag=test_tag,
-                       source_sha=head, run_id=run_id, base_app_image_id=app_image_id)
+                       source_sha=head, run_id=run_id, base_app_image_id=app_image_id,
+                       base_app_layers=app_layers)
+        app_after = inspect_image(docker, app_tag)
+        validate_app_tag_stable(app_inspect, app_after, tag=app_tag,
+                                image_id=app_image_id, layers=app_layers)
         ev.update(test_image_id=test_image_id,
                   app_image_metadata=app, test_image_metadata=test)
 

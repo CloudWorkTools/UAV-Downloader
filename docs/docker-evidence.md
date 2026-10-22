@@ -36,7 +36,7 @@ python3 scripts/docker_evidence.py run --image IMAGE_TAG_OR_ID --timeout 30 -- s
 python3 /path/to/UAV-Downloader/scripts/check_web_canonical.py --source-sha FULL_COMMIT_SHA
 ```
 
-Runner 會依序建置 `Dockerfile.web` 與以不可變 app image ID 為基礎的 `Dockerfile.web-tests`，再以目前非 root UID/GID、bridge network、唯讀 source bind 和本次專用 `/config`、`/downloads` volumes 執行既有 `scripts/check_web.sh`。它在啟動前檢查實際 image ID、network、user、workdir 與全部 mounts；checkout 在建置期間變髒或身份不符時會 fail closed。成功或失敗摘要會指出私有 evidence 目錄。Runner 只清理 manifest 可驗明的停止容器與未參照 scratch volumes，不做 image 清除或 prune。
+Runner 會依序建置 `Dockerfile.web` 與以本次唯一 app tag 為基礎的 `Dockerfile.web-tests`。它在 test build 前後確認該 tag 仍指向相同 app image ID，並驗證 test image 的 root filesystem layers 以 app image layers 為前綴，然後以目前非 root UID/GID、bridge network、唯讀 source bind 和本次專用 `/config`、`/downloads` volumes 執行既有 `scripts/check_web.sh`。它在啟動前檢查實際 image ID、network、user、workdir 與全部 mounts；checkout 在建置期間變髒或身份不符時會 fail closed。成功或失敗摘要會指出私有 evidence 目錄。Runner 只清理 manifest 可驗明的停止容器與未參照 scratch volumes，不做 image 清除或 prune。
 
 對已完成的 run，可用摘要中的 run ID 清除本工具建立且可驗明的停止容器：
 

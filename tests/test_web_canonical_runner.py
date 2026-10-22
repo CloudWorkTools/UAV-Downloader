@@ -58,10 +58,11 @@ class CanonicalRunnerTests(unittest.TestCase):
         obj = {'Id': 'sha256:' + '1' * 64, 'RepoTags': ['uav-web-tests:test'], 'Config': {'Labels': {
             runner.SOURCE_LABEL: 'a' * 40, runner.RUN_LABEL: 'run-1',
             runner.BASE_IMAGE_LABEL: 'sha256:' + '2' * 64,
-        }}}
+        }}, 'RootFS': {'Layers': ['app-layer', 'test-layer']}}
         expected = dict(image_id='sha256:' + '1' * 64, tag='uav-web-tests:test',
                         source_sha='a' * 40, run_id='run-1',
-                        base_app_image_id='sha256:' + '2' * 64)
+                        base_app_image_id='sha256:' + '2' * 64,
+                        base_app_layers=['app-layer'])
         runner.validate_image(obj, **expected)
         stale = dict(obj, Id='sha256:' + '3' * 64)
         with self.assertRaises(runner.evidence.EvidenceError):
@@ -72,11 +73,25 @@ class CanonicalRunnerTests(unittest.TestCase):
             stale = {'Id': obj['Id'], 'RepoTags': obj['RepoTags'], 'Config': {'Labels': dict(obj['Config']['Labels'], **{label: value})}}
             with self.assertRaises(runner.evidence.EvidenceError):
                 runner.validate_image(stale, **expected)
+        wrong_ancestry = dict(obj, RootFS={'Layers': ['other-app-layer', 'test-layer']})
+        with self.assertRaises(runner.evidence.EvidenceError):
+            runner.validate_image(wrong_ancestry, **expected)
 
-    def test_test_image_build_command_pins_immutable_app_image_id(self):
+    def test_app_tag_change_during_build_is_rejected(self):
+        before = {'Id': 'sha256:' + 'a' * 64, 'RepoTags': ['uav-web-check:run'],
+                  'RootFS': {'Layers': ['app-layer']}}
+        runner.validate_app_tag_stable(before, dict(before), tag='uav-web-check:run',
+                                       image_id=before['Id'], layers=['app-layer'])
+        changed_tag = dict(before, RepoTags=['uav-web-check:foreign'])
+        with self.assertRaises(runner.evidence.EvidenceError):
+            runner.validate_app_tag_stable(before, changed_tag, tag='uav-web-check:run',
+                                           image_id=before['Id'], layers=['app-layer'])
+
+    def test_test_image_build_command_uses_run_scoped_app_tag_and_records_id(self):
         app_id = 'sha256:' + 'a' * 64
-        command = runner.test_image_build_command('uav-web-tests:test', 'b' * 40, 'run-1', app_id)
-        self.assertIn(f'APP_IMAGE={app_id}', command)
+        app_tag = 'uav-web-check:bbbbbbbbbbbb-run-1'
+        command = runner.test_image_build_command('uav-web-tests:test', 'b' * 40, 'run-1', app_tag, app_id)
+        self.assertIn(f'APP_IMAGE={app_tag}', command)
         self.assertIn(f'{runner.BASE_IMAGE_LABEL}={app_id}', command)
         self.assertEqual(command[-1], str(ROOT))
         self.assertEqual(command[command.index('-f') + 1], str(ROOT / 'Dockerfile.web-tests'))
@@ -139,9 +154,9 @@ class CanonicalRunnerTests(unittest.TestCase):
             if image == test_id:
                 labels[runner.BASE_IMAGE_LABEL] = app_id
                 return {'Id': image, 'RepoTags': [f'uav-web-tests:{head[:12]}-{fake_docker.evidence.run_id[:8]}'],
-                        'Config': {'Labels': labels}}
-            return {'Id': image, 'RepoTags': [f'uav-web-check:{head[:12]}-{fake_docker.evidence.run_id[:8]}'],
-                    'Config': {'Labels': labels}}
+                        'Config': {'Labels': labels}, 'RootFS': {'Layers': ['app-layer', 'test-layer']}}
+            return {'Id': app_id, 'RepoTags': [f'uav-web-check:{head[:12]}-{fake_docker.evidence.run_id[:8]}'],
+                    'Config': {'Labels': labels}, 'RootFS': {'Layers': ['app-layer']}}
 
         def volume(docker, name, ev):
             self.assertIs(docker, fake_docker)
