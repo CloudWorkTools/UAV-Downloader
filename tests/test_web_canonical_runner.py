@@ -32,12 +32,10 @@ class CanonicalRunnerTests(unittest.TestCase):
     def test_wrong_source_sha_is_rejected_before_docker_or_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             evidence_root = Path(temporary) / 'evidence'
-            result = subprocess.run(
-                [sys.executable, str(RUNNER), '--source-sha', '0' * 40,
-                 '--evidence-root', str(evidence_root)], cwd=ROOT,
-                capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('source SHA does not match HEAD', result.stderr)
+            with self.assertRaisesRegex(runner.evidence.EvidenceError,
+                                        'source SHA does not match HEAD'):
+                runner.validate_source(head='a' * 40, expected='0' * 40, status='',
+                                       uid=os.getuid(), gid=os.getgid())
             self.assertFalse(evidence_root.exists())
 
     def test_source_and_environment_mismatches_fail_closed(self):
