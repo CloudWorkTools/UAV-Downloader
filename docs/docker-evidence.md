@@ -30,6 +30,14 @@ python3 scripts/docker_evidence.py run --image IMAGE_TAG_OR_ID --timeout 30 -- s
 
 `--timeout` 接受大於 0 且不超過 86400 秒（24 小時）的值，避免底層程序等待超時的整數範圍溢位。每次 Docker CLI 呼叫都有獨立 ID，錯誤診斷以不覆寫的私有檔保存。若 payload logs 無法擷取，cleanup 會保留該容器，直到其私有輸出證據可供檢查。
 
+要在本機執行與 CI 相同的 Web test image，可從任何目前目錄呼叫 canonical runner，並傳入乾淨 checkout 的完整 HEAD SHA：
+
+```bash
+python3 /path/to/UAV-Downloader/scripts/check_web_canonical.py --source-sha FULL_COMMIT_SHA
+```
+
+Runner 會依序建置 `Dockerfile.web` 與以不可變 app image ID 為基礎的 `Dockerfile.web-tests`，再以目前非 root UID/GID、bridge network、唯讀 source bind 和本次專用 `/config`、`/downloads` volumes 執行既有 `scripts/check_web.sh`。它在啟動前檢查實際 image ID、network、user、workdir 與全部 mounts；checkout 在建置期間變髒或身份不符時會 fail closed。成功或失敗摘要會指出私有 evidence 目錄。Runner 只清理 manifest 可驗明的停止容器與未參照 scratch volumes，不做 image 清除或 prune。
+
 對已完成的 run，可用摘要中的 run ID 清除本工具建立且可驗明的停止容器：
 
 ```bash

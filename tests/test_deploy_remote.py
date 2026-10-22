@@ -96,6 +96,12 @@ def test_deployment_bundles_private_firecrawl_by_default(monkeypatch, tmp_path, 
     assert deploy.SPEACHES_IMAGE in (deploy.ROOT / 'docker-compose.yml').read_text()
     remote = calls[-1][-1]
     assert remote.endswith('1' if expected else '0')
+    assert ' 192.0.2.10 8080 ' in f' {remote} '
+    ssh_calls = [args for args in calls if args and args[0] == 'ssh']
+    assert ssh_calls
+    assert all('-p' not in args for args in ssh_calls)
+    assert all(args[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8'] for args in ssh_calls)
+    assert "http://{host}:{port}/api/status" in deploy.REMOTE_INSTALL
 
 
 def test_container_storage_probe_uses_effective_settings_and_cleans_files(monkeypatch, tmp_path, capsys):

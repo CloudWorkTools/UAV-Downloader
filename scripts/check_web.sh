@@ -15,7 +15,7 @@ export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
   tests/test_subtitle_tasks.py tests/test_subtitle_file_selection.py \
   tests/test_subtitle_results.py tests/test_subtitle_http.py \
   tests/test_activity.py tests/test_video_identity.py tests/test_history.py \
-  tests/test_web_checks.py tests/test_docker_evidence.py
+  tests/test_web_checks.py tests/test_docker_evidence.py tests/test_web_canonical_runner.py
 
 for test in tests/*.cjs; do
   node "$test"

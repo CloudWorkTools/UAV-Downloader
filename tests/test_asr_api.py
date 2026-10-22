@@ -152,6 +152,8 @@ def test_stage_asr_uses_vad_intervals_and_rejects_out_of_range_seconds(tmp_path,
     result = asr.transcribe_stage(str(wav), [SpeechInterval(1, 2)], snapshot, 'ja', lambda: False)
     assert result == [SubtitleSegment('segment-000000-0001', 1.2, 1.8, '台詞')]
     assert [request[0] for request in requests] == ['/v1/audio/transcriptions']
+    assert b'timestamp_granularities[]' in requests[0][2]
+    assert b'word' not in requests[0][2]
 
 
 def test_stage_asr_does_not_clamp_invalid_seconds(tmp_path, api_server):
@@ -168,6 +170,51 @@ def test_stage_asr_does_not_clamp_invalid_seconds(tmp_path, api_server):
     from uav_downloader.subtitles.models import StageRequestError
     with pytest.raises(StageRequestError, match='秒單位'):
         asr.transcribe_stage(str(wav), [SpeechInterval(1, 2)], snapshot, 'ja', lambda: False)
+
+
+def test_stage_asr_rejects_whisper_whole_second_tail_beyond_short_chunk(tmp_path, api_server):
+    settings, responses, _, _ = api_server
+    # LocalAI/Faster-Whisper reproduced this timestamp shape for a 2.364s VAD chunk.
+    responses.append((200, {'segments': [segment(0, 2, '第一段'), segment(2, 3, '第二段')]}))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 5)
+    snapshot = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'],
+        'parameters': {},
+    }), None, 'snapshot')
+    from uav_downloader.subtitles.models import StageRequestError
+    with pytest.raises(StageRequestError, match='秒單位'):
+        asr.transcribe_stage(
+            str(wav), [SpeechInterval(2.370, 4.734)], snapshot, 'ja', lambda: False)
+
+
+def test_stage_asr_requests_configured_timestamp_granularities(tmp_path, api_server):
+    settings, responses, requests, _ = api_server
+    responses.append((200, {'segments': [segment(0, 1.62, '句子'), segment(1.84, 2.06, '下一句')]}))
+    wav = tmp_path / 'audio.wav'
+    audio(wav, 3)
+    snapshot = ProfileSnapshot(json.dumps({
+        'profile_id': 'asr', 'display_name': 'ASR', 'kind': 'asr',
+        'provider': 'localai', 'capabilities': ['asr'],
+        'base_url': settings['base_url'], 'model': settings['model'],
+        'parameters': {'timestamp_granularities': ['segment', 'word']},
+    }), None, 'snapshot')
+    result = asr.transcribe_stage(str(wav), [SpeechInterval(0, 2.364)], snapshot, 'ja', lambda: False)
+    assert [(item.start, item.end) for item in result] == [(0, 1.62), (1.84, 2.06)]
+    body = requests[0][2]
+    values = [part.split(b'\r\n\r\n', 1)[1].split(b'\r\n', 1)[0]
+              for part in body.split(b'--') if b'name="timestamp_granularities[]"' in part]
+    assert values == [b'segment', b'word']
+
+
+@pytest.mark.parametrize('granularities', [
+    [], ['word', 'word'], ['other'], ['segment', 'word', 'segment'], 'word', [None],
+])
+def test_asr_rejects_invalid_timestamp_granularities(granularities):
+    with pytest.raises(ValueError, match='timestamp_granularities'):
+        asr.validate_asr_parameters({'timestamp_granularities': granularities})
 
 
 @pytest.mark.parametrize(('status', 'retryable'), [(429, True), (503, True), (401, False)])
@@ -254,6 +301,13 @@ def test_stage_asr_invalid_segments_schema_is_permanent(tmp_path, api_server):
     {'temperature': float('nan')},
     {'temperature': -0.1},
     {'temperature': 2.1},
+    {'timestamp_granularities': []},
+    {'timestamp_granularities': ['word', 'word']},
+    {'timestamp_granularities': ['segment', 'unknown']},
+    {'timestamp_granularities': ['segment', 'word', 'segment']},
+    {'timestamp_granularities': 'word'},
+    {'timestamp_granularities': None},
+    {'timestamp_granularities': [['word']]},
 ])
 def test_stage_asr_rejects_invalid_multipart_parameter_values_before_request(
         tmp_path, api_server, parameters):
