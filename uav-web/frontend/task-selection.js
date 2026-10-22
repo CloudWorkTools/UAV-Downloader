@@ -32,7 +32,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     cancel.hidden = !cancellable;
     cancel.disabled = busy || !cancellable;
     cancel.textContent = busy ? '處理中…' : `取消下載 (${cancellable})`;
-    for (const action of ['pause', 'resume', 'retry', 'edit']) {
+    for (const action of ['pause', 'resume', 'retry', 'edit', 'remove']) {
       const button = document.getElementById(`${action}-tasks-button`);
       if (button) {
         const count = [...selected].filter(id => canAction(tasksById.get(id), action)).length;
