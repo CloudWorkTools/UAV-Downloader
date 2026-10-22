@@ -205,6 +205,18 @@ async function run() {
   await taskSelection.perform('retry');
   assert.deepEqual(operations.slice(-2).map(operation => operation.task_id), ['cancelled-1', 'cancelled-2']);
   assert.equal(element('retry-tasks-button').hidden, true);
+  context.renderTasks([{task_id:'remove-cancelled-1', status:'cancelled'}, {task_id:'remove-cancelled-2', status:'cancelled'}, {task_id:'failed-action', status:'failed'}, {task_id:'keep-active', status:'downloading'}]);
+  assert.equal(element('remove-tasks-button').hidden, true);
+  taskSelection.toggleAll();
+  assert.equal(element('remove-tasks-button').hidden, false, 'Cancelled selections expose batch removal');
+  assert.equal(element('remove-tasks-button').disabled, false);
+  assert.match(html, /id="remove-tasks-button"[^>]*onclick="taskSelection.perform\('remove'\)"/);
+  await Promise.all([taskSelection.perform('remove'), taskSelection.perform('remove')]);
+  assert.deepEqual(operations.slice(-3).map(operation => [operation.action, operation.task_id]), [['remove','remove-cancelled-1'], ['remove','remove-cancelled-2'], ['remove','failed-action']]);
+  assert.equal(taskSelection.has('remove-cancelled-1'), false);
+  assert.equal(taskSelection.has('remove-cancelled-2'), false);
+  assert.equal(taskSelection.has('failed-action'), true, 'Failed removals remain selected');
+  assert.equal(taskSelection.has('keep-active'), true, 'Active downloads are not removed');
   const probeButton = {disabled:false};
   await context.testDownloadDestination(probeButton);
   assert.equal(probeButton.disabled, false);
