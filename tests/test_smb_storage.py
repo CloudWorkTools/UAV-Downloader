@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -563,14 +564,17 @@ def test_smb_settings_and_queue_snapshot(monkeypatch, tmp_path):
     assert not Path(task.dest).exists()
 
 
-def test_hls_merge_and_ffmpeg_stream_back_to_smb(smb):
+@pytest.mark.parametrize('source_format', ['mpegts', 'mp4'])
+@pytest.mark.parametrize('folder_name', ['plain', '影片 🎬'])
+def test_hls_merge_and_ffmpeg_stream_back_to_smb(smb, source_format, folder_name):
     ffmpeg = shutil.which('ffmpeg')
     if not ffmpeg:
         pytest.skip('ffmpeg not installed')
-    media = subprocess.check_output([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=128x128:r=10', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', '1', '-c:v', 'libx264', '-c:a', 'aac', '-f', 'mpegts', 'pipe:1'])
+    flags = ['-movflags', 'frag_keyframe+empty_moov'] if source_format == 'mp4' else []
+    media = subprocess.check_output([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=128x128:r=10', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', '1', '-c:v', 'libx264', '-c:a', 'aac', *flags, '-f', source_format, 'pipe:1'])
     job = object.__new__(base.M3U8Crawler)
-    job._dest_folder = smb.root
-    job._temp_folder = os.path.join(smb.root, 'segments')
+    job._dest_folder = os.path.join(smb.root, folder_name)
+    job._temp_folder = os.path.join(job._dest_folder, 'segments')
     job._targetName = 'merged-video'
     job._tsList = ['first']
     job._cancel_job = False
@@ -578,11 +582,27 @@ def test_hls_merge_and_ffmpeg_stream_back_to_smb(smb):
     with storage_open(job._seg_savename(0), 'wb') as segment:
         segment.write(media)
     assert job._mergeMp4Chunks() > 0
-    target = smb.folder / 'merged-video.mp4'
+    folder = smb.folder / folder_name
+    target = folder / 'merged-video.mp4'
     assert target.read_bytes()[4:8] == b'ftyp'
+    # Inspect top-level boxes: a playable fragmented MP4 still fails this check.
+    with target.open('rb') as stream:
+        boxes = []
+        while header := stream.read(8):
+            size = int.from_bytes(header[:4], 'big')
+            assert size >= 8
+            boxes.append(header[4:8])
+            stream.seek(size - 8, 1)
+    assert b'moov' in boxes
+    assert b'moof' not in boxes
+    assert boxes.index(b'moov') < boxes.index(b'mdat')
+    probe = subprocess.check_output(['ffprobe', '-v', 'error', '-show_format', '-show_streams', '-of', 'json', str(target)])
+    metadata = json.loads(probe)
+    assert float(metadata['format']['duration']) == pytest.approx(1, abs=0.2)
+    assert {stream['codec_type'] for stream in metadata['streams']} == {'video', 'audio'}
     subprocess.run([ffmpeg, '-v', 'error', '-i', str(target), '-f', 'null', '-'], check=True)
-    assert not list(smb.folder.glob('uav-remux-*'))
-    assert not (smb.folder / 'segments').exists()
+    assert not list(folder.glob('uav-remux-*'))
+    assert not (folder / 'segments').exists()
 
 
 def test_remote_existing_output_is_not_deleted_during_merge(smb):
@@ -650,16 +670,89 @@ def test_remote_write_exception_is_fatal_and_redacted(smb, monkeypatch):
     assert 'private account detail' not in str(error.value)
 
 
-def test_media_remux_cancellation_stops_process(smb):
+def test_media_remux_cancellation_does_not_open_output(smb):
+    (smb.folder / 'source.ts').write_bytes(b'not-needed-for-cancel')
+    assert not smb.backend.remux_to_mp4(os.path.join(smb.root, 'source.ts'), os.path.join(smb.root, 'cancelled.mp4'),
+                                       lambda: True)
+    assert not (smb.folder / 'cancelled.mp4').exists()
+
+
+@pytest.mark.parametrize('phase', ['packets', 'faststart'])
+def test_smb_remux_cancellation_preserves_segments(smb, monkeypatch, phase):
     ffmpeg = shutil.which('ffmpeg')
     if not ffmpeg:
         pytest.skip('ffmpeg not installed')
-    (smb.folder / 'source.ts').write_bytes(b'not-needed-for-cancel')
-    processes = []
-    assert not smb.backend.remux_to_mp4(os.path.join(smb.root, 'source.ts'), os.path.join(smb.root, 'cancelled.mp4'),
-                                       ffmpeg, lambda: True, lambda process: processes.append(process) if process else None)
-    assert processes and all(process.poll() is not None for process in processes)
+    media = subprocess.check_output([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i',
+                                    'color=s=128x128:r=10', '-t', '1', '-c:v',
+                                    'libx264', '-f', 'mpegts', 'pipe:1'])
+    job = object.__new__(base.M3U8Crawler)
+    job._dest_folder = smb.root
+    job._temp_folder = os.path.join(smb.root, 'segments')
+    job._targetName = 'cancelled'
+    job._tsList = ['first']
+    job._cancel_job = False
+    smb.backend.makedirs(job._temp_folder)
+    with storage_open(job._seg_savename(0), 'wb') as segment:
+        segment.write(media)
+    original_open = smb.backend.open
+    reads_after_cancel = []
+    def open_file(path, mode, **kwargs):
+        stream = original_open(path, mode, **kwargs)
+        if phase == 'faststart' and path.endswith('out.mp4') and mode == 'rb':
+            job._cancel_job = True
+            original_read = stream.read
+            def read_after_cancel(*args):
+                reads_after_cancel.append(True)
+                return original_read(*args)
+            stream.read = read_after_cancel
+        return stream
+    monkeypatch.setattr(smb.backend, 'open', open_file)
+    original_remux = smb.backend.remux_to_mp4
+    checks = 0
+    def remux(source, destination, cancelled):
+        def check_cancelled():
+            nonlocal checks
+            checks += 1
+            if phase == 'packets' and checks > 6:
+                job._cancel_job = True
+            return cancelled()
+        return original_remux(source, destination, check_cancelled)
+    monkeypatch.setattr(smb.backend, 'remux_to_mp4', remux)
+
+    assert job._mergeMp4Chunks() == 0
+    assert job._cancel_job
+    assert not reads_after_cancel
     assert not (smb.folder / 'cancelled.mp4').exists()
+    assert (smb.folder / 'segments' / '000000.mp4').read_bytes() == media
+    assert not list(smb.folder.glob('uav-remux-*'))
+
+
+@pytest.mark.parametrize('phase', ['write', 'faststart'])
+def test_smb_remux_io_failure_is_fatal(smb, monkeypatch, phase):
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        pytest.skip('ffmpeg not installed')
+    media = subprocess.check_output([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i',
+                                    'color=s=128x128:r=10', '-t', '1', '-c:v',
+                                    'libx264', '-f', 'mpegts', 'pipe:1'])
+    (smb.folder / 'source.ts').write_bytes(media)
+    original_open = smb.backend.open
+    def open_file(path, mode, **kwargs):
+        stream = original_open(path, mode, **kwargs)
+        if path.endswith('output.mp4'):
+            def fail(*args):
+                raise OSError(errno.ENOSPC, 'No space left on device')
+            if phase == 'write' and mode == 'w+b':
+                stream.write = fail
+            if phase == 'faststart' and mode == 'rb':
+                stream.read = fail
+        return stream
+    monkeypatch.setattr(smb.backend, 'open', open_file)
+
+    with pytest.raises(StorageWriteError, match='No space left'):
+        smb.backend.remux_to_mp4(os.path.join(smb.root, 'source.ts'),
+                                 os.path.join(smb.root, 'output.mp4'), lambda: False)
+    assert (smb.folder / 'source.ts').read_bytes() == media
 
 
 def test_native_smb_creates_missing_nested_directory(smb):
@@ -855,3 +948,94 @@ def test_production_batch_smoke_catches_shared_roots_and_cleans_on_failure(smb, 
     with pytest.raises(ValueError, match='Storage destination is already active'):
         check_batch_smb(smb.settings)
     assert list(smb.folder.iterdir()) == []
+
+
+@pytest.fixture
+def mp4_tools():
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        pytest.skip('FFmpeg and ffprobe are required for the deployment MP4 check')
+
+
+def test_mp4_smoke_checks_unicode_smb_paths_and_preserves_existing_files(smb, monkeypatch, mp4_tools):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    original = smb.folder / 'existing.mp4'
+    original.write_bytes(b'keep')
+    remux = SmbStorage.remux_to_mp4
+    paths = []
+    def checked_remux(self, source, destination, cancelled):
+        assert self.remote
+        paths.append(destination)
+        return remux(self, source, destination, cancelled)
+    monkeypatch.setattr(SmbStorage, 'remux_to_mp4', checked_remux)
+
+    assert check_mp4_smb(smb.settings)
+    assert len(paths) == 2
+    assert all('中文🎬' in path for path in paths)
+    assert list(smb.folder.iterdir()) == [original]
+    assert original.read_bytes() == b'keep'
+
+
+@pytest.mark.parametrize('failure', ['remux', 'decode'])
+def test_mp4_smoke_failure_cleans_only_its_test_folder(smb, monkeypatch, failure, mp4_tools):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    original = smb.folder / 'existing.mp4'
+    original.write_bytes(b'keep')
+    def fail(*args, **kwargs):
+        raise OSError('synthetic media failure')
+    if failure == 'remux':
+        monkeypatch.setattr(SmbStorage, 'remux_to_mp4', fail)
+    else:
+        run = subprocess.run
+        def fail_decode(args, **kwargs):
+            if 'null' in args:
+                return fail()
+            return run(args, **kwargs)
+        monkeypatch.setattr(subprocess, 'run', fail_decode)
+    with pytest.raises(OSError, match='synthetic media failure'):
+        check_mp4_smb(smb.settings)
+    assert list(smb.folder.iterdir()) == [original]
+    assert original.read_bytes() == b'keep'
+
+
+def test_mp4_smoke_rejects_unfinalized_fragmented_output(smb, monkeypatch, mp4_tools):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    fragmented = subprocess.check_output([
+        'ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=s=128x128:r=10',
+        '-t', '1', '-c:v', 'libx264', '-movflags', 'frag_keyframe+empty_moov',
+        '-f', 'mp4', 'pipe:1'])
+    def publish_fragmented(self, source, destination, cancelled):
+        with storage_open(destination, 'wb') as stream:
+            stream.write(fragmented)
+        return True
+    monkeypatch.setattr(SmbStorage, 'remux_to_mp4', publish_fragmented)
+    with pytest.raises(ValueError, match='MP4'):
+        check_mp4_smb(smb.settings)
+    assert list(smb.folder.iterdir()) == []
+
+
+@pytest.mark.parametrize('settings', [{}, {'enabled': False, 'mode': 'smb'},
+                                      {'enabled': True, 'mode': 'direct'}])
+def test_mp4_smoke_skips_non_smb_settings(settings):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    assert not check_mp4_smb(settings)
+
+
+def test_mp4_smoke_cleanup_failure_is_not_success(smb, monkeypatch, mp4_tools):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    monkeypatch.setattr(SmbStorage, 'rmtree', lambda *args, **kwargs: None)
+    with pytest.raises(OSError, match='cleanup failed'):
+        check_mp4_smb(smb.settings)
+
+
+def test_storage_smoke_cli_redacts_settings_failure(monkeypatch, capsys):
+    from uav_downloader.daemon import storage_smoke
+    monkeypatch.setattr(sys, 'argv', ['storage_smoke', '--require-smb'])
+    def fail(**kwargs):
+        raise RuntimeError('private-password')
+    monkeypatch.setattr(nas, 'load_settings', fail)
+    with pytest.raises(SystemExit) as error:
+        storage_smoke.main()
+    assert error.value.code == 1
+    output = capsys.readouterr().out
+    assert 'settings: FAILED' in output
+    assert 'private-password' not in output
