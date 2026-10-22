@@ -475,6 +475,33 @@ class TaskManager:
         self.start_dispatcher()
         return True
 
+    def start_now(self, task_id: str) -> bool:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task or task_id in self._active or task.status not in ('pending', 'paused', 'failed', 'cancelled'):
+                return False
+            if task.status != 'pending':
+                if not self.restart_task(task_id):
+                    return False
+            elif not task.subtitles_only:
+                reason = self._duplicate_reason(task)
+                if reason:
+                    raise ValueError(reason)
+            position = self._queue.index(task_id) if task_id in self._queue else len(self._queue)
+            if task_id in self._queue:
+                self._queue.remove(task_id)
+            # Reserve under the dispatcher lock so concurrent requests cannot start it twice.
+            self._active[task_id] = task
+            try:
+                task.thread = threading.Thread(target=self._run_task, args=(task,), daemon=True,
+                                               name=f'worker-{task_id}')
+                task.thread.start()
+            except Exception:
+                self._active.pop(task_id, None)
+                self._queue.insert(position, task_id)
+                raise
+            return True
+
     def resume_unfinished(self):
         with self._lock:
             for task in self._tasks.values():

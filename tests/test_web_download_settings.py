@@ -684,3 +684,40 @@ def test_batch_dialog_appends_through_real_daemon(web_settings, monkeypatch, tmp
             assert (tmp_path / 'videos' / '追加測試' / (code + '.mp4')).read_bytes() == code.encode()
     finally:
         restarted.stop()
+
+
+def test_start_now_api_runs_worker_above_limit_without_duplicate_start(web_settings, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from uav_downloader.daemon import task_manager as tm
+    request, server, root = web_settings
+    manager = server.task_manager
+    manager.max_concurrent = 1
+    occupied = manager.add_task('https://missav.ai/mimk-290')
+    manager._queue.remove(occupied.task_id)
+    manager._active[occupied.task_id] = occupied
+    task = manager.add_task('https://missav.ai/mimk-291')
+    started, release = threading.Event(), threading.Event()
+    def create_site(url, savepath, **kwargs):
+        def download():
+            started.set()
+            assert release.wait(3)
+            Path(savepath, 'MIMK-291.mp4').write_bytes(b'immediate-download')
+            return True
+        return SimpleNamespace(dest_folder=lambda: savepath, target_name=lambda: 'MIMK-291',
+                               is_url_vaildate=lambda: True, start_download=download, _cancel_job=False)
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', create_site)
+    try:
+        payload = dict(action='start_now', task_id=task.task_id)
+        status, result = request('/api/download/action', payload)
+        assert status == 200 and result['success']
+        assert started.wait(1)
+        assert len(manager._active) == 2 and manager.max_concurrent == 1
+        assert request('/api/download/action', payload)[0] == 409
+        assert occupied.task_id in manager._active
+    finally:
+        release.set()
+        if task.thread:
+            task.thread.join(3)
+    assert task.status == 'completed', task.error
+    assert (root / 'videos' / 'MIMK-291.mp4').read_bytes() == b'immediate-download'

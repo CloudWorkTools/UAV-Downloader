@@ -7,6 +7,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
   let tasksById = new Map();
   const canAction = (task, action) => ({
     edit: task?.subtitles_only ? [] : ['pending', 'preparing', 'downloading', 'paused', 'failed', 'cancelled'],
+    start_now: ['pending', 'paused', 'failed', 'cancelled'],
     pause: ['pending', 'preparing', 'downloading'], resume: ['paused'],
     retry: ['failed', 'cancelled'], remove: ['completed', 'skipped', 'cancelled', 'failed']
   }[action] || []).includes(task?.status);

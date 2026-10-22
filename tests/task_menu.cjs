@@ -94,6 +94,25 @@ try {
       dialog.querySelector('button[type=button]').click();
       check(!dialog.open, 'User could not close the edit dialog');
       check(document.getElementById('tasks-container').textContent.includes('40%'), 'Closing edit did not show the latest task data');
+      const pending = {...task,task_id:'immediate-test',status:'pending'};
+      renderTasks([pending]);
+      const immediate = [...document.querySelectorAll('#tasks-container button')].find(button=>button.textContent==='立即下載');
+      check(immediate && !immediate.disabled, 'Pending task has no immediate-download action');
+      let immediateRequests=0, finishImmediate;
+      window.fetch=async(url,options)=>{
+        check(url==='/api/download/action', 'Wrong immediate-download endpoint');
+        const body=JSON.parse(options.body);
+        check(body.action==='start_now' && body.task_id===pending.task_id, 'Wrong immediate action or task');
+        immediateRequests++;
+        await new Promise(resolve=>{finishImmediate=resolve;});
+        return {ok:true,json:async()=>({success:true})};
+      };
+      immediate.click(); immediate.click();
+      await new Promise(resolve=>setTimeout(resolve,0));
+      check(immediateRequests===1, 'Immediate action submitted twice');
+      finishImmediate();await new Promise(resolve=>setTimeout(resolve,0));
+      for(const status of ['paused','failed','cancelled'])check(taskSelection.canAction({...pending,status},'start_now'),'Retryable task cannot start immediately');
+      for(const status of ['downloading','completed','skipped','pausing'])check(!taskSelection.canAction({...pending,status},'start_now'),'Active or finished task permits immediate action');
       renderTasks([]);
       check(document.getElementById('edit-tasks-button').hidden, 'Removed task remained editable');
       document.body.innerHTML = '<p>MENU_TEST_PASS</p>';

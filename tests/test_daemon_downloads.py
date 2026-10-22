@@ -973,3 +973,114 @@ def test_batch_append_cancel_preserves_other_batch_files(manager, tmp_path):
     assert not Path(tasks[0].dest, '0.mp4').exists()
     assert Path(tasks[1].dest, '1.mp4').read_bytes() == bytes([1])
     assert Path(tasks[1].files.workdir).is_dir()
+
+
+@pytest.mark.parametrize('status', ['pending', 'paused', 'failed', 'cancelled'])
+def test_start_now_bypasses_limit_once_and_preserves_settings(manager, monkeypatch, status):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    manager.max_concurrent = 1
+    occupied = manager.add_task('https://missav.ai/mimk-100')
+    task = manager.add_task('https://missav.ai/mimk-101')
+    task.status = status
+    if status != 'pending':
+        manager._queue.remove(task.task_id)
+    manager._queue.remove(occupied.task_id)
+    manager._active[occupied.task_id] = occupied
+    started, release = threading.Event(), threading.Event()
+    calls = []
+    def worker(current):
+        calls.append(current.task_id)
+        started.set()
+        release.wait(3)
+        with manager._lock:
+            manager._active.pop(current.task_id, None)
+    monkeypatch.setattr(manager, '_run_task', worker)
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: manager.start_now(task.task_id), range(16)))
+        assert started.wait(1)
+        assert results.count(True) == 1
+        assert calls == [task.task_id]
+        assert manager.max_concurrent == 1 and len(manager._active) == 2
+        assert occupied.task_id in manager._active and task.task_id not in manager._queue
+    finally:
+        release.set()
+        if task.thread:
+            task.thread.join(2)
+
+
+def test_start_now_does_not_release_extra_normal_slots(manager, monkeypatch):
+    import threading
+    manager.max_concurrent = 1
+    tasks = [manager.add_task(f'https://missav.ai/mimk-{i}') for i in (100,101,102)]
+    occupied, forced, waiting = tasks
+    manager._queue.remove(occupied.task_id)
+    manager._active[occupied.task_id] = occupied
+    forced_started, waiting_started, release = threading.Event(), threading.Event(), threading.Event()
+    def worker(task):
+        (forced_started if task is forced else waiting_started).set()
+        release.wait(3)
+        with manager._lock:
+            manager._active.pop(task.task_id, None)
+    monkeypatch.setattr(manager, '_run_task', worker)
+    dispatcher = threading.Thread(target=manager._dispatch_loop)
+    try:
+        assert manager.start_now(forced.task_id)
+        assert forced_started.wait(1)
+        dispatcher.start()
+        assert not waiting_started.wait(.1)
+        release.set()
+        forced.thread.join(2)
+        assert not waiting_started.wait(.1), 'The ordinary limit must still count the occupied task'
+        with manager._lock:
+            manager._active.pop(occupied.task_id)
+        assert waiting_started.wait(2)
+    finally:
+        manager._running = False
+        release.set()
+        if dispatcher.ident:
+            dispatcher.join(2)
+        if waiting.thread:
+            waiting.thread.join(2)
+
+
+def test_start_now_rejects_duplicates_and_finished_tasks(manager, monkeypatch):
+    running = manager.add_task('https://missav.ai/mimk-100')
+    duplicate = manager.add_task('https://jable.tv/videos/mimk-100/')
+    duplicate.status = 'pending'
+    with pytest.raises(ValueError, match='相同'):
+        manager.start_now(duplicate.task_id)
+    for status in ('completed', 'skipped', 'downloading', 'pausing'):
+        running.status = status
+        assert not manager.start_now(running.task_id)
+    assert not manager.start_now('missing')
+
+
+@pytest.mark.parametrize('failure', ['construct', 'start'])
+def test_start_now_thread_failure_preserves_queue(manager, monkeypatch, failure):
+    task = manager.add_task('https://missav.ai/mimk-100')
+    before = list(manager._queue)
+    if failure == 'construct':
+        monkeypatch.setattr(tm.threading, 'Thread', MagicMock(side_effect=RuntimeError('no threads')))
+    else:
+        monkeypatch.setattr(tm.threading.Thread, 'start', MagicMock(side_effect=RuntimeError('no threads')))
+    with pytest.raises(RuntimeError, match='no threads'):
+        manager.start_now(task.task_id)
+    assert manager._queue == before and not manager._active
+
+
+def test_start_now_preserves_subtitle_only_retry_history_exemption(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/mimk-100', enable_subtitles=True, subtitle_mode='ja')
+    task.name, task.status = 'MIMK-100', 'completed'
+    tm.get_history_manager().record_download(task.url, title=task.name)
+    assert manager.restart_task(task.task_id, subtitles_only=True)
+    occupied = manager.add_task('https://missav.ai/mimk-101')
+    manager._queue.remove(occupied.task_id)
+    manager._active[occupied.task_id] = occupied
+    manager.max_concurrent = 1
+    thread = MagicMock()
+    monkeypatch.setattr(tm.threading, 'Thread', MagicMock(return_value=thread))
+    assert manager.start_now(task.task_id)
+    thread.start.assert_called_once_with()
+    assert task.subtitles_only and len(manager._active) == 2
