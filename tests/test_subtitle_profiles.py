@@ -91,6 +91,32 @@ def test_text_profile_rejects_invalid_local_batch_size(batch_size):
         profiles.validate_stage_parameters("text", "localai", {"batch_size": batch_size})
 
 
+def test_localai_text_profile_accepts_ordered_segment_list_output_contract():
+    parameters = {"output_contract": "ordered_segment_list_v1"}
+
+    validated = profiles.validate_stage_parameters("text", "localai", parameters)
+
+    assert validated == parameters
+
+
+@pytest.mark.parametrize("output_contract", [None, "", "other", [], {}, True])
+def test_localai_text_profile_rejects_invalid_output_contract(output_contract):
+    with pytest.raises(llm.LlmTranslationError):
+        profiles.validate_stage_parameters(
+            "text", "localai", {"output_contract": output_contract})
+
+
+@pytest.mark.parametrize(("kind", "provider"), [
+    ("text", "openai-compatible"),
+    ("asr", "localai"),
+    ("vad", "localai"),
+])
+def test_ordered_segment_list_output_contract_is_localai_text_only(kind, provider):
+    with pytest.raises((ValueError, llm.LlmTranslationError)):
+        profiles.validate_stage_parameters(
+            kind, provider, {"output_contract": "ordered_segment_list_v1"})
+
+
 def test_snapshot_rejects_unsupported_stage_and_never_contains_secret(isolated_profiles):
     saved = profiles.save_profile(profile(), api_key="secret-value")
     with pytest.raises(ValueError):
@@ -246,9 +272,11 @@ def test_localai_reasoning_evidence_is_private_persistent_and_bound_to_snapshot(
     assert profiles.reasoning_verification(profiles.load_profiles()[0], "correction")["status"] == "supported"
 
     changed = profiles.save_profile(profiles.StageProfile(
-        **{**asdict(saved), "parameters_json": '{"temperature":0.2}'}))
+        **{**asdict(saved),
+           "parameters_json": '{"temperature":0,"output_contract":"ordered_segment_list_v1"}'}))
     assert profiles.reasoning_verification(changed, "correction")["status"] == "unknown"
-    # A queued snapshot keeps the exact old configuration binding.
+    # Adding the grammar contract invalidates saved evidence; queued work keeps
+    # the verification bound to its original profile snapshot.
     assert profiles.snapshot_reasoning_verified(snapshot, "correction") is True
 
     rotated = profiles.save_profile(text_profile, api_key="credential-two")

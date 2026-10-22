@@ -68,6 +68,8 @@ Ollama 原生 API 用 `format` 接 JSON Schema，LM Studio 的 Chat Completions 
 
 文字設定檔可選擇 `batch_size`（整數 1–20，預設 20）限制影匣每次送給模型的字幕段數。這是影匣本地分批設定，與 `max_output_tokens` 等生成額度各自獨立，且不會傳給模型 API；輸出長度與字幕結構驗證維持原有規則。
 
+LocalAI 文字設定檔另可選擇 `output_contract: "ordered_segment_list_v1"`。啟用時，影匣會依每批的片段數與 ID 送出 LocalAI v4.11 llama.cpp 後端的原生 GBNF grammar，限制回應為同數量、同順序 ID 的 JSON 片段陣列；影匣仍執行既有嚴格回應驗證。LocalAI v4.11.0 的[受限 grammar 文件](https://github.com/mudler/LocalAI/blob/v4.11.0/docs/content/features/constrained_grammars.md)及[聊天端點原始碼](https://github.com/mudler/LocalAI/blob/v4.11.0/core/http/endpoints/openai/chat.go)說明這項後端介面。這是 LocalAI 專用擴充欄位，不屬於通用 OpenAI Chat Completions 契約，也不保證字幕語意或模型不產生推理文字。必須對實際服務與模型做小批文字階段資格測試；一般停用思考驗證不測試 grammar 支援。
+
 ## 模型候選與驗收界線
 
 | 階段 | 候選 | 官方能力依據 | 尚待確認 |

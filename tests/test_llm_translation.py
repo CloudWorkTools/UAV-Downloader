@@ -1,5 +1,6 @@
 # coding: utf-8
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -143,10 +144,130 @@ def test_stage_profile_batch_size_controls_local_planning_and_defaults_to_twenty
     assert [len(batch) for batch in llm.plan_transform_batches(segments, smaller)] == [2] * 10 + [1]
 
 
+@pytest.mark.parametrize('count', [1, 2, 20])
+def test_ordered_segment_list_grammar_has_exact_ids_and_json_text_strings(count):
+    ids = ['one"\\雪😀_literal'] + [f'seg_{index}' for index in range(1, count)]
+    grammar = llm._ordered_segment_list_grammar(ids)
+
+    root = next(line for line in grammar.splitlines() if line.startswith('root ::='))
+    assert re.findall(r'item-\d+', root) == [f'item-{index}' for index in range(count)]
+    terminals = re.findall(
+        r'^item-(\d+) ::= .*? ws ("(?:\\.|[^"\\])*") ws ","',
+        grammar, re.MULTILINE)
+    assert [int(index) for index, _terminal in terminals] == list(range(count))
+    assert [json.loads(json.loads(terminal)) for _index, terminal in terminals] == ids
+    rule_names = re.findall(r'^([A-Za-z0-9_-]+) ::= ', grammar, re.MULTILINE)
+    assert len(rule_names) == count + 4
+    assert all(re.fullmatch(r'[A-Za-z0-9-]+', name) for name in rule_names)
+    assert {name for name in rule_names if not name.startswith('item-')} == {
+        'root', 'nonempty-json-string', 'json-char', 'ws'}
+    assert 'nonempty-json-string ::= "\\\"" json-char+ "\\\""' in grammar
+    assert 'json-char ::= [^\\x00-\\x1F"\\\\]' in grammar
+    assert 'one' in grammar and '雪😀' in grammar
+    assert '_literal' in grammar
+
+
+@pytest.mark.parametrize(('count', 'invalid_response'), [
+    (20, None),
+    (20, 'wrong-id'),
+    (1, 'extra-item'),
+])
+def test_localai_output_contract_sends_native_grammar_and_keeps_strict_ids(
+        monkeypatch, count, invalid_response):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from uav_downloader.subtitles.models import SubtitleSegment
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    requests_seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            requests_seen.append(payload)
+            items = json.loads(payload['messages'][1]['content'].split('Input: ', 1)[1])
+            output = [{'id': item['id'], 'text': 'fixed'} for item in items]
+            if invalid_response == 'wrong-id':
+                output[0]['id'] = 'wrong-id'
+            elif invalid_response == 'extra-item':
+                output.append({'id': 'unexpected', 'text': 'extra'})
+            content = json.dumps(output, ensure_ascii=False)
+            body = json.dumps({'choices': [{'finish_reason': 'stop',
+                                            'message': {'content': content}}]}).encode()
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = f'http://127.0.0.1:{server.server_port}/chat/completions'
+    monkeypatch.setattr(llm, '_provider_endpoint', lambda _settings: endpoint)
+    monkeypatch.setattr('uav_downloader.subtitles.profiles.resolve_credential',
+                        lambda *_args: '')
+    ids = ['one"\\雪😀_literal'] + [f'seg_{index}' for index in range(1, count)]
+    segments = [SubtitleSegment(segment_id, index, index + 1, 'raw')
+                for index, segment_id in enumerate(ids)]
+    snapshot = ProfileSnapshot(json.dumps({
+        'kind': 'text', 'provider': 'localai', 'base_url': endpoint,
+        'model': 'fixture', 'capabilities': ['correction'],
+        'parameters': {'output_contract': 'ordered_segment_list_v1'}}), None, 'snapshot')
+    try:
+        if invalid_response is None:
+            result = llm.transform_segments('correction', segments, snapshot,
+                                            allow_reasoning=True)
+        else:
+            with pytest.raises(llm.LlmStageRequestError, match='片段 ID'):
+                llm.transform_segments('correction', segments, snapshot,
+                                       allow_reasoning=True)
+            result = None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    if invalid_response is None:
+        assert result == [SubtitleSegment(item.segment_id, item.start, item.end, 'fixed')
+                          for item in segments]
+    assert len(requests_seen) == 1
+    payload = requests_seen[0]
+    grammar = payload['grammar']
+    assert len([line for line in grammar.splitlines() if line.startswith('item-')]) == count
+    assert ('item-1' not in grammar) if count == 1 else ('item-1' in grammar)
+    assert 'output_contract' not in json.dumps(payload)
+    assert 'one' in grammar and '雪😀' in grammar
+
+
+@pytest.mark.parametrize('parameters', [
+    {'output_contract': None},
+    {'output_contract': 'bad'},
+    {'output_contract': ['ordered_segment_list_v1']},
+])
+def test_invalid_localai_output_contract_fails_before_provider_request(monkeypatch, parameters):
+    from uav_downloader.subtitles.models import SubtitleSegment
+    from uav_downloader.subtitles.profiles import ProfileSnapshot
+
+    monkeypatch.setattr(llm, '_provider_endpoint', lambda *_args: pytest.fail(
+        'invalid output contracts must be rejected before an HTTP endpoint is resolved'))
+    snapshot = ProfileSnapshot(json.dumps({
+        'kind': 'text', 'provider': 'localai', 'base_url': 'http://127.0.0.1:1234/v1',
+        'model': 'fixture', 'capabilities': ['correction'], 'parameters': parameters}),
+        None, 'invalid-output-contract')
+
+    with pytest.raises(llm.LlmTranslationError):
+        llm.transform_segments('correction', [SubtitleSegment('s1', 1, 2, 'raw')],
+                               snapshot, allow_reasoning=True)
+
+
 @pytest.mark.parametrize('provider', sorted(llm.SUPPORTED_PROVIDERS))
 def test_stage_profile_batch_size_is_local_and_never_sent_to_provider(provider):
     _, payload = llm._stage_payload(
-        provider, 'fixture', 'fixture-key', {'batch_size': 2, 'temperature': 0},
+        provider, 'fixture', 'fixture-key', {
+            'batch_size': 2, 'temperature': 0,
+            'output_contract': 'ordered_segment_list_v1'},
         'prompt', 'system', True)
 
     def contains_batch_size(value):
@@ -157,6 +278,8 @@ def test_stage_profile_batch_size_is_local_and_never_sent_to_provider(provider):
         return False
 
     assert not contains_batch_size(payload)
+    assert 'output_contract' not in json.dumps(payload)
+    assert 'grammar' not in payload
 
 
 def test_stage_profile_batch_size_runs_three_ordered_requests_and_preserves_timestamps(monkeypatch):
@@ -502,6 +625,7 @@ def test_localai_normal_transform_requires_matching_profile_verification(monkeyp
     assert len(requested) == 1
     assert requested[0]['reasoning_effort'] == 'none'
     assert requested[0]['metadata']['enable_thinking'] == 'false'
+    assert 'grammar' not in requested[0]
 
 
 @pytest.mark.parametrize('provider', sorted(llm.SUPPORTED_PROVIDERS))
