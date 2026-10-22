@@ -3,7 +3,7 @@ from dataclasses import asdict
 
 import pytest
 
-from uav_downloader.subtitles import asr, profiles, settings
+from uav_downloader.subtitles import asr, llm, profiles, settings
 
 
 @pytest.fixture
@@ -73,6 +73,22 @@ def test_parameters_are_canonical_and_snapshot_isolated_from_input_and_loaded_pr
     changed["limits"]["tokens"] = 200
     assert json.loads(saved.parameters_json) == {"limits": {"tokens": 10}, "temperature": 0.2}
     assert json.loads(task.profile_json)["parameters"]["limits"]["tokens"] == 10
+
+
+@pytest.mark.parametrize("batch_size", [1, 20])
+def test_text_profile_accepts_local_batch_size_without_changing_other_parameters(
+        batch_size):
+    parameters = {"batch_size": batch_size, "max_output_tokens": 4096, "temperature": 0}
+
+    validated = profiles.validate_stage_parameters("text", "localai", parameters)
+
+    assert validated == parameters
+
+
+@pytest.mark.parametrize("batch_size", [True, None, 2.0, 0, 21])
+def test_text_profile_rejects_invalid_local_batch_size(batch_size):
+    with pytest.raises(llm.LlmTranslationError):
+        profiles.validate_stage_parameters("text", "localai", {"batch_size": batch_size})
 
 
 def test_snapshot_rejects_unsupported_stage_and_never_contains_secret(isolated_profiles):

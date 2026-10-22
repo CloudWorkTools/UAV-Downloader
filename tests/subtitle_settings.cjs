@@ -56,6 +56,9 @@ async function run() {
   assert.deepEqual(JSON.parse(wordTimestampExample[1]),{timestamp_granularities:['segment','word']});
   assert.match(protocolHelp.textContent,/response_format=verbose_json.*有效時間戳 segments/,
     'ASR profile help must retain the verbose JSON and timestamped-segments contract');
+  kind.value='text'; kind.dispatch('change');
+  assert.match(protocolHelp.textContent,/batch_size.*每批字幕段數.*預設 ?20.*1–20.*max_output_tokens.*獨立.*不會傳給模型 API/,
+    'text profile help must explain that local batch size is independent from the model token limit and is not sent to the provider');
   const visibleText=JSON.stringify(profileList.children);
   assert.match(visibleText,/範圍：此模型／連線／參數的開關對照/,
     'LocalAI verification UI must show the exact profile-scoped evidence range');
