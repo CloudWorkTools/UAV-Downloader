@@ -23,8 +23,9 @@ const request = async (method, path, body) => {
 };
 
 function fakeElement(isSelect=false) {
+  const listeners={};
   return {textContent:'',children:[],options:[],value:'',append(...items){this.children.push(...items);if(isSelect)this.options.push(...items);},
-    replaceChildren(...items){this.children=[...items];if(isSelect)this.options=[...items];},addEventListener(){},setAttribute(){}};
+    replaceChildren(...items){this.children=[...items];if(isSelect)this.options=[...items];},addEventListener(name,callback){listeners[name]=callback;},dispatch(name){listeners[name]?.();},setAttribute(){}};
 }
 
 async function run() {
@@ -40,10 +41,21 @@ async function run() {
     correction:{status:'supported',verified_at:'2026-10-21T00:00:00Z',scope:'localai false/true contrast',stale_reason:null},
   };
   const profileList=fakeElement();
-  const elements={'subtitle-profile-list':profileList};
+  const kind=fakeElement(); kind.value='text';
+  const provider=fakeElement(true); provider.value='localai'; provider.options=[{value:'localai'}];
+  const protocolHelp=fakeElement();
+  const elements={'subtitle-profile-list':profileList,'subtitle-profile-kind':kind,
+    'subtitle-profile-provider':provider,'subtitle-profile-protocol-help':protocolHelp};
   for(const stage of ['vad','asr','correction','translation'])elements[`subtitle-stage-profile-${stage}`]=fakeElement(true);
   const root={getElementById:id=>elements[id]||null,createElement:()=>fakeElement(),querySelectorAll:()=>[]};
   subtitles.renderDom(root);
+  kind.value='asr'; kind.dispatch('change');
+  const wordTimestampExample=protocolHelp.textContent.match(/貼上 (\{"timestamp_granularities":\["segment","word"\]\})/);
+  assert.ok(wordTimestampExample,
+    'ASR profile help must expose a pasteable JSON example for optional word timestamps');
+  assert.deepEqual(JSON.parse(wordTimestampExample[1]),{timestamp_granularities:['segment','word']});
+  assert.match(protocolHelp.textContent,/response_format=verbose_json.*有效時間戳 segments/,
+    'ASR profile help must retain the verbose JSON and timestamped-segments contract');
   const visibleText=JSON.stringify(profileList.children);
   assert.match(visibleText,/範圍：此模型／連線／參數的開關對照/,
     'LocalAI verification UI must show the exact profile-scoped evidence range');
