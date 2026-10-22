@@ -7,7 +7,7 @@ samba="uav-smb-ci-server-$$"
 samba_image="uav-smb-ci:check-$$"
 runner="uav-smb-ci-runner-$$"
 cleanup() {
-  docker rm -fv "$runner" "${runner}-subtitles" "$samba" >/dev/null 2>&1 || true
+  docker rm -fv "$runner" "${runner}-append" "${runner}-subtitles" "$samba" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   docker image rm "$samba_image" >/dev/null 2>&1 || true
 }
@@ -29,6 +29,10 @@ import sys
 sys.argv = ["storage_smoke", "--require-smb"]
 main()
 '
+docker run --rm -i --name "${runner}-append" --network "$network" --user 1000:1000 \
+  -e CONFIG_DIR=/tmp/uav-smb-append-check -e APPDATA=/tmp/uav-smb-append-check/appdata \
+  -e DOWNLOAD_DIR=/tmp/uav-smb-append-downloads -e UAV_FIRECRAWL_ENABLED=0 \
+  --entrypoint python "$image" - < tools/smb-ci/check_batch_append.py
 docker run --rm --name "${runner}-subtitles" --network "$network" --user 1000:1000 \
   -e CONFIG_DIR=/tmp/uav-smb-subtitle-check -e APPDATA=/tmp/uav-smb-subtitle-check/appdata \
   --entrypoint python "$image" -c '

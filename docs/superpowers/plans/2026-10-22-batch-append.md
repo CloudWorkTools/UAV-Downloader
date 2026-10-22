@@ -98,7 +98,7 @@ node tests/download_batch.cjs
 - `test_batch_dialog_appends_through_real_daemon` 以 Chrome 及實際 HTTP daemon 提交兩批，透過隔離的合成媒體 fixture 執行 worker 發布，取消第三項任務，再啟動新的 daemon 驗證紀錄與兩部影片內容。下載來源解析使用 fixture，不存取外站。
 - `docker build -f Dockerfile.web -t uav-downloader:batch-append-check .` 建置成功；`bash scripts/check_web_container.sh uav-downloader:batch-append-check` 驗證正式 Web／daemon 啟動及設定 API。
 - `bash scripts/check_smb_batch_container.sh uav-downloader:batch-append-check` 通過既有並行 SMB、MP4 封裝與字幕發布檢查。
-- 額外批次追加驗收在同一正式映像與隔離 Samba 執行，通過兩批追加、重複影片略過、並行 worker、發布、取消及紀錄重載後的內容核對。測試使用合成內容，完成後清理專屬資料夾及容器。此執行用 harness 不納入產品或 CI，正式回歸測試保留在既有測試檔案。
+- 額外批次追加驗收在同一正式映像與隔離 Samba 執行，通過兩批追加、重複影片略過、並行 worker、發布、取消及紀錄重載後的內容核對。測試使用合成內容，完成後清理專屬資料夾及容器。此驗收已納入 CI 必跑項目，入口與失敗驗證見下節。
 - 獨立程式碼審查未發現產品正確性或安全問題；指出的瀏覽器發布／重啟覆蓋缺口已補上並執行通過。
 
 未部署至使用者的 NAS，也未驗證外站整部影片下載。本變更沿用既有跨程序儲存鎖，沒有新增跨程序任務協調。
@@ -110,3 +110,15 @@ node tests/download_batch.cjs
 ```bash
 docker run --rm --user 1000:1000 --mount "type=bind,source=$PWD,target=/workspace,readonly" --workdir /workspace uav-downloader:batch-append-tests
 ```
+
+## CI 必跑的 Samba 追加驗收
+
+`tools/smb-ci/check_batch_append.py` 由既有 `scripts/check_smb_batch_container.sh IMAGE` 在專用容器執行，使用內部 Docker 網路、測試帳號及唯一的中文測試資料夾。workflow 的正式映像 SMB 步驟與部署前映像檢查共用此入口，沒有略過開關或容許失敗設定。
+
+驗收使用真實 Samba 及實際 TaskManager 生命週期，來源解析以合成內容 fixture 取代。新增的 `tests/test_web_checks.py` 案例驗證專項必須被呼叫、錯誤碼傳遞、失敗後不繼續下一個驗收，以及容器清理。
+
+反向驗證：相同 CI 入口對修正前的 `66ff1b4` 正式映像，在提交第二批時因忙碌目的地限制而失敗；對修正後的正式映像成功，輸出 `batch append SMB: PASS`。這項驗收會捕捉原始問題，並非只檢查測試腳本能啟動。
+
+此 CI 項目不使用生產帳密或正式 NAS。生產環境驗證仍未執行，GitHub 上的 workflow 也尚未推送觸發。
+
+CI 補強驗證：`tests/test_web_checks.py` 與 `tests/test_deploy_remote.py` 合計 39 passed；正式測試映像執行共用 Web 入口為 957 passed、3 skipped、6 subtests passed，所有前端腳本通過。workflow YAML 解析及 Samba 步驟不可容許失敗的檢查通過。獨立審查未發現須修正問題。

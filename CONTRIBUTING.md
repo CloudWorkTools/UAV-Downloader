@@ -61,7 +61,7 @@ Linux 工作指定 `shared-runners` 群組及 `self-hosted`、`Linux`、`X64`、
 
 PR CI 使用隔離服務、測試帳密與獨立資料，生產檢查由部署程序沿用遠端既有設定。測試只在專屬暫存資料夾讀寫，完成或失敗後清理；保留原有影片、設定與下載紀錄。生產檢查失敗時，部署程序回復舊版服務。真實位址、帳密與資料內容留在環境內，不寫入倉庫或測試輸出。
 
-SMB 批次下載的正式映像測試入口為 `bash scripts/check_smb_batch_container.sh IMAGE`，使用真實 Samba 驗證同批兩個任務的獨立連線、並行寫入、跨連線讀回與清理。部署程序在實際 NAS 執行相同的 `daemon.storage_smoke.check_batch_smb` 檢查。這個測試不擷取外站影片，不代表整部影片下載或播放器相容性已驗證。
+SMB 批次下載的正式映像測試入口為 `bash scripts/check_smb_batch_container.sh IMAGE`，使用真實 Samba 驗證同批兩個任務的獨立連線、並行寫入、跨連線讀回與清理。 同一 CI 入口必跑 `tools/smb-ci/check_batch_append.py`，驗證兩批追加、重複影片略過、並行發布、取消、覆寫衝突阻擋，以及紀錄重載後的檔案內容保留；任一斷言失敗即阻擋檢查。部署程序在實際 NAS 執行相同的 `daemon.storage_smoke.check_batch_smb` 檢查。這個測試不擷取外站影片，不代表整部影片下載或播放器相容性已驗證。
 
 同一入口及部署程序也執行 `daemon.storage_smoke.check_mp4_smb`，以自產 TS／fMP4 及實際中文、表情符號路徑驗證一般 MP4、faststart、片長、影音與跳轉解碼；成功或失敗都清理專屬暫存目錄。新增封裝檢查時延伸此共用函式，不另建臨時驗證腳本。
 
