@@ -4,12 +4,9 @@ import ntpath
 import os
 import re
 import stat
-import subprocess
-import tempfile
 import threading
-import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from uav_downloader.core.storage import StorageWriteError
@@ -225,73 +222,56 @@ class SmbStorage:
             server.server_close()
             thread.join(timeout=2)
 
-    def remux_to_mp4(self, source, destination, ffmpeg, cancelled, on_process):
+    def remux_to_mp4(self, source, destination, cancelled):
+        import av
         from uav_downloader.core.storage import storage_open
-        with self.media_source(source) as url, tempfile.TemporaryFile() as log:
-            probe = subprocess.Popen([ffmpeg, '-nostdin', '-hide_banner', '-i', url],
-                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log)
-            on_process(probe)
-            try:
-                deadline = time.monotonic() + 30
-                while probe.poll() is None:
-                    if cancelled():
-                        return False
-                    if time.monotonic() > deadline:
-                        raise StorageWriteError(source, OSError(errno.ETIMEDOUT, 'NAS 媒體讀取逾時'))
-                    try:
-                        probe.wait(timeout=0.3)
-                    except subprocess.TimeoutExpired:
-                        pass
-            finally:
-                if probe.poll() is None:
-                    probe.kill()
-                probe.wait()
-                on_process(None)
-            log.seek(0, os.SEEK_END)
-            log.seek(max(0, log.tell() - 8192))
-            audio_aac = bool(re.search(rb'Audio:\s*aac\b', log.read()))
-            log.seek(0)
-            log.truncate()
-            command = [ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error',
-                       '-fflags', '+genpts', '-i', url, '-c', 'copy']
-            # Fragmented MP4 needs AAC headers before its non-seekable output header.
-            if audio_aac:
-                command += ['-bsf:a', 'aac_adtstoasc']
-            command += ['-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-                       '-avoid_negative_ts', 'make_zero', '-f', 'mp4', 'pipe:1']
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=log)
-            on_process(process)
-            stop_watch = threading.Event()
-            def watch_cancel():
-                while not stop_watch.wait(0.2):
-                    if cancelled():
-                        try:
-                            process.kill()
-                        except ProcessLookupError:
-                            pass
-                        return
-            watcher = threading.Thread(target=watch_cancel, daemon=True)
-            watcher.start()
-            try:
-                with storage_open(destination, 'wb') as output:
-                    while not cancelled():
-                        chunk = process.stdout.read(256 * 1024)
-                        if not chunk:
-                            break
-                        output.write(chunk)
+
+        if cancelled():
+            return False
+        class MediaIO:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+
+            def read(self, size=-1):
                 if cancelled():
-                    return False
-                result = process.wait()
-                if result:
-                    log.seek(0, os.SEEK_END)
-                    log.seek(max(0, log.tell() - 800))
-                    print('[SMB 合成] FFmpeg 失敗：' + log.read().decode('utf-8', errors='replace'), flush=True)
-                return result == 0 and self.getsize(destination) > 0
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                process.wait()
-                process.stdout.close()
-                stop_watch.set()
-                watcher.join(timeout=1)
-                on_process(None)
+                    raise InterruptedError('MP4 remux cancelled')
+                return self.stream.read(size)
+
+            def write(self, data):
+                if cancelled():
+                    raise InterruptedError('MP4 remux cancelled')
+                return self.stream.write(data)
+
+        # Faststart reopens the output to move its index ahead of the media data.
+        try:
+            with ExitStack() as files:
+                def open_media(path, mode, **kwargs):
+                    return MediaIO(files.enter_context(storage_open(path, mode, **kwargs)))
+
+                incoming = open_media(source, 'rb')
+                outgoing = open_media(destination, 'w+b', share_access='r')
+                def reopen_output(url, flags, options):
+                    return open_media(destination, 'rb', share_access='rw')
+                with av.open(incoming, options={'fflags': '+genpts'}) as media:
+                    with av.open(outgoing, mode='w', format='mp4',
+                                 io_open=reopen_output,
+                                 options={'avoid_negative_ts': 'make_zero', 'movflags': '+faststart'}) as output:
+                        streams = {stream.index: output.add_stream_from_template(stream)
+                                   for stream in media.streams if stream.type in ('video', 'audio')}
+                        if not streams:
+                            return False
+                        for packet in media.demux():
+                            if cancelled():
+                                return False
+                            if packet.dts is None or packet.stream.index not in streams:
+                                continue
+                            packet.stream = streams[packet.stream.index]
+                            output.mux(packet)
+        except InterruptedError:
+            if not cancelled():
+                raise
+            return False
+        return not cancelled() and self.getsize(destination) > 0

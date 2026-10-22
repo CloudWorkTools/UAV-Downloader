@@ -4,6 +4,7 @@
 import sys
 import shutil
 import types
+import pytest
 from pathlib import Path
 
 
@@ -117,3 +118,25 @@ def test_remux_workspace_uses_the_download_destination_volume(
 
     assert Path(created['dir']).resolve() == destination.resolve()
     assert (destination / 'example.mp4').read_bytes() == b'segment'
+
+
+def test_failed_remux_does_not_publish_raw_segments(monkeypatch, tmp_path):
+    segments = tmp_path / 'segments'
+    segments.mkdir()
+    source = segments / '000000.mp4'
+    source.write_bytes(b'raw transport stream')
+    crawler = object.__new__(M3U8Crawler)
+    crawler._dest_folder = str(tmp_path)
+    crawler._temp_folder = str(segments)
+    crawler._targetName = 'failed'
+    crawler._tsList = ['first']
+    crawler._cancel_job = False
+    monkeypatch.setattr(crawler, '_remux_to_mp4', lambda *args: False)
+
+    with pytest.raises(RuntimeError, match='MP4'):
+        crawler._mergeMp4Chunks()
+
+    assert not (tmp_path / 'failed.mp4').exists()
+    assert not (tmp_path / 'failed.mp4.part').exists()
+    assert source.read_bytes() == b'raw transport stream'
+    assert not list(tmp_path.glob('uav-remux-*'))

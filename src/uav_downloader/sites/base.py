@@ -855,12 +855,10 @@ class M3U8Crawler:
             ok = self._remux_to_mp4(merged, out_mp4, workdir)
             if self._cancel_job:
                 return 0
+            if not ok:
+                raise RuntimeError('MP4 重新封裝失敗，保留下載片段供重試；未發布原始串接檔')
             stage('儲存合成影片', 0, 0)
-            if ok:
-                moved = self._cancellable_move(out_mp4, part)
-            else:
-                print('[合成] ffmpeg 無法使用或重新封裝失敗，改用原始合併（檔案可播放，但部分播放器/NAS 拖曳進度可能異常）', flush=True)
-                moved = self._cancellable_move(merged, part)
+            moved = self._cancellable_move(out_mp4, part)
             if self._cancel_job or not moved:
                 if storage_fs(part).exists(part):
                     try: storage_fs(part).remove(part)
@@ -886,15 +884,13 @@ class M3U8Crawler:
         return spent_time
 
     def _remux_to_mp4(self, merged_ts, out_mp4, workdir):
-        ffmpeg = locate_ffmpeg()
-        if not ffmpeg:
-            print('[合成] 找不到 ffmpeg，略過重新封裝', flush=True)
-            return False
         backend = storage_fs(merged_ts)
         if backend.remote:
-            return backend.remux_to_mp4(
-                merged_ts, out_mp4, ffmpeg, lambda: self._cancel_job,
-                lambda process: setattr(self, '_ffmpeg_proc', process))
+            return backend.remux_to_mp4(merged_ts, out_mp4, lambda: self._cancel_job)
+        ffmpeg = locate_ffmpeg()
+        if not ffmpeg:
+            print('[合成] 找不到 ffmpeg，無法重新封裝 MP4', flush=True)
+            return False
         ff_dir = _ffmpeg_safe_dir(workdir)
         in_arg = os.path.join(ff_dir, os.path.basename(merged_ts))
         out_arg = os.path.join(ff_dir, os.path.basename(out_mp4))

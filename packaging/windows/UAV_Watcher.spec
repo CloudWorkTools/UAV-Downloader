@@ -22,7 +22,7 @@ hiddenimports = [
 
 for pkg in [
         'cloudscraper', 'certifi', 'curl_cffi', 'imageio_ffmpeg',
-        'ctranslate2', 'sentencepiece', 'opencc']:
+        'ctranslate2', 'sentencepiece', 'opencc', 'av']:
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
