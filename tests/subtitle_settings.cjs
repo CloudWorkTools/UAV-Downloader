@@ -59,6 +59,17 @@ async function run() {
   kind.value='text'; kind.dispatch('change');
   assert.match(protocolHelp.textContent,/batch_size.*每批字幕段數.*預設 ?20.*1–20.*max_output_tokens.*獨立.*不會傳給模型 API/,
     'text profile help must explain that local batch size is independent from the model token limit and is not sent to the provider');
+  const outputContractExample=protocolHelp.textContent.match(/LocalAI 可選參數 JSON：(\{"output_contract":"ordered_segment_list_v1"\})/);
+  assert.ok(outputContractExample,'LocalAI text profile help must expose the opt-in output contract example');
+  assert.deepEqual(JSON.parse(outputContractExample[1]),{output_contract:'ordered_segment_list_v1'});
+  assert.match(protocolHelp.textContent,/影匣本地設定.*映射為 LocalAI v4\.11 llama\.cpp grammar.*並非直接傳送的 OpenAI 欄位/,
+    'output contract help must explain that the profile option maps to a LocalAI grammar extension');
+  assert.match(protocolHelp.textContent,/停用思考驗證不會驗證 grammar 支援.*小批文字階段資格測試.*不保證字幕語意/,
+    'output contract help must separate reasoning verification from grammar qualification');
+  provider.value='openai-compatible'; provider.dispatch('change');
+  assert.doesNotMatch(protocolHelp.textContent,/output_contract/,
+    'other text providers must not be shown the LocalAI-only output contract');
+  provider.value='localai'; provider.dispatch('change');
   const visibleText=JSON.stringify(profileList.children);
   assert.match(visibleText,/範圍：此模型／連線／參數的開關對照/,
     'LocalAI verification UI must show the exact profile-scoped evidence range');

@@ -716,7 +716,12 @@ def transform_segments(operation, segments, profile_snapshot, target_language=No
             ensure_ascii=False, separators=(',', ':'))
         headers, payload = _stage_payload(
             provider, model, key, parameters, prompt, system,
-            require_reasoning_disabled and not allow_reasoning)
+            require_reasoning_disabled and not allow_reasoning,
+            grammar=(_ordered_segment_list_grammar(
+                [segment.segment_id for segment in batch_segments])
+                if provider == 'localai'
+                and parameters.get('output_contract') == 'ordered_segment_list_v1'
+                else None))
         request = {'provider': provider, 'url': endpoint, 'headers': headers,
                    'payload': payload, 'model': model,
                    'disable_reasoning': require_reasoning_disabled and not allow_reasoning}
@@ -772,7 +777,7 @@ def _validate_text_parameters(provider, parameters):
     allowed = {
         'openai': {'temperature', 'max_output_tokens'},
         'openai-compatible': {'temperature', 'max_output_tokens'},
-        'localai': {'temperature', 'max_output_tokens'},
+        'localai': {'temperature', 'max_output_tokens', 'output_contract'},
         'anthropic': {'temperature', 'max_output_tokens'},
         'gemini': {'temperature', 'max_output_tokens'},
         'ollama': {'temperature', 'top_p', 'top_k', 'repeat_penalty', 'num_predict'},
@@ -791,7 +796,7 @@ def _validate_text_parameters(provider, parameters):
     for name, value in parameters.items():
         # ``quality`` is legacy metadata. It remains in migrated profiles but
         # has no remote-provider equivalent and is omitted from wire payloads.
-        if name == 'quality':
+        if name in {'quality', 'output_contract'}:
             continue
         integer = name in {'max_output_tokens', 'context_length', 'top_k', 'num_predict'}
         if (type(value) not in ((int,) if integer else (int, float))
@@ -803,6 +808,9 @@ def _validate_text_parameters(provider, parameters):
             raise LlmTranslationError(f'模型參數 {name} 必須大於 0')
         if name == 'repeat_penalty' and value <= 0:
             raise LlmTranslationError('模型參數 repeat_penalty 必須大於 0')
+    if ('output_contract' in parameters
+            and parameters['output_contract'] != 'ordered_segment_list_v1'):
+        raise LlmTranslationError('模型參數 output_contract 格式無效')
     return parameters
 
 
@@ -827,9 +835,10 @@ def _segment_batches(segments, parameters):
     return batches
 
 
-def _stage_payload(provider, model, key, parameters, prompt, system, disable_reasoning):
+def _stage_payload(provider, model, key, parameters, prompt, system, disable_reasoning,
+                   *, grammar=None):
     parameters = {name: value for name, value in parameters.items()
-                  if name not in {'quality', 'batch_size'}}
+                  if name not in {'quality', 'batch_size', 'output_contract'}}
     headers = {'Content-Type': 'application/json'}
     if key:
         headers['Authorization'] = 'Bearer ' + key
@@ -842,6 +851,8 @@ def _stage_payload(provider, model, key, parameters, prompt, system, disable_rea
         payload.update({name: value for name, value in parameters.items() if name == 'temperature'})
         if provider == 'localai' and disable_reasoning:
             payload.update({'reasoning_effort': 'none', 'metadata': {'enable_thinking': 'false'}})
+        if provider == 'localai' and grammar is not None:
+            payload['grammar'] = grammar
         return headers, payload
     if provider == 'ollama':
         payload = {'model': model, 'messages': [{'role': 'system', 'content': system},
@@ -870,6 +881,29 @@ def _stage_payload(provider, model, key, parameters, prompt, system, disable_rea
     return headers, {'systemInstruction': {'parts': [{'text': system}]},
                      'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
                      'generationConfig': generation_config}
+
+
+def _ordered_segment_list_grammar(segment_ids):
+    """Build a LocalAI/llama.cpp grammar for this batch's exact ordered IDs."""
+    def terminal(value):
+        serialized = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+        return '"' + serialized.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+    clauses = [
+        f'item-{index} ::= "{{" ws "\\\"id\\\"" ws ":" ws '
+        f'{terminal(segment_id)} ws "," ws "\\\"text\\\"" ws ":" ws '
+        'nonempty-json-string ws "}"'
+        for index, segment_id in enumerate(segment_ids)
+    ]
+    root = 'root ::= "[" ws ' + ' ws "," ws '.join(
+        f'item-{index}' for index in range(len(segment_ids))) + ' ws "]"'
+    return '\n'.join([
+        root,
+        *clauses,
+        'nonempty-json-string ::= "\\\"" json-char+ "\\\""',
+        'json-char ::= [^\\x00-\\x1F"\\\\] | "\\\\" (["\\\\/bfnrt] | "u" [0-9a-fA-F]{4})',
+        'ws ::= [ \\t\\n\\r]*',
+    ]) + '\n'
 
 
 def verify_localai_reasoning_control(profile_snapshot, stage):
