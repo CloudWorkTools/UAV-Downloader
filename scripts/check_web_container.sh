@@ -18,6 +18,10 @@ for attempt in {1..30}; do
 done
 curl --fail --silent "http://127.0.0.1:$port/" -o "$scratch/index.html"
 grep -q 'select-page-button' "$scratch/index.html"
+for asset in mobile-actions.js mobile-actions.css mascot-fab.svg; do
+  curl --fail --silent "http://127.0.0.1:$port/$asset" -o "$scratch/$asset"
+  test -s "$scratch/$asset"
+done
 curl --fail --silent "http://127.0.0.1:$port/nas-settings.js" -o "$scratch/nas-settings.js"
 grep -q '^window.NasSettings' "$scratch/nas-settings.js"
 curl --fail --silent "http://127.0.0.1:$port/video-selection.js" -o "$scratch/video-selection.js"

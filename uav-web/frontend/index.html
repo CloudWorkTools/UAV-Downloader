@@ -72,6 +72,8 @@
       #category-sidebar { max-height: calc(100dvh - 144px); }
     }
   </style>
+  <link rel="stylesheet" href="/mobile-actions.css">
+  <script src="/mobile-actions.js" defer></script>
 </head>
 <body class="bg-[#121217] text-gray-100 min-h-screen flex flex-col font-sans selection:bg-brand-500 selection:text-white">
 
@@ -237,14 +239,14 @@
         <div class="flex items-center gap-2">
           <h2 id="queue-title" class="min-w-0 flex-1 text-base font-bold text-white">下載佇列</h2>
           <button id="queue-selection-mode" onclick="taskSelection.toggleMode()" disabled class="h-11 px-3 text-xs rounded-lg bg-[#282832] border border-[#3e3e4e] disabled:opacity-40">選取</button>
-          <button onclick="openQuickDownloadModal()" class="h-11 px-3 text-xs whitespace-nowrap rounded-lg bg-brand-600 text-white">＋ 新增</button>
-          <details class="relative">
+          <button id="queue-add-mobile" onclick="openQuickDownloadModal()" class="h-11 px-3 text-xs whitespace-nowrap rounded-lg bg-brand-600 text-white">＋ 新增</button>
+          <details id="queue-more-mobile" class="relative">
             <summary class="h-10 px-3.5 flex items-center cursor-pointer bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg"><span aria-hidden="true">⋯</span><span class="sr-only">更多操作</span></summary>
             <div onclick="if (event.target.closest('button')) this.closest('details').open = false" class="absolute right-0 top-full mt-2 z-30 w-48 p-2 flex flex-col gap-2 bg-[#1a1a22] border border-[#3e3e4e] rounded-lg shadow-xl">
           <button id="resume-unfinished-button" onclick="resumeUnfinishedTasks()" disabled title="不用勾選，繼續等待中、已暫停或失敗的任務；執行中的任務不會重複啟動" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg disabled:opacity-40">續傳未完成</button>
 <button id="remove-duplicate-tasks-button" onclick="removeDuplicateTasks()" disabled title="移除已略過及同番號的多餘清單紀錄，保留檔案、歷史及可續傳任務" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">移除重複番號</button>
           <button id="clear-completed-button" onclick="clearCompletedTasks()" disabled title="只從下載清單移除已完成紀錄，保留影片及下載歷史" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">清除已完成項目</button>
-          <button onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
+          <button id="queue-probe-mobile" onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
             </div>
           </details>
         </div>
@@ -520,7 +522,7 @@
   <div id="selection-bar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a22] border border-[#3e3e4e] px-6 py-3 rounded-full shadow-2xl flex items-center gap-4 z-40">
     <span class="text-sm font-medium text-white">已選取 <span id="selected-count" class="text-brand-500 font-bold">0</span> 部影片</span>
     <button onclick="selection.download()" class="px-4 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-full shadow transition">加入佇列下載</button>
-    <button onclick="selection.clear()" class="text-xs text-gray-400 hover:text-white">清除勾選</button>
+    <button id="browse-clear-mobile" onclick="selection.clear()" class="text-xs text-gray-400 hover:text-white">清除勾選</button>
   </div>
 
   <script src="/nas-settings.js"></script>
