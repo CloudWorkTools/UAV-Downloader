@@ -42,6 +42,11 @@ jobs:
           git config user.email 'compatibility@users.noreply.github.com'
           git fetch origin "$BASE_BRANCH"
           git merge --no-edit FETCH_HEAD
+      - name: 驗證部署提交
+        if: inputs.candidate_sha == ''
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: 檢查自架 runner 的 Docker
         run: |
           command -v docker
@@ -57,7 +62,7 @@ jobs:
             --mount "type=bind,source=$PWD,target=/workspace,readonly" \
             --workdir /workspace "$CI_TEST_IMAGE"
       - name: 啟動正式 Web 容器並檢查
-        run: bash scripts/check_web_container.sh "$CI_IMAGE"
+        run: bash scripts/check_web_container.sh "$CI_IMAGE" "$CI_TEST_IMAGE"
       - name: 正式映像驗證 SMB 批次追加、並行寫入與清理
         run: bash scripts/check_smb_batch_container.sh "$CI_IMAGE"
       - name: 清理本次測試映像

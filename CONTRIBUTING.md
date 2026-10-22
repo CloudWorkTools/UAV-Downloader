@@ -12,6 +12,10 @@
 - `uav-web/frontend/nas-settings.js` 管理 NAS 表單；下載器不依賴這個檔案。
 - 新增擴充先使用獨立模組，再透過明確的方法接入既有流程。避免在爬蟲內加入 UI 狀態、表單欄位或 NAS 帳密。
 
+## 交付核對
+
+接受多項需求或將原型轉為正式功能時，更新[需求交付狀態](docs/delivery-status.md)。逐項記錄原型、正式實作、CI 與部署證據；交付 UI 時核對正式頁面及指定的手機／桌面範圍。未驗證的項目保持待處理，原型獲確認不代表已部署。
+
 ## 開發檢查
 
 Web 回歸測試與 CI 使用同一入口：
@@ -43,9 +47,11 @@ PYTHON=.venv/bin/python bash scripts/check_web.sh
 docker build -f Dockerfile.web -t uav-downloader:local .
 docker build -f Dockerfile.web-tests --build-arg APP_IMAGE=uav-downloader:local -t uav-downloader:local-tests .
 docker run --rm --user 1000:1000 --mount "type=bind,source=$PWD,target=/workspace,readonly" --workdir /workspace uav-downloader:local-tests
-bash scripts/check_web_container.sh uav-downloader:local
+bash scripts/check_web_container.sh uav-downloader:local uav-downloader:local-tests
 bash scripts/check_smb_batch_container.sh uav-downloader:local
 ```
+
+正式 Web 容器檢查也使用測試映像中的瀏覽器載入完整頁面，驗證手機人像選單、影片選取、下載預覽、新增網址視窗與桌面控制；不提交下載或修改任務。快速 fixture 測試仍由共用回歸入口執行。
 
 SMB 檢查另以隔離 Samba 驗證同批多任務的並行儲存。實際 NAS、ASR、模型品質與遠端容器掛載的驗證需要專用環境，離線回歸測試無法代替這些檢查。
 

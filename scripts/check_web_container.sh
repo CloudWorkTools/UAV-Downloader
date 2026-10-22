@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-image=${1:?usage: check_web_container.sh IMAGE}
+image=${1:?usage: check_web_container.sh IMAGE TEST_IMAGE}
+test_image=${2:-${CI_TEST_IMAGE:?TEST_IMAGE argument or CI_TEST_IMAGE is required}}
+root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d)
 container=$(docker run -d -p 127.0.0.1::8080 "$image")
 cleanup() {
@@ -29,3 +31,6 @@ grep -q '^window.createVideoSelection' "$scratch/video-selection.js"
 curl --fail --silent "http://127.0.0.1:$port/api/settings" | python3 -c 'import json,sys; s=json.load(sys.stdin); assert "nas" in s and "password" not in s["nas"]'
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "ok"' "$scratch/status.json"
 rm -f "$scratch/status.json"
+
+docker run --rm --network host --volume "$root:/workspace:ro" --workdir /workspace \
+  --entrypoint node "$test_image" tools/web-ci/check_mobile_actions.cjs "http://127.0.0.1:$port/"

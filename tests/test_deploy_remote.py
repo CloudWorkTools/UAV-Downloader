@@ -134,14 +134,15 @@ def test_deployment_bundles_private_firecrawl_by_default(monkeypatch, tmp_path, 
             Path(args[3]).write_bytes(b'fake image archive')
 
     monkeypatch.setattr(deploy.subprocess, 'run', run)
+    monkeypatch.setattr(deploy, 'check_ci', lambda *a: None)
     deploy.main()
     assert any('uav-firecrawl-api:2.11.162' in args for args in calls) is expected
     save = next(args for args in calls if args[:2] == ['docker', 'save'])
     assert deploy.SPEACHES_IMAGE in save
     assert deploy.SPEACHES_IMAGE in (deploy.ROOT / 'docker-compose.yml').read_text()
     remote = calls[-1][-1]
-    assert remote.endswith('1' if expected else '0')
-    checked_image = next(args[-1] for args in calls if args[:2] == ['bash', 'scripts/check_web_container.sh'])
+    assert (' 1 ' if expected else ' 0 ') in remote
+    checked_image = next(args[2] for args in calls if args[:2] == ['bash', 'scripts/check_web_container.sh'])
     assert checked_image == 'uav-downloader:abc123'
     assert checked_image in save
     assert calls.index(next(args for args in calls if args[:2] == ['bash', 'scripts/check_smb_batch_container.sh'])) < calls.index(save)
@@ -167,6 +168,7 @@ def test_image_check_failure_blocks_remote_deployment(monkeypatch, failed_stage)
             raise subprocess.CalledProcessError(7, args)
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(deploy.subprocess, 'run', run)
+    monkeypatch.setattr(deploy, 'check_ci', lambda *a: None)
     with pytest.raises(subprocess.CalledProcessError):
         deploy.main()
     assert not any(args[0] == 'ssh' or args[:2] == ['docker', 'save'] for args in calls)
@@ -291,6 +293,7 @@ def test_failed_container_storage_check_rolls_back_healthy_service(monkeypatch, 
 
     monkeypatch.setattr(deploy.subprocess, 'run', run)
     monkeypatch.setattr(deploy.subprocess, 'check_output', lambda *a, **kw: 'uav-downloader\n')
+    monkeypatch.setattr(deploy, 'REMOTE_INSTALL', deploy.REMOTE_INSTALL.replace('        queue.pause()', '        pass'))
     monkeypatch.setattr(urllib.request, 'build_opener', lambda *a: SimpleNamespace(
         open=lambda *a, **kw: io.BytesIO(b'{"status":"ok"}')))
     monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), 'app:test', '192.0.2.10', '8080', ''])
@@ -417,3 +420,238 @@ def test_production_mp4_failure_fails_storage_probe_without_leaking_details(monk
     output = capsys.readouterr().out
     assert 'NAS MP4 Unicode remux/faststart/seek/cleanup: ' + ('FAILED' if fails else 'OK') in output
     assert 'private-path-and-password' not in output
+
+@pytest.mark.parametrize('changes', [dict(head_sha='other'), dict(status='in_progress'), dict(conclusion='failure'), dict(path='.github/workflows/other.yml')])
+def test_ci_requires_successful_exact_revision_web_workflow(monkeypatch, changes):
+    result = dict(head_sha='abc123', status='completed', conclusion='success', path='.github/workflows/web-check.yml')
+    result.update(changes)
+    monkeypatch.setattr(deploy.subprocess, 'check_output', lambda *a, **kw: json.dumps(result))
+    with pytest.raises(RuntimeError):
+        deploy.check_ci('abc123', '123')
+
+
+def test_ci_accepts_exact_revision(monkeypatch):
+    def output(args, **kwargs):
+        return successful_ci_jobs() if '/jobs?' in args[-1] else json.dumps(dict(
+            head_sha='abc123', status='completed', conclusion='success', path='.github/workflows/web-check.yml'))
+    monkeypatch.setattr(deploy.subprocess, 'check_output', output)
+    deploy.check_ci('abc123', '123')
+
+@pytest.fixture
+def queue(tmp_path):
+    namespace = {}
+    exec(deploy.QUEUE_SOURCE, namespace)
+    return namespace['DeploymentQueue'](tmp_path, 'http://example.invalid')
+
+
+def test_queue_journal_preserves_identity_and_only_resumes_owned_tasks(queue, monkeypatch):
+    tasks = {'active': dict(task_id='active', status='downloading', url='private-url', final_dest='private-dest'),
+             'external': dict(task_id='external', status='paused', url='other')}
+    monkeypatch.setattr(queue, 'tasks', lambda: tasks)
+    actions = []
+    def call(path, body):
+        actions.append(body)
+        saved = json.loads(queue.path.read_text())
+        assert saved['resume_ids'] == ['active']
+        assert queue.path.stat().st_mode & 0o777 == 0o600
+        tasks[body['task_id']]['status'] = 'paused' if body['action'] == 'pause' else 'pending'
+        return {'success': True}
+    monkeypatch.setattr(queue, 'call', call)
+    monkeypatch.setattr(__import__('time'), 'sleep', lambda _: None)
+    queue.pause()
+    assert json.loads(queue.path.read_text())['identities']['active']['final_dest'] == 'private-dest'
+    with pytest.raises(RuntimeError, match='recovery required'):
+        queue.pause()
+    queue.resume()
+    assert [action['task_id'] for action in actions] == ['active', 'active']
+    assert not queue.path.exists()
+    assert tasks['external']['status'] == 'paused'
+
+
+def test_queue_partial_resume_retains_retry_journal(queue, monkeypatch):
+    queue.save({'identities': {'a': {'url': 'url'}, 'b': {'url': 'url'}}, 'resume_ids': ['a', 'b']})
+    monkeypatch.setattr(queue, 'tasks', lambda: {tid: dict(status='paused', url='url') for tid in ('a', 'b')})
+    monkeypatch.setattr(queue, 'call', lambda path, body: {'success': body['task_id'] == 'a'})
+    with pytest.raises(RuntimeError, match='retained'):
+        queue.resume()
+    assert json.loads(queue.path.read_text())['resume_ids'] == ['b']
+    monkeypatch.setattr(queue, 'call', lambda *a: {'success': True})
+    queue.resume()
+    assert not queue.path.exists()
+
+
+def test_queue_interrupted_pause_retains_intent_and_can_recover(queue, monkeypatch):
+    tasks = {'a': dict(task_id='a', status='pending', url='url', final_dest='destination')}
+    monkeypatch.setattr(queue, 'tasks', lambda: tasks)
+    def interrupted(path, body):
+        tasks['a']['status'] = 'paused'
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(queue, 'call', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        queue.pause()
+    assert json.loads(queue.path.read_text())['resume_ids'] == ['a']
+    monkeypatch.setattr(queue, 'call', lambda *a: {'success': True})
+    queue.resume()
+    assert not queue.path.exists()
+
+
+def test_queue_identity_mismatch_retains_journal(queue, monkeypatch):
+    queue.save({'identities': {'a': {'url': 'original', 'final_dest': 'original'}}, 'resume_ids': ['a']})
+    monkeypatch.setattr(queue, 'tasks', lambda: {'a': dict(status='paused', url='changed', final_dest='original')})
+    with pytest.raises(RuntimeError, match='identity changed'):
+        queue.resume()
+    assert queue.path.exists()
+
+
+def test_asset_mismatch_rolls_back_old_service(monkeypatch, tmp_path):
+    import io
+    import sys
+    import urllib.request
+    from types import SimpleNamespace
+    calls = []
+    def output(args, **kw):
+        return json.dumps([{'State': {'Running': True}, 'Config': {'Image': 'app:test'}}]) if 'inspect' in args else 'uav-downloader\n'
+    monkeypatch.setattr(deploy.subprocess, 'check_output', output)
+    monkeypatch.setattr(deploy.subprocess, 'run', lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(urllib.request, 'build_opener', lambda *a: SimpleNamespace(open=lambda url, **kw:
+        io.BytesIO(b'{"status":"ok"}' if url.endswith('/api/status') else b'wrong asset')))
+    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), 'app:test', '192.0.2.10', '8080', '', '0', '', '{"/":"expected"}'])
+    code = deploy.REMOTE_INSTALL.replace('        queue.pause()', '        pass')
+    with pytest.raises(RuntimeError, match='asset mismatch'):
+        exec(code, {})
+    assert calls[-3:] == [['docker', 'rm', '-f', 'uav-downloader'],
+                          ['docker', 'rename', 'uav-downloader-previous', 'uav-downloader'],
+                          ['docker', 'start', 'uav-downloader']]
+
+
+def test_queue_pause_failure_keeps_private_intent(queue, monkeypatch):
+    monkeypatch.setattr(queue, 'tasks', lambda: {'a': dict(task_id='a', status='pending')})
+    monkeypatch.setattr(queue, 'call', lambda *a: {'success': False})
+    with pytest.raises(RuntimeError, match='pause failed'):
+        queue.pause()
+    assert json.loads(queue.path.read_text())['resume_ids'] == ['a']
+    assert queue.path.stat().st_mode & 0o777 == 0o600
+
+
+def test_failed_task_does_not_silently_discard_recovery(queue, monkeypatch):
+    queue.save({'identities': {'a': {'url': 'url'}}, 'resume_ids': ['a']})
+    monkeypatch.setattr(queue, 'tasks', lambda: {'a': dict(status='failed', url='url')})
+    with pytest.raises(RuntimeError, match='retained'):
+        queue.resume()
+    assert queue.path.exists()
+
+
+def test_remote_queue_lock_excludes_concurrent_deployment(queue):
+    queue.lock()
+    other = type(queue)(queue.path.parent, queue.url)
+    with pytest.raises(BlockingIOError):
+        other.lock()
+    queue.lock_file.close()
+    other.lock_file.close()
+
+
+def test_auto_ci_discovery_selects_exact_head_web_workflow(monkeypatch):
+    calls = []
+    def output(args, **kwargs):
+        calls.append(args)
+        if '/jobs?' in args[-1]:
+            return successful_ci_jobs()
+        return json.dumps([{'databaseId': 123}]) if args[1:3] == ['run', 'list'] else json.dumps(dict(
+            head_sha='abc123', status='completed', conclusion='success', path='.github/workflows/web-check.yml'))
+    monkeypatch.setattr(deploy.subprocess, 'check_output', output)
+    deploy.check_ci('abc123')
+    assert calls[0][calls[0].index('--commit') + 1] == 'abc123'
+    assert calls[0][calls[0].index('--workflow') + 1] == 'web-check.yml'
+
+
+def test_queue_captures_identity_of_tasks_arriving_during_pause(queue, monkeypatch):
+    new = dict(task_id='new', status='pending', url='new-url', final_dest='new-destination', folder_policy='preserve')
+    snapshots = iter([{}, {'new': new}, {}])
+    monkeypatch.setattr(queue, 'tasks', lambda: next(snapshots))
+    monkeypatch.setattr(queue, 'call', lambda *a: {'success': True})
+    monkeypatch.setattr(__import__('time'), 'sleep', lambda _: None)
+    queue.pause()
+    saved = json.loads(queue.path.read_text())
+    assert saved['identities']['new'] == {key: new[key] for key in ('url', 'final_dest', 'folder_policy')}
+    assert saved['resume_ids'] == ['new']
+
+
+def test_ci_rejection_precedes_all_remote_or_build_operations(monkeypatch):
+    import sys
+    calls = []
+    monkeypatch.setattr(sys, 'argv', ['deploy_remote.py', '--ci-run', '123'])
+    monkeypatch.setattr(deploy, 'load_config', lambda: dict(host='192.0.2.10', user='operator', port=8080, remote_dir='/service'))
+    def output(args, **kwargs):
+        if args[0] == 'git':
+            return '' if 'status' in args else 'abc123'
+        return json.dumps(dict(head_sha='other', status='completed', conclusion='success', path='.github/workflows/web-check.yml'))
+    monkeypatch.setattr(deploy.subprocess, 'check_output', output)
+    monkeypatch.setattr(deploy.subprocess, 'run', lambda args, **kw: calls.append(args))
+    with pytest.raises(RuntimeError, match='same-HEAD'):
+        deploy.main()
+    assert calls == []
+
+
+def test_asset_manifest_includes_index_and_all_static_assets():
+    manifest = deploy.asset_manifest()
+    assert '/' in manifest
+    for name in ('mobile-actions.js', 'mobile-actions.css', 'brand-icon.svg', 'mascot-fab.svg'):
+        assert '/' + name in manifest
+    assert all(len(digest) == 64 for digest in manifest.values())
+
+
+@pytest.mark.parametrize('stage', ['stop', 'rename'])
+def test_service_transition_failure_restarts_original_without_removing_it(monkeypatch, tmp_path, stage):
+    import sys
+    import io
+    import urllib.request
+    from types import SimpleNamespace
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[:2] == ['docker', stage] and (stage != 'rename' or args[2] == 'uav-downloader'):
+            raise subprocess.CalledProcessError(1, args)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(deploy.subprocess, 'run', run)
+    monkeypatch.setattr(deploy.subprocess, 'check_output', lambda *a, **kw: 'uav-downloader\n')
+    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), 'app:test', '192.0.2.10', '8080', ''])
+    monkeypatch.setattr(urllib.request, 'build_opener', lambda *a: SimpleNamespace(
+        open=lambda *a, **kw: io.BytesIO(b'{"tasks":[]}')))
+    code = deploy.REMOTE_INSTALL
+    with pytest.raises(subprocess.CalledProcessError):
+        exec(code, {})
+    assert calls[-1] == ['docker', 'start', 'uav-downloader']
+    assert not any(args[:2] == ['docker', 'rm'] for args in calls)
+    assert not (tmp_path / '.deployment-queue.json').exists()
+
+
+@pytest.mark.parametrize('names,expected', [
+    ('uav-downloader\n', [['docker', 'start', 'uav-downloader']]),
+    ('uav-downloader-previous\n', [['docker', 'rename', 'uav-downloader-previous', 'uav-downloader'], ['docker', 'start', 'uav-downloader']]),
+    ('', []),
+])
+def test_queue_recovery_restores_existing_container_only(queue, monkeypatch, names, expected):
+    queue.save({'identities': {}, 'resume_ids': []})
+    calls = []
+    monkeypatch.setattr(deploy.subprocess, 'check_output', lambda *a, **kw: names)
+    monkeypatch.setattr(deploy.subprocess, 'run', lambda args, **kw: calls.append(args))
+    queue.restore_service()
+    assert calls == expected
+    assert queue.path.exists()
+
+
+@pytest.mark.parametrize('jobs', [[], [{'name': 'Web / UI compatibility', 'conclusion': 'success', 'steps': []}],
+    [{'name': 'Web / UI compatibility', 'conclusion': 'success', 'steps': [{'name': '驗證部署提交', 'conclusion': 'skipped'}]}],
+    [{'name': 'Web / UI compatibility', 'conclusion': 'success', 'steps': [{'name': '驗證部署提交', 'conclusion': 'failure'}]}]])
+def test_ci_requires_successful_checked_out_revision_proof(monkeypatch, jobs):
+    def output(args, **kwargs):
+        return json.dumps({'jobs': jobs}) if '/jobs?' in args[-1] else json.dumps(dict(
+            head_sha='abc123', status='completed', conclusion='success', path='.github/workflows/web-check.yml'))
+    monkeypatch.setattr(deploy.subprocess, 'check_output', output)
+    with pytest.raises(RuntimeError, match='checked-out'):
+        deploy.check_ci('abc123', '123')
+
+
+def successful_ci_jobs():
+    return json.dumps({'jobs': [{'name': 'Web / UI compatibility', 'conclusion': 'success',
+        'steps': [{'name': '驗證部署提交', 'conclusion': 'success'}]}]})

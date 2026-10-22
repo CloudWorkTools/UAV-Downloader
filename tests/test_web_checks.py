@@ -65,3 +65,51 @@ sys.exit(int(os.environ['APPEND_STATUS']) if append else 0)
     assert any(call['args'][:2] == ['rm', '-fv'] and any(arg.endswith('-append') for arg in call['args']) for call in calls)
     if append_status:
         assert not any(call['args'][0] == 'run' and any(arg.endswith('-subtitles') for arg in call['args']) for call in calls)
+
+
+@pytest.mark.parametrize('browser_status', [0, 13])
+def test_web_container_gate_requires_full_browser_and_propagates_failure(tmp_path, browser_status):
+    import json
+    import sys
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    log = tmp_path / 'docker.jsonl'
+    docker = tools / 'docker'
+    docker.write_text(f'''#!{sys.executable}
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ['DOCKER_LOG'], 'a') as output:
+    output.write(json.dumps(args) + '\\n')
+if args[:2] == ['run', '-d']: print('ephemeral-app')
+if args[0] == 'port': print('127.0.0.1:12345')
+if 'node' in args: sys.exit(int(os.environ['BROWSER_STATUS']))
+''')
+    docker.chmod(0o755)
+    curl = tools / 'curl'
+    curl.write_text('''#!/bin/sh
+for arg do
+ case "$arg" in
+  */api/status) printf '{"status":"ok"}'; exit 0;;
+  */api/settings) printf '{"nas":{}}'; exit 0;;
+ esac
+done
+while [ "$#" -gt 0 ]; do
+ if [ "$1" = '-o' ]; then shift; printf 'select-page-button\\nwindow.NasSettings\\nwindow.createVideoSelection\\n' > "$1"; fi
+ shift
+done
+''')
+    curl.chmod(0o755)
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(['bash', 'scripts/check_web_container.sh', 'app-image', 'browser-image'], cwd=root,
+                            env={**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
+                                 'DOCKER_LOG': str(log), 'BROWSER_STATUS': str(browser_status)},
+                            capture_output=True, text=True, timeout=10)
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    browser = [args for args in calls if 'node' in args]
+    assert len(browser) == 1, 'formal-container smoke must run the full-page browser acceptance'
+    assert 'browser-image' in browser[0]
+    assert '--network' in browser[0] and 'host' in browser[0]
+    assert 'tools/web-ci/check_mobile_actions.cjs' in browser[0]
+    assert 'http://127.0.0.1:12345/' in browser[0]
+    assert result.returncode == browser_status, result.stderr
+    assert ['rm', '-fv', 'ephemeral-app'] in calls
