@@ -1,7 +1,7 @@
 """Tests for the guarded local canonical web test runner."""
 
 from pathlib import Path
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import io
 import importlib.util
 import json
@@ -32,10 +32,19 @@ class CanonicalRunnerTests(unittest.TestCase):
     def test_wrong_source_sha_is_rejected_before_docker_or_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             evidence_root = Path(temporary) / 'evidence'
-            with self.assertRaisesRegex(runner.evidence.EvidenceError,
-                                        'source SHA does not match HEAD'):
-                runner.validate_source(head='a' * 40, expected='0' * 40, status='',
-                                       uid=os.getuid(), gid=os.getgid())
+            stderr = io.StringIO()
+            # A readonly managed worktree may point .git outside the mounted workspace.
+            with (mock.patch.object(runner, 'git_output', side_effect=lambda *args: 'a' * 40
+                                    if args == ('rev-parse', 'HEAD') else ''),
+                  mock.patch.object(runner.evidence, 'Evidence') as evidence_factory,
+                  mock.patch.object(runner.evidence, 'Docker') as docker_factory,
+                  redirect_stderr(stderr)):
+                result = runner.main(['--source-sha', '0' * 40,
+                                      '--evidence-root', str(evidence_root)])
+            self.assertEqual(result, 1)
+            self.assertIn('source SHA does not match HEAD', stderr.getvalue())
+            evidence_factory.assert_not_called()
+            docker_factory.assert_not_called()
             self.assertFalse(evidence_root.exists())
 
     def test_source_and_environment_mismatches_fail_closed(self):
