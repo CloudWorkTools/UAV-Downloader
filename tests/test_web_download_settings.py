@@ -543,7 +543,7 @@ def test_batch_merge_busy_and_overwrite_persist(web_settings):
     task = server.task_manager.get_task(result['tasks'][0]['task_id'])
     assert task.folder_policy == 'overwrite'
     _, busy = batch_preview(request, policy='merge')
-    assert busy['busy'] and not busy['can_submit']
+    assert busy['busy'] and busy['overwrite_busy'] and not busy['can_submit']
     restarted = TaskManager(state_path=server.task_manager._state_path)
     assert restarted.get_task(task.task_id).folder_policy == 'overwrite'
     assert (folder / 'old.mp4').read_bytes() == b'old'
@@ -575,3 +575,112 @@ def test_explicit_overwrite_is_atomic_and_cancel_preserves_replacements(tmp_path
     assert (folder / 'old.mp4').read_bytes() == b'replacement'
     assert (folder / 'unrelated.mp4').read_bytes() == b'untouched'
     assert not (folder / 'new.mp4').exists()
+
+
+@pytest.mark.parametrize('storage', ['query', 'settings'])
+def test_batch_api_append_to_busy_folder(web_settings, storage):
+    request, server, _ = web_settings
+    body, preview = batch_preview(request, policy='merge', storage=storage)
+    first_payload = dict(body, action='submit', expected_destination=preview['destination'],
+                         request_id='append-first', urls=['https://missav.ai/mimk-290'])
+    status, first = request('/api/download/batch', first_payload)
+    assert status == 200
+    original = server.task_manager.get_task(first['tasks'][0]['task_id']).to_dict()
+    body, preview = batch_preview(request, policy='merge', storage=storage)
+    assert preview['busy'] and not preview['overwrite_busy'] and preview['can_submit']
+    payload = dict(body, action='submit', expected_destination=preview['destination'], request_id='append-second',
+                   urls=['https://jable.tv/videos/mimk-290/', 'https://missav.ai/mimk-291'])
+    status, result = request('/api/download/batch', payload)
+    assert status == 200, result
+    assert [task['status'] for task in result['tasks']] == ['skipped', 'pending']
+    assert server.task_manager.get_task(original['task_id']).to_dict() == original
+    assert request('/api/download/batch', payload)[1] == result
+    restarted = TaskManager(state_path=server.task_manager._state_path)
+    assert len(restarted._tasks) == 3
+    assert restarted.get_task(result['tasks'][1]['task_id']).dest == original['dest']
+
+
+def test_batch_dialog_appends_through_real_daemon(web_settings, monkeypatch, tmp_path):
+    import os
+    import shutil
+    import subprocess
+    from uav_downloader.daemon.server import DaemonRequestHandler
+    chrome = shutil.which(os.environ.get('CHROME_BIN', 'google-chrome'))
+    if not chrome:
+        pytest.skip('Chrome is required')
+    request, server, _ = web_settings
+    frontend = Path(__file__).resolve().parents[1] / 'uav-web' / 'frontend'
+    html = (frontend / 'index.html').read_text()
+    dialog = html[html.index('  <dialog id="download-batch-dialog"'):html.index('  <script src="/download-batch.js"')]
+    script = """
+    const check = (value, message) => {if (!value) throw Error(message);};
+    const until = async (test) => {for(let i=0;i<200;i++){if(test())return;await new Promise(r=>setTimeout(r,20));}throw Error('wait timed out');};
+    const field = id => document.getElementById('batch-'+id);
+    let received;
+    const batch = createDownloadBatch({getQuery:()=> '追加測試', onTasks:tasks=>{received=tasks;}});
+    const selectMerge = async () => {
+      await until(()=>document.getElementById('batch-destination').textContent.includes('追加測試'));
+      field('policy').value='merge';field('policy').dispatchEvent(new Event('input',{bubbles:true}));
+      await until(()=>!field('submit').disabled);
+    };
+    (async()=>{
+      let done=batch.open(['https://missav.ai/mimk-290']);await selectMerge();
+      field('submit').click();check(await done,'first submission failed');
+      const original=received[0];
+      done=batch.open(['https://jable.tv/videos/mimk-290/','https://missav.ai/mimk-291']);await selectMerge();
+      check(field('status').textContent.includes('將追加'),'append status missing');
+      field('submit').click();check(await done,'append failed');
+      check(received[0].status==='skipped' && received[1].status==='pending','wrong duplicate handling');
+      check(received.every(task=>task.dest===original.dest),'destination changed');
+      check((await fetch('/__batch_publish')).ok,'publication failed');
+      done=batch.open(['https://missav.ai/mimk-292']);await selectMerge();
+      field('submit').click();check(await done,'third submission failed');
+      const response=await fetch('/api/download/cancel',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({task_id:received[0].task_id})});
+      check(response.ok,'cancel failed');
+      document.body.innerHTML='<p>REAL_BATCH_PASS</p>';
+    })().catch(error=>{document.body.innerHTML='<p>REAL_BATCH_FAIL: '+error.message+'</p>';});
+    """
+    page = ('<body>' + dialog + '<script>' + (frontend / 'download-batch.js').read_text() + script + '</script>').encode()
+    from types import SimpleNamespace
+    from uav_downloader.daemon import task_manager as tm
+    def media_fixture(url, savepath, **kwargs):
+        code = 'MIMK-290' if '290' in url else 'MIMK-291'
+        def download():
+            Path(savepath, code + '.mp4').write_bytes(code.encode())
+            return True
+        return SimpleNamespace(dest_folder=lambda: savepath, target_name=lambda: code,
+                               is_url_vaildate=lambda: True, start_download=download, _cancel_job=False)
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', media_fixture)
+    original_get = DaemonRequestHandler.do_GET
+    def serve_page(handler):
+        if handler.path == '/__batch_publish':
+            for task in list(server.task_manager._tasks.values()):
+                if task.status == 'pending':
+                    server.task_manager._run_task(task)
+                    assert task.status == 'completed', task.error
+            return handler._send_json({'success': True})
+        if handler.path != '/__batch_test':
+            return original_get(handler)
+        handler.send_response(200)
+        handler.send_header('Content-Type', 'text/html; charset=utf-8')
+        handler.send_header('Content-Length', str(len(page)))
+        handler.end_headers()
+        handler.wfile.write(page)
+    monkeypatch.setattr(DaemonRequestHandler, 'do_GET', serve_page)
+    output = subprocess.run([chrome, '--headless', '--no-sandbox', '--disable-gpu', '--no-first-run',
+                             '--user-data-dir=' + str(tmp_path / 'chrome'), '--dump-dom', '--virtual-time-budget=15000',
+                             f'http://127.0.0.1:{server.server.server_address[1]}/__batch_test'],
+                            capture_output=True, text=True, timeout=30, check=True)
+    assert '<p>REAL_BATCH_PASS</p>' in output.stdout, output.stdout[-3000:]
+    server.stop()
+    restarted = DaemonServer(port=0)
+    try:
+        restarted.start()
+        with urlopen(f'http://127.0.0.1:{restarted.server.server_address[1]}/api/download/tasks') as response:
+            assert response.status == 200
+        assert sorted(task.status for task in restarted.task_manager._tasks.values()) == ['cancelled', 'completed', 'completed', 'skipped']
+        for code in ('MIMK-290', 'MIMK-291'):
+            assert (tmp_path / 'videos' / '追加測試' / (code + '.mp4')).read_bytes() == code.encode()
+    finally:
+        restarted.stop()

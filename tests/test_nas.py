@@ -526,6 +526,20 @@ def test_batch_subfolder_uses_actual_nas_destination(profile, monkeypatch, tmp_p
         with nas.open_smb_storage(task.nas_settings, task.dest):
             with nas.open_smb_storage(other.nas_settings, other.dest):
                 assert task.to_dict()['final_dest'] == other.to_dict()['final_dest']
+    append = dict(options, policy='merge', request_id='nas-append',
+                  urls=['https://example.com/movie', 'https://example.com/new'],
+                  expected_destination=preview['destination'])
+    busy = download_batch.destination(manager, append)
+    assert busy['busy'] and not busy['overwrite_busy'] and busy['can_submit']
+    appended = download_batch.submit(manager, append)
+    assert [item['status'] for item in appended['tasks']] == ['skipped', 'pending']
+    assert all(item['final_dest'] == preview['destination'] for item in appended['tasks'])
+    if mode == 'smb':
+        extra = manager.get_task(appended['tasks'][1]['task_id'])
+        assert extra.dest != task.dest
+        with nas.open_smb_storage(task.nas_settings, task.dest):
+            with nas.open_smb_storage(extra.nas_settings, extra.dest):
+                assert task.to_dict()['final_dest'] == extra.to_dict()['final_dest']
     assert 'nas-secret' not in json.dumps(result)
     if mode in ('smb', 'upload'):
         assert task.nas_settings['directory'] == 'UAV/collection'

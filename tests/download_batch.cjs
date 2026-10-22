@@ -19,16 +19,17 @@ try {
     if (window.formatStoragePath('smb://nas/100%folder') !== 'smb://nas/100%folder') throw Error('Malformed escapes must remain visible');
     const dialog = document.getElementById('download-batch-dialog');
     const requests = [];
-    let fail = false, lost = false, slow, query = '台北空拍', received;
+    let fail = false, lost = false, busy = false, overwriteBusy = false, conflictOnSubmit = false, slow, query = '台北空拍', received;
     window.fetch = async (url, options) => {
       check(url === '/api/download/batch', 'Wrong endpoint');
       const body = JSON.parse(options.body);
       requests.push(body);
       if (body.name === 'slow') await new Promise(resolve => {slow = resolve;});
+      if (conflictOnSubmit && body.action === 'submit') {conflictOnSubmit=false; overwriteBusy=true; return {ok:false,json:async()=>({error:'此資料夾有未完成的覆寫任務，請待任務結束後再追加'})};}
       if (lost && body.action === 'submit') {lost=false; throw Error('connection lost');}
       if (fail && body.action === 'submit') return {ok:false, json:async()=>({error:'磁碟離線'})};
       return {ok:true,json:async()=>({success:true, name:body.name, base_destination:'/downloads', destination:body.storage === 'settings' ? '/downloads' : '/downloads/' + body.name,
-        exists:body.name === '台北空拍', file_count:2, can_submit:true, busy:false,
+        exists:body.name === '台北空拍', file_count:2, can_submit:!busy || (body.policy === 'merge' && !overwriteBusy), busy, overwrite_busy:overwriteBusy,
         tasks:[{task_id:'test',dest:'/downloads/' + body.name}]})};
     };
     const batch = createDownloadBatch({getQuery:()=>query,onTasks:tasks=>{received=tasks;}});
@@ -44,6 +45,25 @@ try {
       field('cancel').click();
       check(await result === false, 'Cancel submitted a batch');
       check(requests.every(body=>body.action==='preview'), 'Cancel mutated queue');
+      busy = true;
+      result = batch.open(['https://example.com/append']); await tick();
+      field('policy').value = 'merge'; field('policy').dispatchEvent(new Event('input',{bubbles:true})); await tick();
+      check(!field('submit').disabled && field('status').textContent === '將追加至此資料夾，相同影片會略過。', 'Busy merge must allow append with accurate status');
+      field('policy').value = 'overwrite'; field('policy').dispatchEvent(new Event('input',{bubbles:true})); await tick();
+      check(field('submit').disabled && field('status').textContent.includes('合併'), 'Busy overwrite must be blocked');
+      field('policy').value = 'merge'; field('policy').dispatchEvent(new Event('input',{bubbles:true})); await tick();
+      conflictOnSubmit = true;
+      const beforeConflict = requests.filter(body=>body.action==='submit').length;
+      field('submit').click(); field('submit').click(); await tick(); await tick();
+      check(dialog.open && field('name').value === 'edited draft', 'Conflict must preserve open dialog and name');
+      check(field('submit').disabled && field('status').textContent.includes('覆寫任務'), 'New overwrite conflict must block retry');
+      check(requests.filter(body=>body.action==='submit').length === beforeConflict + 1, 'Conflict double click submitted twice');
+      overwriteBusy = false;
+      field('policy').dispatchEvent(new Event('input',{bubbles:true})); await tick();
+      check(!field('submit').disabled, 'Merge must recover after overwrite finishes');
+      field('cancel').click(); await result;
+      busy = false;
+      requests.length = 0;
       result = batch.open(['https://example.com/a']);
       field('name').value = 'slow'; field('name').dispatchEvent(new Event('input',{bubbles:true}));
       field('name').value = 'latest'; field('name').dispatchEvent(new Event('input',{bubbles:true}));

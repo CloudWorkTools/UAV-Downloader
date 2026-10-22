@@ -54,7 +54,9 @@ window.createDownloadBatch = ({getQuery, getSubtitleRequest, onTasks}) => {
       field('destination').textContent = window.formatStoragePath(data.destination);
       field('conflict').hidden = !data.exists;
       field('naming-row').hidden = options.policy !== 'new' || options.storage === 'settings';
-      field('status').textContent = data.busy ? '此資料夾有未完成任務，請使用新的名稱。' : !data.can_submit ? '此名稱已存在，請修改名稱。' :
+      field('status').textContent = !data.can_submit ? (data.overwrite_busy ? '此資料夾有未完成的覆寫任務，請待任務結束後再追加。' :
+        data.busy ? '此資料夾有未完成任務，請使用合併模式或待任務結束後再試。' : '此名稱已存在，請修改名稱。') :
+        data.busy ? '將追加至此資料夾，相同影片會略過。' :
         options.policy === 'overwrite' ? `資料夾目前有 ${data.file_count} 個檔案。只覆寫本次產生的同名檔案，其餘保留；實際同名檔案於解析影片後確認，已覆寫的檔案不會因取消而還原。` :
         data.exists ? '已找到同名資料夾，請確認處理方式與儲存位置。' : '確認後才會建立資料夾。';
       field('submit').textContent = options.policy === 'overwrite' ? '覆寫並下載' : '開始下載';

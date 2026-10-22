@@ -73,18 +73,26 @@ def destination(manager, body, *, commit=False):
         def same_destination(task):
             return (nas.public_destination(task.nas_settings) == display if remote and task.nas_settings.get('enabled') and task.nas_settings.get('mode') in ('smb', 'upload') else os.path.abspath(task.dest) == display)
         with manager._lock:
-            busy = any(same_destination(task) and task.status not in ('completed', 'skipped', 'cancelled', 'failed')
-                       for task in manager._tasks.values())
+            unfinished = [task for task in manager._tasks.values()
+                          if task.status not in ('completed', 'skipped', 'cancelled', 'failed') and same_destination(task)]
+            busy = bool(unfinished)
+            overwrite_busy = any(task.folder_policy == 'overwrite' for task in unfinished)
         count = sum(filesystem.isfile(os.path.join(target, item)) and not item.startswith('.uav-') for item in filesystem.listdir(target)) if filesystem.isdir(target) else 0
         result = {'success': True, 'name': name, 'destination': display,
                   'base_destination': nas.public_destination(settings) if remote else base, 'exists': original_exists,
-                  'file_count': count, 'busy': busy, 'can_submit': not busy and not (name and original_exists and policy == 'new' and naming == 'custom')}
+                  'file_count': count, 'busy': busy, 'overwrite_busy': overwrite_busy,
+                  'can_submit': (not busy or (policy == 'merge' and not overwrite_busy))
+                  and not (name and original_exists and policy == 'new' and naming == 'custom')}
         if not commit:
             return result
         if body.get('expected_destination') != display:
             raise ValueError('儲存位置已變更，請重新確認資料夾')
         if not result['can_submit']:
-            raise ValueError('資料夾已有未完成任務或同名項目，請使用新的名稱')
+            if overwrite_busy:
+                raise ValueError('此資料夾有未完成的覆寫任務，請待任務結束後再追加')
+            if busy:
+                raise ValueError('此資料夾有未完成任務，請使用合併模式或待任務結束後再試')
+            raise ValueError('此名稱已存在，請修改資料夾名稱')
         if name and policy == 'new':
             filesystem.makedirs(target, exist_ok=False)
         else:

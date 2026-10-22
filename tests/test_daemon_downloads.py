@@ -877,3 +877,99 @@ def test_batch_edit_assigns_independent_smb_roots(manager, monkeypatch):
     assert first.dest != second.dest
     assert first.nas_settings['_smb_path'] == first.dest
     assert second.nas_settings['_smb_path'] == second.dest
+
+
+def batch_payload(manager, request_id, urls, **options):
+    from uav_downloader.daemon import download_batch
+    body = dict(name='collection', policy='merge', request_id=request_id, urls=urls, **options)
+    return dict(body, expected_destination=download_batch.destination(manager, body)['destination'])
+
+
+@pytest.mark.parametrize('status', ['pending', 'downloading', 'paused', 'cancelling'])
+@pytest.mark.parametrize('storage', ['query', 'settings'])
+def test_batch_append_preserves_original_and_skips_duplicates(manager, tmp_path, status, storage):
+    manager._state_path = tmp_path / 'tasks.json'
+    from uav_downloader.daemon import download_batch
+    first_body = batch_payload(manager, 'first', ['https://missav.ai/mimk-290'], storage=storage)
+    first = download_batch.submit(manager, first_body)['tasks'][0]
+    original = manager.get_task(first['task_id'])
+    original.status = status
+    snapshot = original.to_dict()
+    body = batch_payload(manager, 'second', ['https://jable.tv/videos/mimk-290/', 'https://missav.ai/mimk-291'], storage=storage)
+    preview = download_batch.destination(manager, body)
+    assert preview['busy'] and not preview['overwrite_busy'] and preview['can_submit']
+    result = download_batch.submit(manager, body)
+    assert [task['status'] for task in result['tasks']] == ['skipped', 'pending']
+    assert manager.get_task(first['task_id']).to_dict() == snapshot
+    assert {task['dest'] for task in result['tasks']} == {original.dest}
+    assert download_batch.submit(manager, body) == result
+    assert len(manager._tasks) == 3
+    duplicates = download_batch.submit(manager, dict(body, request_id='all-duplicates'))
+    assert all(task['status'] == 'skipped' for task in duplicates['tasks'])
+    assert len(manager._queue) == 2
+    assert not download_batch.destination(manager, dict(body, policy='overwrite'))['can_submit']
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert set(restored._tasks) == set(manager._tasks)
+    assert restored.get_task(result['tasks'][1]['task_id']).dest == original.dest
+
+
+def test_batch_append_rechecks_overwrite_after_preview(manager):
+    from uav_downloader.daemon import download_batch
+    append = batch_payload(manager, 'append', ['https://missav.ai/mimk-291'])
+    overwrite = dict(append, request_id='overwrite', policy='overwrite', urls=['https://missav.ai/mimk-290'])
+    download_batch.submit(manager, overwrite)
+    before_tasks, before_queue = dict(manager._tasks), list(manager._queue)
+    preview = download_batch.destination(manager, append)
+    assert preview['busy'] and preview['overwrite_busy'] and not preview['can_submit']
+    with pytest.raises(ValueError, match='覆寫任務'):
+        download_batch.submit(manager, append)
+    assert manager._tasks == before_tasks and manager._queue == before_queue
+
+
+def test_batch_append_concurrent_retry_and_duplicate_requests(manager):
+    from concurrent.futures import ThreadPoolExecutor
+    from uav_downloader.daemon import download_batch
+    first = batch_payload(manager, 'first', ['https://missav.ai/mimk-290'])
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: download_batch.submit(manager, first), range(16)))
+    assert all(result == results[0] for result in results)
+    assert len(manager._tasks) == len(manager._queue) == 1
+    bodies = [batch_payload(manager, str(i), ['https://missav.ai/mimk-291']) for i in range(8)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda body: download_batch.submit(manager, body), bodies))
+    assert sum(result['tasks'][0]['status'] == 'pending' for result in results) == 1
+    assert len(manager._queue) == 2
+
+
+def test_batch_append_save_failure_preserves_original(manager, monkeypatch, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    from uav_downloader.daemon import download_batch
+    body = batch_payload(manager, 'first', ['https://missav.ai/mimk-290'])
+    first = download_batch.submit(manager, body)
+    before_tasks, before_queue = dict(manager._tasks), list(manager._queue)
+    before_state = Path(manager._state_path).read_bytes()
+    monkeypatch.setattr(manager, '_save_tasks', MagicMock(side_effect=OSError('disk full')))
+    with pytest.raises(OSError, match='disk full'):
+        download_batch.submit(manager, batch_payload(manager, 'second', ['https://missav.ai/mimk-291']))
+    assert manager._tasks == before_tasks and manager._queue == before_queue
+    assert Path(manager._state_path).read_bytes() == before_state
+    assert download_batch.submit(manager, body) == first
+
+
+def test_batch_append_cancel_preserves_other_batch_files(manager, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    from uav_downloader.daemon import download_batch
+    from uav_downloader.daemon.download_files import DownloadFiles
+    first = download_batch.submit(manager, batch_payload(manager, 'first', ['https://missav.ai/mimk-290']))
+    second = download_batch.submit(manager, batch_payload(manager, 'second', ['https://missav.ai/mimk-291']))
+    tasks = [manager.get_task(result['tasks'][0]['task_id']) for result in (first, second)]
+    for index, task in enumerate(tasks):
+        task.files = DownloadFiles(task.dest, task.task_id)
+        Path(task.files.workdir, f'{index}.mp4').write_bytes(bytes([index]))
+        task.files.publish(task.cancelled_event)
+    manager._save_tasks()
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert restored.cancel_task(tasks[0].task_id)
+    assert not Path(tasks[0].dest, '0.mp4').exists()
+    assert Path(tasks[1].dest, '1.mp4').read_bytes() == bytes([1])
+    assert Path(tasks[1].files.workdir).is_dir()
