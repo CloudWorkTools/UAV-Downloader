@@ -253,6 +253,8 @@ class SmbStorage:
 
                 incoming = open_media(source, 'rb')
                 outgoing = open_media(destination, 'w+b', share_access='r')
+                # PyAV decodes faststart's reopen URL as ASCII; the callback uses destination.
+                outgoing.name = 'uav-remux.mp4'
                 def reopen_output(url, flags, options):
                     return open_media(destination, 'rb', share_access='rw')
                 with av.open(incoming, options={'fflags': '+genpts'}) as media:

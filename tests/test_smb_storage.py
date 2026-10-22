@@ -564,15 +564,16 @@ def test_smb_settings_and_queue_snapshot(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize('source_format', ['mpegts', 'mp4'])
-def test_hls_merge_and_ffmpeg_stream_back_to_smb(smb, source_format):
+@pytest.mark.parametrize('folder_name', ['plain', '影片 🎬'])
+def test_hls_merge_and_ffmpeg_stream_back_to_smb(smb, source_format, folder_name):
     ffmpeg = shutil.which('ffmpeg')
     if not ffmpeg:
         pytest.skip('ffmpeg not installed')
     flags = ['-movflags', 'frag_keyframe+empty_moov'] if source_format == 'mp4' else []
     media = subprocess.check_output([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=128x128:r=10', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', '1', '-c:v', 'libx264', '-c:a', 'aac', *flags, '-f', source_format, 'pipe:1'])
     job = object.__new__(base.M3U8Crawler)
-    job._dest_folder = smb.root
-    job._temp_folder = os.path.join(smb.root, 'segments')
+    job._dest_folder = os.path.join(smb.root, folder_name)
+    job._temp_folder = os.path.join(job._dest_folder, 'segments')
     job._targetName = 'merged-video'
     job._tsList = ['first']
     job._cancel_job = False
@@ -580,7 +581,8 @@ def test_hls_merge_and_ffmpeg_stream_back_to_smb(smb, source_format):
     with storage_open(job._seg_savename(0), 'wb') as segment:
         segment.write(media)
     assert job._mergeMp4Chunks() > 0
-    target = smb.folder / 'merged-video.mp4'
+    folder = smb.folder / folder_name
+    target = folder / 'merged-video.mp4'
     assert target.read_bytes()[4:8] == b'ftyp'
     # Inspect top-level boxes: a playable fragmented MP4 still fails this check.
     with target.open('rb') as stream:
@@ -598,8 +600,8 @@ def test_hls_merge_and_ffmpeg_stream_back_to_smb(smb, source_format):
     assert float(metadata['format']['duration']) == pytest.approx(1, abs=0.2)
     assert {stream['codec_type'] for stream in metadata['streams']} == {'video', 'audio'}
     subprocess.run([ffmpeg, '-v', 'error', '-i', str(target), '-f', 'null', '-'], check=True)
-    assert not list(smb.folder.glob('uav-remux-*'))
-    assert not (smb.folder / 'segments').exists()
+    assert not list(folder.glob('uav-remux-*'))
+    assert not (folder / 'segments').exists()
 
 
 def test_remote_existing_output_is_not_deleted_during_merge(smb):
