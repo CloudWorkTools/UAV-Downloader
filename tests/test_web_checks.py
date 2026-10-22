@@ -25,6 +25,7 @@ def test_web_check_command(tmp_path, python_status, node_status, expected):
     assert (tmp_path / 'imports').read_text().split(os.pathsep) == [str(root / 'src'), '/extra/modules']
     calls = log.read_text().splitlines()
     assert calls[0].startswith('-m pytest -q ')
+    assert 'tests/test_crawler_naming.py' in calls[0].split()
     if python_status:
         assert len(calls) == 1
     elif node_status:

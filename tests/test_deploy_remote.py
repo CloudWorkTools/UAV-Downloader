@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 import pytest
 
@@ -17,6 +18,50 @@ def test_target_validation(tmp_path):
         path.write_text(json.dumps(dict(config, **{field: value})))
         with pytest.raises(ValueError):
             deploy.load_config(path)
+
+
+@pytest.fixture
+def deployment_worktree(tmp_path, monkeypatch):
+    main, linked = tmp_path / 'main repo', tmp_path / 'linked worktree'
+    main.mkdir()
+    subprocess.run(['git', 'init', str(main)], check=True, capture_output=True)
+    (main / '.gitignore').write_text('.deploy.local.json\n')
+    subprocess.run(['git', '-C', str(main), 'add', '.gitignore'], check=True)
+    subprocess.run(['git', '-C', str(main), '-c', 'user.name=Test', '-c',
+                    'user.email=test@example.invalid', 'commit', '-m', 'initial'],
+                   check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(main), 'worktree', 'add', '--detach', str(linked)],
+                   check=True, capture_output=True)
+    monkeypatch.setattr(deploy, 'ROOT', linked)
+    return main, linked
+
+
+@pytest.mark.parametrize('override', [False, True])
+def test_worktree_loads_existing_config_without_copying(deployment_worktree, override):
+    main, linked = deployment_worktree
+    config = dict(host='192.0.2.10', user='operator', port=8080, remote_dir='/home/operator/service')
+    (main / '.deploy.local.json').write_text(json.dumps(config))
+    expected = dict(config, port=8081) if override else config
+    if override:
+        (linked / '.deploy.local.json').write_text(json.dumps(expected))
+    assert deploy.load_config() == expected
+    assert (linked / '.deploy.local.json').exists() is override
+
+
+def test_worktree_never_replaces_invalid_or_explicit_missing_config(deployment_worktree):
+    main, linked = deployment_worktree
+    config = dict(host='192.0.2.10', user='operator', port=8080, remote_dir='/home/operator/service')
+    (main / '.deploy.local.json').write_text(json.dumps(config))
+    (linked / '.deploy.local.json').write_text('{invalid')
+    with pytest.raises(json.JSONDecodeError):
+        deploy.load_config()
+    with pytest.raises(FileNotFoundError):
+        deploy.load_config(linked / 'missing.json')
+
+
+def test_worktree_reports_missing_config(deployment_worktree):
+    with pytest.raises(FileNotFoundError):
+        deploy.load_config()
 
 
 def test_remote_installer_compiles():
@@ -96,6 +141,36 @@ def test_deployment_bundles_private_firecrawl_by_default(monkeypatch, tmp_path, 
     assert deploy.SPEACHES_IMAGE in (deploy.ROOT / 'docker-compose.yml').read_text()
     remote = calls[-1][-1]
     assert remote.endswith('1' if expected else '0')
+    checked_image = next(args[-1] for args in calls if args[:2] == ['bash', 'scripts/check_web_container.sh'])
+    assert checked_image == 'uav-downloader:abc123'
+    assert checked_image in save
+    assert calls.index(next(args for args in calls if args[:2] == ['bash', 'scripts/check_smb_batch_container.sh'])) < calls.index(save)
+
+
+@pytest.mark.parametrize('failed_stage', ['test-build', 'web-tests', 'web-smoke', 'smb-smoke'])
+def test_image_check_failure_blocks_remote_deployment(monkeypatch, failed_stage):
+    import sys
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(sys, 'argv', ['deploy_remote.py', '--without-firecrawl'])
+    monkeypatch.setattr(deploy, 'load_config', lambda: dict(host='192.0.2.10', user='operator',
+                                                          port=8080, remote_dir='/home/operator/service'))
+    monkeypatch.setattr(deploy.subprocess, 'check_output',
+                        lambda args, **kw: '' if 'status' in args else 'abc123')
+    def run(args, **kwargs):
+        calls.append(args)
+        stage = ('test-build' if 'Dockerfile.web-tests' in args else
+                 'web-tests' if args[:2] == ['docker', 'run'] else
+                 'web-smoke' if args[:2] == ['bash', 'scripts/check_web_container.sh'] else
+                 'smb-smoke' if args[:2] == ['bash', 'scripts/check_smb_batch_container.sh'] else '')
+        if stage == failed_stage:
+            raise subprocess.CalledProcessError(7, args)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(deploy.subprocess, 'run', run)
+    with pytest.raises(subprocess.CalledProcessError):
+        deploy.main()
+    assert not any(args[0] == 'ssh' or args[:2] == ['docker', 'save'] for args in calls)
+    assert ['docker', 'image', 'rm', 'uav-downloader:abc123-tests'] in calls
 
 
 def test_container_storage_probe_uses_effective_settings_and_cleans_files(monkeypatch, tmp_path, capsys):
@@ -179,13 +254,26 @@ def test_storage_probe_distinguishes_nas_connection_from_write_failure(monkeypat
     assert (tmp_path / 'nas.json').read_bytes() == before
 
 
-def test_failed_container_storage_check_rolls_back_healthy_service(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize('failure_stage', ['storage', 'mp4'])
+def test_failed_container_storage_check_rolls_back_healthy_service(monkeypatch, tmp_path, capsys, failure_stage):
     import io
     import subprocess
     import sys
     from types import SimpleNamespace
     import urllib.request
     calls = []
+    if failure_stage == 'mp4':
+        from contextlib import nullcontext
+        from uav_downloader.daemon import nas, storage_smoke
+        monkeypatch.setenv('CONFIG_DIR', str(tmp_path / 'probe-config'))
+        monkeypatch.setattr(nas, 'load_settings', lambda **kw: {'enabled': True, 'mode': 'smb'})
+        monkeypatch.setattr(nas, '_connection', lambda *a, **kw: nullcontext((SimpleNamespace(stat=lambda *a, **kw: None), 'test', {})))
+        monkeypatch.setattr(nas, 'open_smb_storage', lambda *a: nullcontext())
+        monkeypatch.setattr('uav_downloader.core.storage.probe_destination', lambda *a: None)
+        monkeypatch.setattr(storage_smoke, 'check_batch_smb', lambda settings: True)
+        def fail_mp4(settings):
+            raise ValueError('private-path-and-password')
+        monkeypatch.setattr(storage_smoke, 'check_mp4_smb', fail_mp4)
 
     def run(args, **kwargs):
         calls.append(args)
@@ -194,6 +282,10 @@ def test_failed_container_storage_check_rolls_back_healthy_service(monkeypatch, 
             assert 'gosu "$PUID:$PGID"' in args[5]
             assert '"$PUID" -ne 0' in args[5]
             assert args[-1] == deploy.STORAGE_PROBE
+            if failure_stage == 'mp4':
+                with pytest.raises(SystemExit) as error:
+                    exec(args[-1], {})
+                assert error.value.code == 1
             raise subprocess.CalledProcessError(1, args)
         return SimpleNamespace(returncode=0)
 
@@ -207,7 +299,11 @@ def test_failed_container_storage_check_rolls_back_healthy_service(monkeypatch, 
     assert calls[-3:] == [['docker', 'rm', '-f', 'uav-downloader'],
                           ['docker', 'rename', 'uav-downloader-previous', 'uav-downloader'],
                           ['docker', 'start', 'uav-downloader']]
-    assert 'Service startup: OK' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert 'Service startup: OK' in output
+    if failure_stage == 'mp4':
+        assert 'NAS MP4 Unicode remux/faststart/seek/cleanup: FAILED' in output
+        assert 'private-path-and-password' not in output
 
 
 def test_disabled_nas_does_not_require_saved_credentials(monkeypatch, tmp_path, capsys):
@@ -284,6 +380,7 @@ def test_production_smb_batch_gate_runs_after_basic_write_probe(monkeypatch, tmp
             raise OSError('test failure')
         return True
     monkeypatch.setattr(storage_smoke, 'check_batch_smb', check)
+    monkeypatch.setattr(storage_smoke, 'check_mp4_smb', lambda settings: True)
     if fails:
         with pytest.raises(SystemExit):
             exec(deploy.STORAGE_PROBE, {})
@@ -293,3 +390,30 @@ def test_production_smb_batch_gate_runs_after_basic_write_probe(monkeypatch, tmp
     output = capsys.readouterr().out
     assert 'NAS destination write/cleanup: OK' in output
     assert 'NAS concurrent batch write/read/cleanup: ' + ('FAILED' if fails else 'OK') in output
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_production_mp4_failure_fails_storage_probe_without_leaking_details(monkeypatch, tmp_path, capsys, fails):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from uav_downloader.daemon import nas, storage_smoke
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path))
+    monkeypatch.setattr(nas, 'load_settings', lambda **kw: {'enabled': True, 'mode': 'smb'})
+    monkeypatch.setattr(nas, '_connection', lambda *a, **kw: nullcontext((SimpleNamespace(stat=lambda *a, **kw: None), 'test', {})))
+    monkeypatch.setattr(nas, 'open_smb_storage', lambda *a: nullcontext())
+    monkeypatch.setattr('uav_downloader.core.storage.probe_destination', lambda *a: None)
+    monkeypatch.setattr(storage_smoke, 'check_batch_smb', lambda settings: True)
+    def check(settings):
+        if fails:
+            raise ValueError('private-path-and-password')
+        return True
+    monkeypatch.setattr(storage_smoke, 'check_mp4_smb', check)
+    if fails:
+        with pytest.raises(SystemExit) as error:
+            exec(deploy.STORAGE_PROBE, {})
+        assert error.value.code == 1
+    else:
+        exec(deploy.STORAGE_PROBE, {})
+    output = capsys.readouterr().out
+    assert 'NAS MP4 Unicode remux/faststart/seek/cleanup: ' + ('FAILED' if fails else 'OK') in output
+    assert 'private-path-and-password' not in output

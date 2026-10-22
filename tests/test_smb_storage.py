@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -947,3 +948,94 @@ def test_production_batch_smoke_catches_shared_roots_and_cleans_on_failure(smb, 
     with pytest.raises(ValueError, match='Storage destination is already active'):
         check_batch_smb(smb.settings)
     assert list(smb.folder.iterdir()) == []
+
+
+@pytest.fixture
+def mp4_tools():
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        pytest.skip('FFmpeg and ffprobe are required for the deployment MP4 check')
+
+
+def test_mp4_smoke_checks_unicode_smb_paths_and_preserves_existing_files(smb, monkeypatch, mp4_tools):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    original = smb.folder / 'existing.mp4'
+    original.write_bytes(b'keep')
+    remux = SmbStorage.remux_to_mp4
+    paths = []
+    def checked_remux(self, source, destination, cancelled):
+        assert self.remote
+        paths.append(destination)
+        return remux(self, source, destination, cancelled)
+    monkeypatch.setattr(SmbStorage, 'remux_to_mp4', checked_remux)
+
+    assert check_mp4_smb(smb.settings)
+    assert len(paths) == 2
+    assert all('中文🎬' in path for path in paths)
+    assert list(smb.folder.iterdir()) == [original]
+    assert original.read_bytes() == b'keep'
+
+
+@pytest.mark.parametrize('failure', ['remux', 'decode'])
+def test_mp4_smoke_failure_cleans_only_its_test_folder(smb, monkeypatch, failure, mp4_tools):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    original = smb.folder / 'existing.mp4'
+    original.write_bytes(b'keep')
+    def fail(*args, **kwargs):
+        raise OSError('synthetic media failure')
+    if failure == 'remux':
+        monkeypatch.setattr(SmbStorage, 'remux_to_mp4', fail)
+    else:
+        run = subprocess.run
+        def fail_decode(args, **kwargs):
+            if 'null' in args:
+                return fail()
+            return run(args, **kwargs)
+        monkeypatch.setattr(subprocess, 'run', fail_decode)
+    with pytest.raises(OSError, match='synthetic media failure'):
+        check_mp4_smb(smb.settings)
+    assert list(smb.folder.iterdir()) == [original]
+    assert original.read_bytes() == b'keep'
+
+
+def test_mp4_smoke_rejects_unfinalized_fragmented_output(smb, monkeypatch, mp4_tools):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    fragmented = subprocess.check_output([
+        'ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=s=128x128:r=10',
+        '-t', '1', '-c:v', 'libx264', '-movflags', 'frag_keyframe+empty_moov',
+        '-f', 'mp4', 'pipe:1'])
+    def publish_fragmented(self, source, destination, cancelled):
+        with storage_open(destination, 'wb') as stream:
+            stream.write(fragmented)
+        return True
+    monkeypatch.setattr(SmbStorage, 'remux_to_mp4', publish_fragmented)
+    with pytest.raises(ValueError, match='MP4'):
+        check_mp4_smb(smb.settings)
+    assert list(smb.folder.iterdir()) == []
+
+
+@pytest.mark.parametrize('settings', [{}, {'enabled': False, 'mode': 'smb'},
+                                      {'enabled': True, 'mode': 'direct'}])
+def test_mp4_smoke_skips_non_smb_settings(settings):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    assert not check_mp4_smb(settings)
+
+
+def test_mp4_smoke_cleanup_failure_is_not_success(smb, monkeypatch, mp4_tools):
+    from uav_downloader.daemon.storage_smoke import check_mp4_smb
+    monkeypatch.setattr(SmbStorage, 'rmtree', lambda *args, **kwargs: None)
+    with pytest.raises(OSError, match='cleanup failed'):
+        check_mp4_smb(smb.settings)
+
+
+def test_storage_smoke_cli_redacts_settings_failure(monkeypatch, capsys):
+    from uav_downloader.daemon import storage_smoke
+    monkeypatch.setattr(sys, 'argv', ['storage_smoke', '--require-smb'])
+    def fail(**kwargs):
+        raise RuntimeError('private-password')
+    monkeypatch.setattr(nas, 'load_settings', fail)
+    with pytest.raises(SystemExit) as error:
+        storage_smoke.main()
+    assert error.value.code == 1
+    output = capsys.readouterr().out
+    assert 'settings: FAILED' in output
+    assert 'private-password' not in output

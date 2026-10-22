@@ -41,11 +41,15 @@ PYTHON=.venv/bin/python bash scripts/check_web.sh
 
 ```bash
 docker build -f Dockerfile.web -t uav-downloader:local .
+docker build -f Dockerfile.web-tests --build-arg APP_IMAGE=uav-downloader:local -t uav-downloader:local-tests .
+docker run --rm --user 1000:1000 --mount "type=bind,source=$PWD,target=/workspace,readonly" --workdir /workspace uav-downloader:local-tests
 bash scripts/check_web_container.sh uav-downloader:local
 bash scripts/check_smb_batch_container.sh uav-downloader:local
 ```
 
 SMB 檢查另以隔離 Samba 驗證同批多任務的並行儲存。實際 NAS、ASR、模型品質與遠端容器掛載的驗證需要專用環境，離線回歸測試無法代替這些檢查。
+
+`Dockerfile.web-tests` 沿用 `scripts/check_web.sh`，與 CI 及部署共用入口；它會設定子程序的 `PYTHONPATH`，任一 Python 或前端測試失敗即停止。遠端部署工具會對待部署提交的正式映像強制執行上述檢查，全部通過才傳送映像。
 
 SMB 測試使用獨立的測試帳號與共享目錄，勿使用正式影片目錄作為測試資料。保留本機檔案、未經使用者明確選擇不覆寫遠端既有檔案、錯誤不包含密碼，均為 NAS 擴充的必要行為。
 
@@ -58,6 +62,8 @@ Linux 工作指定 `shared-runners` 群組及 `self-hosted`、`Linux`、`X64`、
 PR CI 使用隔離服務、測試帳密與獨立資料，生產檢查由部署程序沿用遠端既有設定。測試只在專屬暫存資料夾讀寫，完成或失敗後清理；保留原有影片、設定與下載紀錄。生產檢查失敗時，部署程序回復舊版服務。真實位址、帳密與資料內容留在環境內，不寫入倉庫或測試輸出。
 
 SMB 批次下載的正式映像測試入口為 `bash scripts/check_smb_batch_container.sh IMAGE`，使用真實 Samba 驗證同批兩個任務的獨立連線、並行寫入、跨連線讀回與清理。部署程序在實際 NAS 執行相同的 `daemon.storage_smoke.check_batch_smb` 檢查。這個測試不擷取外站影片，不代表整部影片下載或播放器相容性已驗證。
+
+同一入口及部署程序也執行 `daemon.storage_smoke.check_mp4_smb`，以自產 TS／fMP4 及實際中文、表情符號路徑驗證一般 MP4、faststart、片長、影音與跳轉解碼；成功或失敗都清理專屬暫存目錄。新增封裝檢查時延伸此共用函式，不另建臨時驗證腳本。
 
 ## 推送前的說明與截圖
 
