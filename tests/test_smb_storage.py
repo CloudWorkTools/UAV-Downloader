@@ -677,6 +677,37 @@ def test_media_remux_cancellation_does_not_open_output(smb):
     assert not (smb.folder / 'cancelled.mp4').exists()
 
 
+@pytest.mark.parametrize('sample_rate,offset', [
+    (44100, '0.25'), (48000, '0.25'), (44100, '0.278644'), (44100, '0.4')])
+def test_smb_remux_preserves_audio_packets_with_overlapping_timestamps(smb, sample_rate, offset):
+    import av
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        pytest.skip('ffmpeg not installed')
+    media = b''.join(subprocess.check_output([
+        ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', f'sine=sample_rate={sample_rate}',
+        '-t', '0.25', '-c:a', 'aac', '-output_ts_offset', start,
+        '-f', 'mpegts', 'pipe:1']) for start in ('0', offset))
+    with av.open(io.BytesIO(media)) as incoming:
+        timestamps = [packet.dts for packet in incoming.demux(audio=0) if packet.dts is not None]
+    assert any(current <= previous for previous, current in zip(timestamps, timestamps[1:])) == (offset != '0.4')
+    with av.open(io.BytesIO(media)) as incoming:
+        samples = sum(frame.samples for frame in incoming.decode(audio=0))
+    (smb.folder / 'source.ts').write_bytes(media)
+
+    assert smb.backend.remux_to_mp4(os.path.join(smb.root, 'source.ts'),
+                                    os.path.join(smb.root, 'output.mp4'), lambda: False)
+
+    with av.open(str(smb.folder / 'output.mp4')) as output:
+        assert output.streams.audio[0].codec_context.sample_rate == sample_rate
+        packets = [packet for packet in output.demux(audio=0) if packet.dts is not None]
+        assert len(packets) == len(timestamps)
+        assert all(packet.pts == packet.dts for packet in packets)
+        assert all(current.dts > previous.dts for previous, current in zip(packets, packets[1:]))
+    with av.open(str(smb.folder / 'output.mp4')) as output:
+        assert sum(frame.samples for frame in output.decode(audio=0)) == samples
+
+
 @pytest.mark.parametrize('phase', ['packets', 'faststart'])
 def test_smb_remux_cancellation_preserves_segments(smb, monkeypatch, phase):
     ffmpeg = shutil.which('ffmpeg')
@@ -725,6 +756,25 @@ def test_smb_remux_cancellation_preserves_segments(smb, monkeypatch, phase):
     assert not (smb.folder / 'cancelled.mp4').exists()
     assert (smb.folder / 'segments' / '000000.mp4').read_bytes() == media
     assert not list(smb.folder.glob('uav-remux-*'))
+
+
+def test_smb_remux_failure_includes_the_native_ffmpeg_reason(smb):
+    from uav_downloader.core.media_errors import MediaRemuxError
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        pytest.skip('ffmpeg not installed')
+    media = b''.join(subprocess.check_output([
+        ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'color=s=128x128:r=25',
+        '-t', '0.25', '-c:v', 'libx264', '-bf', '0', '-output_ts_offset', start,
+        '-f', 'mpegts', 'pipe:1']) for start in ('0', '0.2'))
+    (smb.folder / 'source.ts').write_bytes(media)
+
+    with pytest.raises(MediaRemuxError, match='non monotonically increasing dts') as error:
+        smb.backend.remux_to_mp4(os.path.join(smb.root, 'source.ts'),
+                                 os.path.join(smb.root, 'output.mp4'), lambda: False)
+    assert 'stream 0' in str(error.value)
+    assert str(smb.root) not in str(error.value)
+    assert (smb.folder / 'source.ts').read_bytes() == media
 
 
 @pytest.mark.parametrize('phase', ['write', 'faststart'])

@@ -6,6 +6,7 @@ export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 "${PYTHON:-python3}" -m pytest -q \
   tests/test_nas.py tests/test_daemon.py tests/test_daemon_downloads.py \
   tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py tests/test_crawler_naming.py \
+  tests/test_media_errors.py tests/test_hanime1.py tests/test_pathlen.py tests/test_filename_mode.py tests/test_ui_theme.py \
   tests/test_compare_upstream.py tests/test_category_catalog.py tests/test_smb_storage.py \
   tests/test_web_download_settings.py tests/test_search_intersection.py \
   tests/test_asr_api.py tests/test_vad_api.py tests/test_subtitle_capabilities.py \

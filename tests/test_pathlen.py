@@ -32,6 +32,11 @@ from uav_downloader.sites.base import M3U8Crawler, _truncate_target_name
 _TITLES = {}
 
 
+@pytest.fixture(autouse=True)
+def isolated_preferences(monkeypatch, tmp_path):
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path / 'config'))
+
+
 class DummyCrawler(M3U8Crawler):
     website_pattern = r'https://example\.test/.+/$'
     website_dirname_pattern = r'https://example\.test/([^/]+)/$'

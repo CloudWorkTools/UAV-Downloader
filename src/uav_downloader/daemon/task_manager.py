@@ -19,6 +19,7 @@ from uav_downloader.core import config
 from uav_downloader.daemon import nas
 from uav_downloader.daemon.download_files import DownloadFiles, existing_video, video_key
 from uav_downloader.core.history import get_history_manager
+from uav_downloader.core.media_errors import MediaRemuxError, safe_media_message
 from uav_downloader.core.storage import SMB_PATH_ROOT, StorageWriteError, storage_fs, probe_destination
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.sites.base import MirrorsBlockedError
@@ -919,6 +920,9 @@ class TaskManager:
                 self._finish_task(task, "cancelled")
             else:
                 task.error = str(exc)
+                if isinstance(exc, MediaRemuxError):
+                    logging.error('Download task %s failed during %s: %s',
+                                  task.task_id, safe_media_message(task.phase)[:256], task.error)
                 self._finish_task(task, "failed")
 
         finally:

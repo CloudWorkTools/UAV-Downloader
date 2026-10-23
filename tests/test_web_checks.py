@@ -26,6 +26,8 @@ def test_web_check_command(tmp_path, python_status, node_status, expected):
     calls = log.read_text().splitlines()
     assert calls[0].startswith('-m pytest -q ')
     assert 'tests/test_crawler_naming.py' in calls[0].split()
+    assert {'tests/test_hanime1.py', 'tests/test_pathlen.py', 'tests/test_ui_theme.py',
+            'tests/test_media_errors.py'} <= set(calls[0].split())
     if python_status:
         assert len(calls) == 1
     elif node_status:

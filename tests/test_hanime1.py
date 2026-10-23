@@ -1,6 +1,13 @@
 import sys
 import types
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_preferences(monkeypatch, tmp_path):
+    monkeypatch.setenv('CONFIG_DIR', str(tmp_path / 'config'))
+
 
 def _stub_runtime_dependency(name, factory=None):
     try:

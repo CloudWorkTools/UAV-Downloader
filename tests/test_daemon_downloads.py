@@ -30,6 +30,27 @@ def job_at(destination, action, name='MIMK-290'):
     return job
 
 
+def test_remux_failure_persists_reason_and_logs_task_and_phase(manager, monkeypatch, caplog, tmp_path):
+    from uav_downloader.core.media_errors import MediaRemuxError
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/mimk-290')
+    def download(job):
+        task.set_phase('重新封裝 MP4')
+        raise MediaRemuxError('MP4 重新封裝失敗（FFmpeg 22）：non monotonically increasing dts')
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+
+    assert task.status == 'failed'
+    assert 'non monotonically increasing dts' in task.error
+    assert manager.get_task(task.task_id).to_dict()['error'] == task.error
+    restored = tm.TaskManager(state_path=manager._state_path).get_task(task.task_id)
+    assert restored.error == task.error
+    assert restored.phase == '重新封裝 MP4'
+    assert any(task.task_id in record.getMessage() and '重新封裝 MP4' in record.getMessage()
+               and 'non monotonically increasing dts' in record.getMessage() for record in caplog.records)
+    assert task.url not in caplog.text
+
+
 def test_same_code_is_skipped_across_sites_and_versions(manager):
     first = manager.add_task('https://missav.ai/mimk-290')
     duplicate = manager.add_task('https://jable.tv/videos/MIMK-290-chinese-subtitle/')
