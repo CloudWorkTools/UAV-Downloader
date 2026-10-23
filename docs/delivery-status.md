@@ -39,5 +39,5 @@
 
 | 已接受項目 | 原型 | 正式實作 | CI | 部署與限制 |
 | --- | --- | --- | --- | --- |
-| 保存可追查的 remux 底層錯誤 | 不適用 | 已驗證：`core/media_errors.py` 以執行緒分開保留最近 8 則 FFmpeg 錯誤，每則最多 512 字元，合併細節最多 2048 字元；URL、路徑及帳密欄位遮蔽後才保存。任務錯誤持久化，容器日誌附任務 ID 與失敗階段 | 已接入 `scripts/check_web.sh`；本機專項與完整 Python 測試通過，GitHub CI 尚未執行 | 尚未部署；只擷取 SMB PyAV 封裝錯誤，原始 libav 日誌不直接向上傳遞，避免輸出敏感資訊 |
-| 核對既有失敗測試並接入共同入口 | 不適用 | 已驗證：命名與 Hanime 測試隔離使用者偏好；README 測試分別檢查 Web 首頁、上游桌面文件、相對連結及安全說明；三個模組及診斷、命名模式測試均接入共用入口 | 本機 `PYTHON=.venv/bin/python bash scripts/check_web.sh`、`.venv/bin/python -m pytest -q` 及 Docker 測試映像的共用回歸通過；GitHub CI 尚未執行 | 隔離 Samba 與正式 Web 映像的瀏覽器檢查通過；尚未部署，不操作生產任務 |
+| 保存可追查的 remux 底層錯誤 | 不適用 | 已驗證：`6259979`；[media_errors.py](../src/uav_downloader/core/media_errors.py) 以執行緒分開保留最近 8 則 FFmpeg 錯誤，每則最多 512 字元，合併細節最多 2048 字元；URL、路徑及帳密欄位遮蔽後才保存。任務錯誤持久化，容器日誌附任務 ID 與失敗階段 | [已驗證：同一提交](https://github.com/CloudWorkTools/UAV-Downloader/actions/runs/39875603992)；本機完整 Python 測試、正式映像的共用回歸、Web 與隔離 Samba 檢查通過 | 已驗證：正式服務的映像與 Python 檔案雜湊；實際 NAS 自產錯誤片段能保留底層 DTS 原因、符合長度上限且清除暫存。憑證遮蔽及並行隔離由 CI 驗證；只擷取 SMB PyAV 錯誤，原始 libav 日誌不直接向上傳遞 |
+| 核對既有失敗測試並接入共同入口 | 不適用 | 已驗證：`6259979`；命名與 Hanime 測試隔離使用者偏好；README 測試分別檢查 Web 首頁、上游桌面文件、相對連結及安全說明；三個模組及診斷、命名模式測試均接入共用入口 | [已驗證：同一提交](https://github.com/CloudWorkTools/UAV-Downloader/actions/runs/39875603992)；`PYTHON=.venv/bin/python bash scripts/check_web.sh`、`.venv/bin/python -m pytest -q` 及 Docker 共用回歸通過 | 已驗證：服務健康、前端資產、實際 NAS 封裝／跳轉與清理；三個原任務身分、目的地、失敗狀態與分段數保留，三部出錯片段封裝成功且影音封包數不變。未重跑完整影片，未重新啟動失敗任務 |
