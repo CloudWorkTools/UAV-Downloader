@@ -1,0 +1,40 @@
+{
+  "feature": "storage.destination",
+  "fingerprint": "8d7a030c2847979e0442d4dbc4aa37814cdd0da3669d90c0cbb4a266b524492c",
+  "reviewer": "/root/review_storage_final",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "AGENTS.md",
+    "docs/agents/flow-docs-sync.md",
+    "docs/flows/README.md",
+    "docs/flow-manifest.json",
+    "docs/flows/storage.destination.mmd",
+    "docs/flows/contracts.md",
+    "docs/flow-evidence/candidate-inputs.json",
+    "src/uav_downloader/daemon/download_batch.py",
+    "src/uav_downloader/daemon/nas.py",
+    "src/uav_downloader/core/storage.py",
+    "src/uav_downloader/core/smb_storage.py",
+    "src/uav_downloader/core/config.py",
+    "src/uav_downloader/core/paths.py",
+    "src/uav_downloader/metadata.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-docker.txt",
+    "tests/test_web_download_settings.py",
+    "tests/test_daemon_downloads.py",
+    "docs/flow-evidence/runtime/download.batch/offline-regression.md",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/python-tests.log",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/browser-tests.log",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/checker-tests.log",
+    "docs/flow-evidence/runtime/storage.destination/nas-live.md"
+  ],
+  "limitations": [
+    "Review covers destination resolution for batch submissions on an existing running service. Whole-file fingerprints conservatively guard mixed-purpose modules; they do not establish coverage of their other behavior.",
+    "Relevant application and dependency source bytes match base 1d4d6993f8b3881f9e9e27a97010d4147352e81e and the recorded candidate hashes. Reviewed flows and shared policy inputs also match their candidate hashes.",
+    "Execution evidence was inspected; application code and tests were not executed during this read-only review.",
+    "Live SMB, upload and direct-mount behavior, installed floating dependency versions, production-image validation and production behavior remain unverified.",
+    "Flow rendering, candidate CI, remote merge protections and required human approval remain separate gates."
+  ]
+}

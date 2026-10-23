@@ -1,0 +1,8 @@
+$ /usr/bin/python3 -m unittest discover -s tests -p test_flow_docs.py
+..........
+----------------------------------------------------------------------
+Ran 10 tests in 4.792s
+
+OK
+
+exit_code=0

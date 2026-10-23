@@ -1,0 +1,53 @@
+flowchart TD
+UI["勾選影片並開啟批次視窗；保存本次網址與識別碼"]
+PREVIEW["讀取儲存偏好、編輯選項並要求目的地預覽"]
+RPC["Rust 轉送 JSON 與 daemon 狀態碼；傳輸失敗回 502"]
+AUTH{"daemon 授權與 JSON 可讀取？"}
+ACTION{"preview 或 submit？"}
+DEST["預覽目的地；不建立資料夾；過時回應不更新畫面"]
+CONFIRM{"取消或確認？"}
+VALID["驗證網址清單及 request_id；取得管理器鎖"]
+CACHED{"識別碼仍在程序內快取？"}
+REPLAY["相同請求回傳原結果；不同請求拒絕"]
+COMMIT["重算並確認目的地；建立資料夾與設定快照"]
+ADD["依原順序去除相同網址；建立任務並延後啟動"]
+SAVE{"任務建立與整批儲存成功？"}
+ROLLBACK["回復本次新增的任務及佇列項目；保留已建資料夾"]
+START["啟動派送；序列化任務並快取最多 100 筆結果"]
+RESPONSE{"瀏覽器收到成功結果？"}
+DONE["更新任務畫面、關閉視窗並清除本次勾選"]
+RETRY["結果不明時鎖住選項；以相同請求重試"]
+ERROR["顯示錯誤；伺服器拒絕時重新預覽；保留勾選"]
+CANCEL["關閉視窗並保留勾選；不再送出請求；結果不明的既有提交不撤回"]
+UI --> PREVIEW
+PREVIEW --> RPC
+RPC --> AUTH
+RPC -->|傳輸失敗| ERROR
+AUTH -->|否；401 或 400| ERROR
+AUTH -->|是| ACTION
+ACTION -->|preview| DEST
+ACTION -->|submit| VALID
+ACTION -->|其他操作；400| ERROR
+DEST -->|成功| CONFIRM
+DEST -->|失敗| ERROR
+CONFIRM -->|修改| PREVIEW
+CONFIRM -->|取消| CANCEL
+CONFIRM -->|確認並鎖住控制項| RPC
+VALID -->|有效| CACHED
+VALID -->|無效；400| ERROR
+CACHED -->|是| REPLAY
+CACHED -->|否| COMMIT
+REPLAY -->|相同| RESPONSE
+REPLAY -->|不同；400| ERROR
+COMMIT -->|成功| ADD
+COMMIT -->|失敗；400 或 500| ERROR
+ADD --> SAVE
+SAVE -->|否| ROLLBACK
+ROLLBACK --> ERROR
+SAVE -->|是| START
+START -->|成功| RESPONSE
+START -->|例外；已儲存任務不回復| ERROR
+RESPONSE -->|是| DONE
+RESPONSE -->|否；連線或解析失敗| RETRY
+RETRY --> RPC
+RETRY -->|取消；重開後產生新識別碼| CANCEL

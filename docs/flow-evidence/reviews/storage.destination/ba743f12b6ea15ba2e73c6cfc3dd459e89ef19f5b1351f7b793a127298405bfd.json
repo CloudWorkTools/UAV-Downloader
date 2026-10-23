@@ -1,0 +1,42 @@
+{
+  "feature": "storage.destination",
+  "fingerprint": "ba743f12b6ea15ba2e73c6cfc3dd459e89ef19f5b1351f7b793a127298405bfd",
+  "reviewer": "/root/review_storage",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "AGENTS.md",
+    "docs/agents/flow-docs-sync.md",
+    "docs/flows/README.md",
+    "docs/flow-manifest.json",
+    "docs/flows/storage.destination.mmd",
+    "docs/flows/contracts.md",
+    "docs/flow-evidence/candidate-inputs.json",
+    "src/uav_downloader/daemon/download_batch.py:folder_name,destination,submit",
+    "src/uav_downloader/daemon/nas.py:load_settings,direct_destination,smb_destination,public_destination",
+    "src/uav_downloader/core/storage.py:LocalStorage,storage_fs,registered_storage",
+    "src/uav_downloader/core/smb_storage.py:SmbStorage",
+    "src/uav_downloader/core/config.py:_ui_prefs_path,_load_prefs",
+    "src/uav_downloader/core/paths.py:product_data_dir",
+    "src/uav_downloader/metadata.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-docker.txt",
+    "tests/test_web_download_settings.py:test_batch_preview_cancel_and_submit_are_one_destination,test_batch_existing_folder_naming_and_race,test_batch_names_stay_inside_root,test_batch_merge_busy_and_overwrite_persist,test_batch_rejects_symlink_and_invalid_urls",
+    "tests/test_daemon_downloads.py:test_batch_policy_controls_existing_video_and_history,test_batch_rolls_back_queue_when_persistence_fails",
+    "docs/flow-evidence/runtime/download.batch/offline-regression.md",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/python-tests.log",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/browser-tests.log",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/checker-tests.log",
+    "docs/flow-evidence/runtime/storage.destination/nas-live.md",
+    "git show 1d4d6993f8b3881f9e9e27a97010d4147352e81e:src/uav_downloader/daemon/download_batch.py",
+    "git diff 1d4d6993f8b3881f9e9e27a97010d4147352e81e -- src pyproject.toml requirements.txt requirements-docker.txt (empty)"
+  ],
+  "limitations": [
+    "Read-only semantic review; target application and tests were not executed by this reviewer. Supplied execution logs were inspected.",
+    "Real SMB/upload/direct integrations, remote NAS state and installed floating dependency versions remain unverified, as explicitly recorded in nas-live.md.",
+    "Diagram rendering and visual verification remain pending; this verdict covers source-to-document consistency for the declared existing-service batch destination scope.",
+    "Mixed-purpose file mappings are conservative change triggers and do not establish coverage of their unrelated behavior or whole-project coverage.",
+    "Repository human approval, candidate CI and remote merge protection were not verified."
+  ]
+}
