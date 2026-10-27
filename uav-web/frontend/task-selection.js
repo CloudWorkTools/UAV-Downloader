@@ -1,15 +1,17 @@
-window.createTaskSelection = ({cancelTask, taskAction}) => {
+window.createTaskSelection = ({taskAction}) => {
   const selected = new Set();
   let eligible = new Set();
   let busy = false;
   let selecting = false;
-  const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'paused', 'failed'].includes(task?.status);
+  const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'pausing', 'paused', 'failed'].includes(task?.status);
   let tasksById = new Map();
+  const groupOf = task => ['completed', 'skipped'].includes(task.status) ? 'completed' :
+    ['pending', 'paused', 'failed', 'cancelled'].includes(task.status) ? 'waiting' : 'running';
   const canAction = (task, action) => ({
     edit: task?.subtitles_only ? [] : ['pending', 'preparing', 'downloading', 'paused', 'failed', 'cancelled'],
     start_now: ['pending', 'paused', 'failed', 'cancelled'],
     pause: ['pending', 'preparing', 'downloading'], resume: ['paused'],
-    retry: ['failed', 'cancelled'], remove: ['completed', 'skipped', 'cancelled', 'failed']
+    retry: ['failed', 'cancelled'], remove: ['completed', 'skipped', 'cancelled']
   }[action] || []).includes(task?.status);
   function update() {
     const mode = document.getElementById('queue-selection-mode');
@@ -29,11 +31,11 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     toggle.disabled = busy || !eligible.size;
     toggle.textContent = all ? '清除勾選' : '全選';
     const cancel = document.getElementById('cancel-tasks-button');
-    const cancellable = [...selected].filter(id => canCancel(tasksById.get(id))).length;
+    const cancellable = selected.size;
     cancel.hidden = !cancellable;
     cancel.disabled = busy || !cancellable;
-    cancel.textContent = busy ? '處理中…' : `取消下載 (${cancellable})`;
-    for (const action of ['pause', 'resume', 'retry', 'edit', 'remove']) {
+    cancel.textContent = busy ? '處理中…' : `取消／移除所選 (${cancellable})`;
+    for (const action of ['pause', 'resume', 'retry', 'edit']) {
       const button = document.getElementById(`${action}-tasks-button`);
       if (button) {
         const count = [...selected].filter(id => canAction(tasksById.get(id), action)).length;
@@ -49,7 +51,7 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
   }
   function setTasks(tasks) {
     tasksById = new Map(tasks.map(task => [task.task_id, task]));
-    eligible = new Set(tasks.filter(task => canCancel(task) || canAction(task, 'retry')).map(task => task.task_id));
+    eligible = new Set(tasks.map(task => task.task_id));
     for (const id of selected) if (!eligible.has(id)) selected.delete(id);
     update();
   }
@@ -65,24 +67,68 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     else { selecting = true; for (const id of eligible) selected.add(id); }
     update();
   }
-  async function cancel(ids = [...selected]) {
-    if (busy || !ids.length) return;
+  let removalGroups = new Map();
+  function cancel(ids = [...selected]) {
+    if (busy) return;
+    removalGroups = new Map(ids.filter(id => tasksById.has(id)).map(id => [id, groupOf(tasksById.get(id))]));
+    if (!removalGroups.size) return;
+    for (const group of ['running', 'completed', 'waiting']) {
+      const count = [...removalGroups.values()].filter(value => value === group).length;
+      const box = document.getElementById(`task-remove-${group}`);
+      box.checked = count > 0;
+      box.disabled = !count;
+      document.getElementById(`task-remove-${group}-count`).textContent = String(count);
+    }
+    document.getElementById('task-remove-error').textContent = '';
+    document.getElementById('task-remove-dialog').showModal();
+  }
+  async function confirmCancel(event) {
+    event.preventDefault();
+    if (busy) return;
+    const ids = [...removalGroups].filter(([, group]) => document.getElementById(`task-remove-${group}`).checked).map(([id]) => id);
+    if (!ids.length) {
+      document.getElementById('task-remove-error').textContent = '請至少勾選一種任務';
+      return;
+    }
     busy = true;
     update();
-    const failures = [];
-    for (const id of ids) {
-      if (!eligible.has(id) || !canCancel(tasksById.get(id))) continue;
-      try {
-        await cancelTask(id);
-        selected.delete(id);
-        eligible.delete(id);
-      } catch (error) {
-        failures.push(error.message);
+    document.getElementById('task-remove-dialog').close();
+    const status = document.getElementById('queue-action-status');
+    status.textContent = `正在取消、清理並移除 ${ids.length} 個任務…`;
+    try {
+      const response = await fetch('/api/download/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'cancel_remove', task_ids:ids})});
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || '批次取消失敗');
+      const pending = new Set(ids);
+      const failures = result.errors.map(item => item.error);
+      for (const item of result.errors) pending.delete(item.task_id);
+      let removed = 0;
+      for (let attempt = 0; pending.size && attempt < 120; attempt++) {
+        const refresh = await fetch('/api/download/tasks');
+        const current = await refresh.json();
+        if (!refresh.ok) throw new Error(current.error || '無法確認清理結果，請重新整理清單');
+        const tasks = new Map(current.tasks.map(task => [task.task_id, task]));
+        for (const id of pending) {
+          const task = tasks.get(id);
+          if (!task) {
+            pending.delete(id);
+            selected.delete(id);
+            removed++;
+          } else if (task.status === 'failed') {
+            pending.delete(id);
+            failures.push(task.error || '檔案清理失敗');
+          }
+        }
+        status.textContent = `已移除 ${removed} 個；${pending.size} 個仍在停止或清理中…`;
+        if (pending.size) await new Promise(resolve => setTimeout(resolve, 250));
       }
+      status.textContent = `已移除 ${removed} 個；${failures.length} 個失敗${pending.size ? `；${pending.size} 個仍在背景處理，完成後會自動移除紀錄` : ''}。${failures.length ? ` ${failures[0]}` : ''}`;
+    } catch (error) {
+      status.textContent = `批次移除未完成：${error.message}；請確認清單後重試。`;
+    } finally {
+      busy = false;
+      update();
     }
-    busy = false;
-    update();
-    if (failures.length) alert(`有 ${failures.length} 個任務取消失敗：${failures[0]}`);
   }
   async function perform(action) {
     if (busy) return;
@@ -215,5 +261,5 @@ window.createTaskSelection = ({cancelTask, taskAction}) => {
     if (!selecting) selected.clear();
     update();
   }
-  return {toggleMode, setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, update, edit, saveEdit, updateEditStorage};
+  return {toggleMode, setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, confirmCancel, update, edit, saveEdit, updateEditStorage};
 };

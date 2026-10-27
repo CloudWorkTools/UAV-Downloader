@@ -721,3 +721,25 @@ def test_start_now_api_runs_worker_above_limit_without_duplicate_start(web_setti
             task.thread.join(3)
     assert task.status == 'completed', task.error
     assert (root / 'videos' / 'MIMK-291.mp4').read_bytes() == b'immediate-download'
+
+
+def test_batch_cancel_api(web_settings):
+    request, server, _ = web_settings
+    tasks = [server.task_manager.add_task(f'https://missav.ai/cancel-{i}') for i in range(2)]
+    ids = [task.task_id for task in tasks]
+    status, result = request('/api/download/action', {'action': 'cancel', 'task_ids': ids})
+    assert status == 200
+    assert result == {'success': True, 'accepted': ids, 'skipped': [], 'errors': []}
+    assert all(task.status == 'cancelled' for task in tasks)
+    status, _ = request('/api/download/action', {'action': 'cancel', 'task_ids': 'invalid'})
+    assert status == 400
+
+
+def test_batch_cancel_remove_api_finishes_without_browser_followup(web_settings):
+    request, server, _ = web_settings
+    tasks = [server.task_manager.add_task(f'https://missav.ai/cancel-remove-{i}') for i in range(2)]
+    tasks[0].status = 'completed'
+    ids = [task.task_id for task in tasks]
+    status, result = request('/api/download/action', {'action': 'cancel_remove', 'task_ids': ids})
+    assert status == 200 and result['success']
+    assert all(server.task_manager.get_task(tid) is None for tid in ids)

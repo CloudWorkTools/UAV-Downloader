@@ -115,6 +115,31 @@ try {
       for(const status of ['downloading','completed','skipped','pausing'])check(!taskSelection.canAction({...pending,status},'start_now'),'Active or finished task permits immediate action');
       renderTasks([]);
       check(document.getElementById('edit-tasks-button').hidden, 'Removed task remained editable');
+      const mixed = [{...task, task_id:'running', status:'downloading'},
+        {...task, task_id:'done', status:'completed'}, {...task, task_id:'waiting', status:'pending'}];
+      renderTasks(mixed);
+      taskSelection.toggleAll();
+      let removalRequests = [];
+      window.fetch = async (url, options) => {
+        if (!options) return {ok:true,json:async()=>({tasks:mixed.filter(task => task.task_id !== 'done')})};
+        const payload = JSON.parse(options.body);
+        removalRequests.push(payload);
+        check(payload.task_ids.join() === 'done', 'Unchecked categories were submitted');
+        return {ok:true,json:async()=>({success:true,accepted:[],skipped:['done'],errors:[]})};
+      };
+      document.getElementById('cancel-tasks-button').click();
+      const removal = document.getElementById('task-remove-dialog');
+      check(removal.open, 'Removal categories did not open in a real modal');
+      check(['running','completed','waiting'].every(group => document.getElementById('task-remove-' + group + '-count').textContent === '1'), 'Removal counts are incorrect');
+      removal.querySelector('button[type=button]').click();
+      check(!removal.open && removalRequests.length === 0, 'Returning from the modal changed tasks');
+      document.getElementById('cancel-tasks-button').click();
+      document.getElementById('task-remove-running').click();
+      document.getElementById('task-remove-waiting').click();
+      removal.querySelector('button[type=submit]').click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      check(!removal.open && removalRequests.length === 1, 'Confirmed category was not processed once');
+      check(taskSelection.has('running') && taskSelection.has('waiting') && !taskSelection.has('done'), 'Removal changed unchecked selections');
       document.body.innerHTML = '<p>MENU_TEST_PASS</p>';
     })().catch(error => { document.body.innerHTML = '<p>MENU_TEST_FAIL: ' + error.message + '</p>'; });
     </script>`);

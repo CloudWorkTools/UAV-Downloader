@@ -1105,3 +1105,98 @@ def test_start_now_preserves_subtitle_only_retry_history_exemption(manager, monk
     assert manager.start_now(task.task_id)
     thread.start.assert_called_once_with()
     assert task.subtitles_only and len(manager._active) == 2
+
+
+def test_batch_cancel_stops_entire_selection_before_cleaning(manager, monkeypatch):
+    tasks = [manager.add_task(f'https://missav.ai/batch-{i}') for i in range(4)]
+    tasks[0].status = 'downloading'
+    manager._active[tasks[0].task_id] = object()
+    tasks[1].status = 'failed'
+    tasks[3].status = 'completed'
+    cleaned = []
+    original = manager._cleanup_cancelled
+
+    def cleanup(task):
+        assert all(t.cancelled_event.is_set() for t in tasks[:3])
+        assert not any(t.task_id in manager._queue for t in tasks[:3])
+        cleaned.append(task.task_id)
+        if task is tasks[1]:
+            task.status, task.error = 'failed', 'NAS 離線'
+        else:
+            original(task)
+
+    monkeypatch.setattr(manager, '_cleanup_cancelled', cleanup)
+    ids = [t.task_id for t in tasks]
+    result = manager.cancel_tasks(ids + [ids[0], 'missing'])
+    assert result == {'accepted': ids[:3], 'skipped': [ids[3], 'missing'], 'errors': []}
+    assert cleaned == ids[1:3], 'One cleanup failure must not stop the batch'
+    assert [t.status for t in tasks] == ['cancelling', 'failed', 'cancelled', 'completed']
+    assert not tasks[3].cancelled_event.is_set()
+
+
+@pytest.mark.parametrize('ids', [None, [], 'one', ['one', 2], ['']])
+def test_batch_cancel_rejects_invalid_selection_before_mutating(manager, ids):
+    task = manager.add_task('https://missav.ai/batch-invalid')
+    with pytest.raises(ValueError):
+        manager.cancel_tasks(ids)
+    assert task.status == 'pending'
+    assert not task.cancelled_event.is_set()
+
+
+def test_batch_remove_preserves_completed_files_and_failed_cleanup(manager, tmp_path):
+    tasks = [manager.add_task(f'https://missav.ai/remove-{i}') for i in range(4)]
+    files = tm.DownloadFiles(tasks[0].dest, tasks[0].task_id)
+    video = Path(tasks[0].dest) / 'finished.mp4'
+    video.write_bytes(b'keep')
+    files.published.append(str(video))
+    tasks[0].files = files
+    tasks[0].status = 'completed'
+    tasks[1].status = 'cancelled'
+    tasks[2].status = 'failed'
+    tasks[2].cleanup_unverified = True
+    ids = [t.task_id for t in tasks]
+    manager.cancel_tasks(ids, remove_records=True)
+    assert all(manager.get_task(ids[i]) is None for i in [0, 1, 3])
+    assert video.read_bytes() == b'keep'
+    assert manager.get_task(ids[2]) is tasks[2]
+    assert tasks[2].status == 'failed'
+
+
+def test_batch_removal_finishes_in_worker_without_browser_polling(manager, monkeypatch, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/removal-worker')
+    def download(job):
+        Path(job._temp_folder).mkdir(parents=True, exist_ok=True)
+        (Path(job._temp_folder) / '000001.ts').write_bytes(b'segment')
+        manager.cancel_tasks([task.task_id], remove_records=True)
+        assert manager.get_task(task.task_id) is task
+        assert task.status == 'cancelling'
+        import json
+        saved = json.loads(manager._state_path.read_text())
+        assert next(record for record in saved if record['task_id'] == task.task_id)['remove_after_cancel'] is True
+        return False
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+    assert manager.get_task(task.task_id) is None
+    assert not Path(task.files.workdir).exists()
+
+
+def test_retry_after_failed_removal_clears_removal_intent(manager):
+    task = manager.add_task('https://missav.ai/retry-removal')
+    task.status = 'failed'
+    task.cleanup_unverified = True
+    manager.cancel_tasks([task.task_id], remove_records=True)
+    assert task.remove_after_cancel and task.status == 'failed'
+    task.cleanup_unverified = False
+    assert manager.restart_task(task.task_id)
+    assert task.status == 'pending'
+    assert task.remove_after_cancel is False
+
+
+def test_batch_removal_saves_intent_and_result_once_each(manager, monkeypatch, tmp_path):
+    tasks = [manager.add_task(f'https://missav.ai/save-batch-{i}') for i in range(4)]
+    manager._state_path = tmp_path / 'tasks.json'
+    replace = MagicMock(wraps=tm.os.replace)
+    monkeypatch.setattr(tm.os, 'replace', replace)
+    manager.cancel_tasks([task.task_id for task in tasks], remove_records=True)
+    assert replace.call_count == 2, 'Persist batch intent and final result, not the entire queue per item'

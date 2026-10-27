@@ -332,6 +332,9 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
             elif path == '/api/download/action':
                 action, task_id = body.get('action'), body.get('task_id')
+                if action in ('cancel', 'cancel_remove'):
+                    return self._send_json({'success': True, **self.task_manager.cancel_tasks(
+                        body.get('task_ids'), remove_records=action == 'cancel_remove')})
                 if action == 'update_settings':
                     result = self.task_manager.update_tasks(body.get('task_ids'), storage=body.get('storage'),
                                                             dest=body.get('dest'), subtitle_mode=body.get('subtitle_mode'),
