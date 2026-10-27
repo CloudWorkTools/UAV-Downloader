@@ -542,7 +542,7 @@
         <label class="min-h-11 flex items-center gap-3"><input id="task-remove-waiting" type="checkbox" class="w-4 h-4 accent-brand-600">等候下載 <span class="ml-auto"><span id="task-remove-waiting-count">0</span> 筆</span></label>
       </div>
       <p class="text-xs text-gray-400">正在下載包含準備、字幕及傳送中；已完成包含已略過；等候包含暫停、失敗及已取消。</p>
-      <p class="text-sm text-gray-300">未完成任務會先取消並清除該任務的下載檔案，再移除紀錄。已完成項目只移除紀錄，保留影片與下載歷史。</p>
+      <p class="text-sm text-gray-300">未完成任務會先取消並清除可確認歸屬的下載檔案，再移除紀錄。無法確認歸屬的檔案會保留；已完成影片與下載歷史也會保留。</p>
       <p id="task-remove-error" role="alert" class="text-sm text-rose-400"></p>
       <div class="flex justify-end gap-3"><button type="button" onclick="document.getElementById('task-remove-dialog').close()" class="min-h-11 px-3">返回</button><button type="submit" class="min-h-11 px-4 bg-rose-600 rounded-lg">確認移除</button></div>
     </form>

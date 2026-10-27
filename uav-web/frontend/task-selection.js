@@ -95,11 +95,14 @@ window.createTaskSelection = ({taskAction}) => {
     document.getElementById('task-remove-dialog').close();
     const status = document.getElementById('queue-action-status');
     status.textContent = `正在取消、清理並移除 ${ids.length} 個任務…`;
+    let preservedNotice = '';
     try {
       const response = await fetch('/api/download/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'cancel_remove', task_ids:ids})});
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || '批次取消失敗');
       const pending = new Set(ids);
+      const unverified = new Set(result.unverified || []);
+      if (unverified.size) preservedNotice = `；${unverified.size} 個任務缺少檔案歸屬紀錄，無法確認歸屬的檔案會保留，請手動檢查`;
       const failures = result.errors.map(item => item.error);
       for (const item of result.errors) pending.delete(item.task_id);
       let removed = 0;
@@ -122,9 +125,9 @@ window.createTaskSelection = ({taskAction}) => {
         status.textContent = `已移除 ${removed} 個；${pending.size} 個仍在停止或清理中…`;
         if (pending.size) await new Promise(resolve => setTimeout(resolve, 250));
       }
-      status.textContent = `已移除 ${removed} 個；${failures.length} 個失敗${pending.size ? `；${pending.size} 個仍在背景處理，完成後會自動移除紀錄` : ''}。${failures.length ? ` ${failures[0]}` : ''}`;
+      status.textContent = `已移除 ${removed} 個；${failures.length} 個失敗${preservedNotice}${pending.size ? `；${pending.size} 個仍在背景處理，完成後會自動移除紀錄` : ''}。${failures.length ? ` ${failures[0]}` : ''}`;
     } catch (error) {
-      status.textContent = `批次移除未完成：${error.message}；請確認清單後重試。`;
+      status.textContent = `批次移除未完成：${error.message}；請確認清單後重試${preservedNotice}。`;
     } finally {
       busy = false;
       update();

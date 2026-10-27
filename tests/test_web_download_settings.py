@@ -743,3 +743,19 @@ def test_batch_cancel_remove_api_finishes_without_browser_followup(web_settings)
     status, result = request('/api/download/action', {'action': 'cancel_remove', 'task_ids': ids})
     assert status == 200 and result['success']
     assert all(server.task_manager.get_task(tid) is None for tid in ids)
+
+
+def test_batch_cancel_remove_preserves_unverified_files(web_settings):
+    request, server, root = web_settings
+    task = server.task_manager.add_task('https://missav.ai/unverified-file')
+    task.status = 'failed'
+    task.cleanup_unverified = True
+    workspace = Path(task.dest) / f'.uav-{task.task_id}-unknown'
+    workspace.mkdir(parents=True)
+    file = workspace / 'fragment.part'
+    file.write_bytes(b'preserve')
+    status, result = request('/api/download/action', {'action': 'cancel_remove', 'task_ids': [task.task_id]})
+    assert status == 200 and result['success']
+    assert result['unverified'] == [task.task_id]
+    assert server.task_manager.get_task(task.task_id) is None
+    assert file.read_bytes() == b'preserve'

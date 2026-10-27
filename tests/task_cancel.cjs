@@ -10,7 +10,7 @@ const element = id => {
 const tasks = [{task_id:'running',status:'downloading'}, {task_id:'waiting',status:'pending'},
   {task_id:'failed',status:'failed'}, {task_id:'done',status:'completed'}];
 const requests = [], alerts = [];
-let polls = 0, release, delayed = false;
+let polls = 0, release, delayed = false, keepWaiting = false, failPoll = false;
 const context = vm.createContext({window: {}, document: {getElementById: element, querySelectorAll: () => []},
   alert: message => alerts.push(message), setTimeout: callback => callback(),
   fetch: async (path, options) => {
@@ -19,11 +19,13 @@ const context = vm.createContext({window: {}, document: {getElementById: element
       const body = JSON.parse(options.body);
       requests.push(body);
       assert.equal(body.action, 'cancel_remove');
-      return {ok:true,json:async()=>({success:true,accepted:body.task_ids.filter(id => id !== 'done'),skipped:body.task_ids.filter(id => id === 'done'),errors:[]})};
+      return {ok:true,json:async()=>({success:true,accepted:body.task_ids.filter(id => id !== 'done'),skipped:body.task_ids.filter(id => id === 'done'),errors:[],unverified:body.task_ids.filter(id => id === 'waiting')})};
     }
     assert.equal(path, '/api/download/tasks');
     polls++;
     if (delayed) { delayed = false; await new Promise(resolve => { release = resolve; }); }
+    if (failPoll) return {ok:false,json:async()=>({error:'無法取得狀態'})};
+    if (keepWaiting) return {ok:true,json:async()=>({tasks:[{task_id:'waiting',status:'cancelling'}]})};
     const submitted = requests.at(-1).task_ids;
     return {ok:true,json:async()=>({tasks: tasks.filter(t => !submitted.includes(t.task_id) || t.task_id === 'failed').map(t => ({...t, error: t.task_id === 'failed' ? 'NAS 離線' : null}))})};
   }});
@@ -73,6 +75,20 @@ const submit = () => selection.confirmCancel({preventDefault() {}});
   assert.match(element('queue-action-status').textContent, /已移除 2/);
   assert.match(element('queue-action-status').textContent, /1 個失敗/);
   assert.match(element('queue-action-status').textContent, /NAS 離線/);
+  assert.match(element('queue-action-status').textContent, /1.*檔案.*保留/);
   assert.deepEqual(alerts, [], 'Batch failures are summarized inline');
+  selection.setTasks([{task_id:'waiting',status:'pending'}]);
+  selection.toggle('waiting', true);
+  keepWaiting = true;
+  selection.cancel();
+  await submit();
+  assert.match(element('queue-action-status').textContent, /仍在背景處理/);
+  assert.match(element('queue-action-status').textContent, /1.*檔案.*保留/);
+  keepWaiting = false;
+  failPoll = true;
+  selection.cancel();
+  await submit();
+  assert.match(element('queue-action-status').textContent, /無法取得狀態/);
+  assert.match(element('queue-action-status').textContent, /1.*檔案.*保留/);
   console.log('Task removal category counts, filtering, confirmation and cleanup failures: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });

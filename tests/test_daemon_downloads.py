@@ -296,8 +296,8 @@ def test_cleanup_failure_survives_restart_without_claiming_files_removed(manager
     restored = tm.TaskManager(state_path=path)
     assert 'permission denied' in restored.list_tasks()[0]['error']
     assert restored.cancel_task(task.task_id)
-    assert restored.list_tasks()[0]['status'] == 'failed'
-    assert '無法確認清除範圍' in restored.list_tasks()[0]['error']
+    assert restored.list_tasks()[0]['status'] == 'cancelled'
+    assert '檔案已保留' in restored.list_tasks()[0]['error']
 
 
 def test_cancelled_task_with_storage_close_failure_stays_visible(manager, monkeypatch):
@@ -1143,7 +1143,7 @@ def test_batch_cancel_rejects_invalid_selection_before_mutating(manager, ids):
     assert not task.cancelled_event.is_set()
 
 
-def test_batch_remove_preserves_completed_files_and_failed_cleanup(manager, tmp_path):
+def test_batch_remove_preserves_completed_and_unverified_files(manager, tmp_path):
     tasks = [manager.add_task(f'https://missav.ai/remove-{i}') for i in range(4)]
     files = tm.DownloadFiles(tasks[0].dest, tasks[0].task_id)
     video = Path(tasks[0].dest) / 'finished.mp4'
@@ -1155,11 +1155,15 @@ def test_batch_remove_preserves_completed_files_and_failed_cleanup(manager, tmp_
     tasks[2].status = 'failed'
     tasks[2].cleanup_unverified = True
     ids = [t.task_id for t in tasks]
-    manager.cancel_tasks(ids, remove_records=True)
-    assert all(manager.get_task(ids[i]) is None for i in [0, 1, 3])
+    workspace = Path(tasks[2].dest) / f'.uav-{tasks[2].task_id}-unknown'
+    workspace.mkdir()
+    unknown = workspace / 'segment.part'
+    unknown.write_bytes(b'preserve')
+    result = manager.cancel_tasks(ids, remove_records=True)
+    assert result['unverified'] == [ids[2]]
+    assert all(manager.get_task(tid) is None for tid in ids)
     assert video.read_bytes() == b'keep'
-    assert manager.get_task(ids[2]) is tasks[2]
-    assert tasks[2].status == 'failed'
+    assert unknown.read_bytes() == b'preserve'
 
 
 def test_batch_removal_finishes_in_worker_without_browser_polling(manager, monkeypatch, tmp_path):
@@ -1181,13 +1185,16 @@ def test_batch_removal_finishes_in_worker_without_browser_polling(manager, monke
     assert not Path(task.files.workdir).exists()
 
 
-def test_retry_after_failed_removal_clears_removal_intent(manager):
+def test_retry_after_failed_removal_clears_removal_intent(manager, monkeypatch):
     task = manager.add_task('https://missav.ai/retry-removal')
     task.status = 'failed'
-    task.cleanup_unverified = True
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    def fail_cleanup(**kwargs):
+        raise OSError('permission denied')
+    monkeypatch.setattr(task.files, 'cleanup', fail_cleanup)
     manager.cancel_tasks([task.task_id], remove_records=True)
     assert task.remove_after_cancel and task.status == 'failed'
-    task.cleanup_unverified = False
+    assert 'permission denied' in task.error
     assert manager.restart_task(task.task_id)
     assert task.status == 'pending'
     assert task.remove_after_cancel is False
@@ -1200,3 +1207,42 @@ def test_batch_removal_saves_intent_and_result_once_each(manager, monkeypatch, t
     monkeypatch.setattr(tm.os, 'replace', replace)
     manager.cancel_tasks([task.task_id for task in tasks], remove_records=True)
     assert replace.call_count == 2, 'Persist batch intent and final result, not the entire queue per item'
+
+
+def test_restored_unverified_task_can_be_removed_without_deleting_its_workspace(manager, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/restored-unknown')
+    task.status = 'failed'
+    manager._save_tasks()
+    workspace = Path(task.dest) / f'.uav-{task.task_id}-old'
+    workspace.mkdir(parents=True)
+    fragment = workspace / 'fragment.part'
+    fragment.write_bytes(b'keep')
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert restored.get_task(task.task_id).cleanup_unverified
+    result = restored.cancel_tasks([task.task_id], remove_records=True)
+    assert result['unverified'] == [task.task_id]
+    assert restored.get_task(task.task_id) is None
+    assert fragment.read_bytes() == b'keep'
+    assert tm.TaskManager(state_path=manager._state_path).get_task(task.task_id) is None
+
+
+def test_unverified_cancel_then_restart_and_remove_reports_preserved_files(manager, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/unknown-cancel-first')
+    task.status = 'failed'
+    manager._save_tasks()
+    workspace = Path(task.dest) / f'.uav-{task.task_id}-old'
+    workspace.mkdir(parents=True)
+    fragment = workspace / 'fragment.part'
+    fragment.write_bytes(b'keep')
+    first = tm.TaskManager(state_path=manager._state_path)
+    assert first.cancel_task(task.task_id)
+    assert first.get_task(task.task_id).status == 'cancelled'
+    assert '保留' in first.get_task(task.task_id).error
+    second = tm.TaskManager(state_path=manager._state_path)
+    assert second.get_task(task.task_id).cleanup_unverified
+    result = second.cancel_tasks([task.task_id], remove_records=True)
+    assert result['unverified'] == [task.task_id]
+    assert second.get_task(task.task_id) is None
+    assert fragment.read_bytes() == b'keep'

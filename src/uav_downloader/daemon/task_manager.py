@@ -152,7 +152,7 @@ class TaskManager:
                 if files:
                     task.files = DownloadFiles.restore(task.dest, task.task_id, files, task.staging_dir)
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
-                task.cleanup_unverified = not task.subtitles_only and not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused")
+                task.cleanup_unverified = task.cleanup_unverified or (not task.subtitles_only and not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused"))
                 if task.status == 'pausing':
                     task.status = 'paused'
                 if task.status not in ("completed", "skipped", "cancelled", "failed", "paused"):
@@ -173,6 +173,8 @@ class TaskManager:
                 record = {key: value for key, value in task.to_dict().items() if key not in ('speed_formatted', 'final_dest')}
                 if task.remove_after_cancel:
                     record['remove_after_cancel'] = True
+                if task.cleanup_unverified:
+                    record['cleanup_unverified'] = True
                 record['dest'] = task.dest
                 record['nas_settings'] = {key: value for key, value in task.nas_settings.items()
                                           if key not in ('password', 'password_encrypted', 'password_saved')}
@@ -625,12 +627,14 @@ class TaskManager:
         if (not isinstance(task_ids, list) or not task_ids
                 or any(not isinstance(tid, str) or not tid for tid in task_ids)):
             raise ValueError('請提供非空的 task_ids 文字清單')
-        accepted, skipped, errors = [], [], []
+        accepted, skipped, errors, unverified = [], [], [], []
         with self._lock:
             for tid in dict.fromkeys(task_ids):
                 task = self._tasks.get(tid)
                 if task and remove_records:
                     task.remove_after_cancel = True
+                if task and task.cleanup_unverified and task.status not in ('completed', 'skipped'):
+                    unverified.append(tid)
                 if not task or task.status in ('completed', 'skipped', 'cancelled'):
                     skipped.append(tid)
                     continue
@@ -654,7 +658,10 @@ class TaskManager:
             except Exception as exc:
                 errors.append({'task_id': tid, 'error': str(exc)})
         self._save_tasks()
-        return {'accepted': accepted, 'skipped': skipped, 'errors': errors}
+        result = {'accepted': accepted, 'skipped': skipped, 'errors': errors}
+        if remove_records:
+            result['unverified'] = unverified
+        return result
 
     def cancel_task(self, task_id: str, *, defer_save=False) -> bool:
         with self._lock:
@@ -679,7 +686,7 @@ class TaskManager:
                         task.files.filesystem = storage_fs(task.staging_dir or task.dest)
                     self._cleanup_cancelled(task)
             except (OSError, nas.NasError) as exc:
-                task.error = f"取消後檔案清除失敗，請恢復儲存連線後重試取消：{exc}"
+                task.error = f"取消後檔案清除失敗：{exc}"
                 task.status = "failed"
         if not defer_save:
             self._save_tasks()
@@ -688,7 +695,10 @@ class TaskManager:
     def _cleanup_cancelled(self, task):
         try:
             if task.cleanup_unverified:
-                raise OSError("服務重啟後缺少檔案歸屬紀錄，無法確認清除範圍；請手動檢查下載目錄")
+                task.error = "缺少檔案歸屬紀錄，相關檔案已保留；請手動檢查下載目錄"
+                task.status = "cancelled"
+                task.updated_at = datetime.now(timezone.utc).isoformat()
+                return
             if task.remote_files:
                 nas.cleanup_upload(task.nas_settings, task.remote_files)
             if task.files:
@@ -698,7 +708,7 @@ class TaskManager:
             task.status = "cancelled"
             task.updated_at = datetime.now(timezone.utc).isoformat()
         except (OSError, nas.NasError) as exc:
-            task.error = f"取消後檔案清除失敗，請恢復儲存連線後重試取消：{exc}"
+            task.error = f"取消後檔案清除失敗：{exc}"
             task.status = "failed"
 
     def cancel_all(self) -> None:
