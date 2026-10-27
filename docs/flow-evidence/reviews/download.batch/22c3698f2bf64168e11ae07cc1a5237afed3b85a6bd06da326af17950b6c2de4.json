@@ -1,0 +1,47 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "22c3698f2bf64168e11ae07cc1a5237afed3b85a6bd06da326af17950b6c2de4",
+  "reviewer": "/root/mobile_review",
+  "verdict": "pass",
+  "findings": [],
+  "base": "5177b44dc3e27f5b9c32ba30e9b701736c3f2990",
+  "candidate": "4e3385aba21c8109158e4b6f155efd38e961a446",
+  "evidence": [
+    "Independent bounded review of mobile radial layout, FAB relocation into modal top layer, close/reopen and delegated action preservation. Existing action groups and source click handlers remain intact; mascot asset reference unchanged.",
+    "Reviewed mobile JS/CSS and test delta plus feature flows/contracts. Flow UI node accurately describes radial menu. Other feature behavior is unaffected; shared tests policy invalidates their fingerprints only.",
+    "Ran node tests/mobile_actions.cjs successfully: 320/390px portrait seven-action nonoverlap/viewport/hit testing, selection state, delegated actions, focus return, Escape, desktop isolation.",
+    "Recomputed impact against 5177b44; coverage check for four frontend/test evidence paths returned no recorded issue (best effort)."
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "docs/flow-manifest.json",
+    "uav-web/frontend/mobile-actions.js",
+    "uav-web/frontend/mobile-actions.css",
+    "tests/mobile_actions.cjs",
+    "tools/web-ci/check_mobile_actions.cjs",
+    "docs/flows/download.batch.mmd",
+    "docs/flows/storage.destination.mmd",
+    "docs/flows/queue.enqueue.mmd",
+    "docs/flows/download.execute.mmd"
+  ],
+  "reused_evidence": [
+    "docs/flow-evidence/reviews/download.batch/50dcad32106b3361b03a1b82b67ef73faa98fd3e10857e7087778acade374d3f.json"
+  ],
+  "additional_reads": [
+    {
+      "path": "tools/web-ci/check_mobile_actions.cjs",
+      "reason": "Verify full application acceptance still targets unchanged controls and preserves preview-only boundary."
+    }
+  ],
+  "token_usage": {
+    "status": "unavailable",
+    "reason": "Runtime does not expose measured per-review token usage."
+  },
+  "limitations": [
+    "No real-device Safari, landscape, production or full-application execution performed by this reviewer.",
+    "Backend source conclusions reused from historical evidence; unchanged backend code was not reread."
+  ]
+}
