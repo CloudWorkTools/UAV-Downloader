@@ -710,6 +710,10 @@
         {
           "node": "SKIPWARN",
           "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "NEXT",
+          "path": "src/uav_downloader/daemon/task_manager.py"
         }
       ]
     }
@@ -840,6 +844,13 @@
       "reviewer": "/root/review_final_batch",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/cb56dc26b26d4b7d5f7aaa5257fa71ce9eb6e405f375c8065eae122384aa99f8.json"
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "d22f906979eea412273e342c9fde5bf3538fa99aadb54583fd4322ab871cf822",
+      "reviewer": "/root/flow_review_new2",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.execute/d22f906979eea412273e342c9fde5bf3538fa99aadb54583fd4322ab871cf822.json"
     }
   ],
   "policy_inputs": [

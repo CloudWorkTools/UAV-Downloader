@@ -5,7 +5,8 @@ RESULT{"下載嘗試結果"}
 WAIT["記錄重試進度，等待後再試；最多重試五次"]
 STOP{"等待期間被取消或暫停？"}
 FINISHFAIL["重試耗盡後標記失敗並保留暫存"]
-PUBLISH["發布完成檔；上傳模式將影片傳送 NAS"]
+PUBLISH["執行目前步驟：發布完成檔或傳送影片至 NAS"]
+NEXT{"上傳模式且 NAS 尚未傳送？"}
 STORE{"發布或傳送結果"}
 STOREWAIT["保留已發布的任務檔案並重試該步驟，最多五次"]
 DONE["完成後清除暫存；清除失敗保留完成狀態與警告"]
@@ -33,13 +34,15 @@ STOP -->|否| ATTEMPT
 STOP -->|取消| CANCEL
 STOP -->|暫停| PAUSE
 PUBLISH --> STORE
-STORE -->|成功| DONE
+STORE -->|成功| NEXT
+NEXT -->|是；接著傳送 NAS| PUBLISH
+NEXT -->|否；所有步驟完成| DONE
 STORE -->|成功時服務停止設置暫停| PAUSE
 STORE -->|失敗且仍可重試| STOREWAIT
 STORE -->|重試耗盡| FINISHFAIL
 STORE -->|重試耗盡且連線釋放失敗| RELEASEFAIL
 STORE -->|取消| CANCEL
-STOREWAIT -->|繼續| PUBLISH
+STOREWAIT -->|只重試失敗的步驟| PUBLISH
 STOREWAIT -->|取消| CANCEL
 STOREWAIT -->|服務停止設置暫停| PAUSE
 CANCEL --> CANCELCHECK
