@@ -1,0 +1,34 @@
+flowchart TD
+DEFAULTS["讀取字幕、封面、解析度、工作數及本機暫存偏好"]
+VALIDATE{"選項與本機暫存路徑有效？"}
+SNAPSHOT["複製目的地、NAS 及選用字幕設定快照；SMB 任務使用獨立根目錄"]
+TASK["建立任務；覆寫策略記錄於任務設定"]
+DUPLICATE{"已有同影片未完成任務？"}
+SKIP["保留任務並標為 skipped；不加入待執行佇列"]
+QUEUE["將任務加入待執行佇列"]
+DEFER["批次呼叫延後啟動；交回提交端整批儲存"]
+PERSIST["序列化任務及字幕請求快照；排除 NAS 密碼欄位"]
+WRITE{"已設定狀態檔且持久化未停止？"}
+CHANGED{"序列化快照有變更？"}
+ATOMIC["寫入暫存檔、flush、fsync 後原子取代狀態檔"]
+START["提交端儲存成功後啟動派送；後續下載生命週期不在此圖範圍"]
+ERROR["例外交回批次提交端；由其回復新增佇列項目"]
+DEFAULTS --> VALIDATE
+VALIDATE -->|有效| SNAPSHOT
+VALIDATE -->|無效| ERROR
+SNAPSHOT --> TASK
+SNAPSHOT -->|失敗| ERROR
+TASK --> DUPLICATE
+DUPLICATE -->|是| SKIP
+DUPLICATE -->|否| QUEUE
+SKIP --> DEFER
+QUEUE --> DEFER
+DEFER --> WRITE
+WRITE -->|是| PERSIST
+WRITE -->|否| START
+PERSIST --> CHANGED
+PERSIST -->|失敗| ERROR
+CHANGED -->|是| ATOMIC
+CHANGED -->|否| START
+ATOMIC -->|成功| START
+ATOMIC -->|失敗| ERROR

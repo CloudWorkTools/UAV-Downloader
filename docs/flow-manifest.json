@@ -1,0 +1,719 @@
+{
+  "version": 1,
+  "scope": {
+    "include": [
+      "pyproject.toml",
+      "requirements-docker.txt",
+      "requirements.txt",
+      "src/uav_downloader/core/config.py",
+      "src/uav_downloader/core/paths.py",
+      "src/uav_downloader/core/smb_storage.py",
+      "src/uav_downloader/core/storage.py",
+      "src/uav_downloader/core/video_identity.py",
+      "src/uav_downloader/daemon/download_batch*.py",
+      "src/uav_downloader/daemon/download_batch.py",
+      "src/uav_downloader/daemon/download_files.py",
+      "src/uav_downloader/daemon/nas.py",
+      "src/uav_downloader/daemon/server.py",
+      "src/uav_downloader/daemon/task_manager.py",
+      "src/uav_downloader/metadata.py",
+      "uav-web/Cargo.lock",
+      "uav-web/Cargo.toml",
+      "uav-web/frontend/download-batch*.js",
+      "uav-web/frontend/download-batch.js",
+      "uav-web/frontend/index.html",
+      "uav-web/frontend/video-selection.js",
+      "uav-web/src/client.rs",
+      "uav-web/src/routes.rs",
+      "uav-web/frontend/mobile-actions.js",
+      "uav-web/frontend/mobile-actions.css",
+      "uav-web/frontend/subtitle-settings.js",
+      "src/uav_downloader/daemon/subtitle_http.py",
+      "src/uav_downloader/subtitles/profiles.py",
+      "src/uav_downloader/subtitles/settings.py",
+      "src/uav_downloader/subtitles/asr.py",
+      "src/uav_downloader/core/media_errors.py"
+    ],
+    "exclude": {}
+  },
+  "sources": [
+    {
+      "path": "pyproject.toml",
+      "kind": "file",
+      "md5": "4464c906d5d1bd55972763c4a1075d4d"
+    },
+    {
+      "path": "requirements-docker.txt",
+      "kind": "file",
+      "md5": "b253aad5392dc92bee94fa22ec35e08f"
+    },
+    {
+      "path": "requirements.txt",
+      "kind": "file",
+      "md5": "7a48044dea85579065897205f2714fa8"
+    },
+    {
+      "path": "src/uav_downloader/core/config.py",
+      "kind": "file",
+      "md5": "a59ae08443eed2a77648ec76963dd279"
+    },
+    {
+      "path": "src/uav_downloader/core/paths.py",
+      "kind": "file",
+      "md5": "084590cc5d1f2a1ea7a40321d783b653"
+    },
+    {
+      "path": "src/uav_downloader/core/smb_storage.py",
+      "kind": "file",
+      "md5": "23fdcfe0312fd6d3cd40dd1455e7090a"
+    },
+    {
+      "path": "src/uav_downloader/core/storage.py",
+      "kind": "file",
+      "md5": "610418dde70293d8c7cccf08cddc3202"
+    },
+    {
+      "path": "src/uav_downloader/core/video_identity.py",
+      "kind": "file",
+      "md5": "3c34e49b3a04f7f7b64bbec92ad37451"
+    },
+    {
+      "path": "src/uav_downloader/daemon/download_batch.py",
+      "kind": "python",
+      "md5": "43fed3e5a1df398a8a994f799b04430c",
+      "context_hash": "9c14c315e4d5e2f9a4a0eb123aa5e6916748278b4cb479854267af499df9c632",
+      "symbols": {
+        "folder_name": "2196496ad73a3d91460307f3872d7858c075ce0f148aa8b0d426ab529184e590",
+        "destination": "8308a30402c000408373b8b4d83678a64ab8d50729670dba6b14cc8ce5ae4ae4",
+        "submit": "3e6ae07139d83578e62fdd806a206cbf52a0071856517debd4b8664ab1e004f6"
+      }
+    },
+    {
+      "path": "src/uav_downloader/daemon/download_files.py",
+      "kind": "file",
+      "md5": "b40ee32fd37728dfec6564ef84ac24e3"
+    },
+    {
+      "path": "src/uav_downloader/daemon/nas.py",
+      "kind": "file",
+      "md5": "f17b748974350df23f383feb0e789652"
+    },
+    {
+      "path": "src/uav_downloader/daemon/server.py",
+      "kind": "file",
+      "md5": "026e6eb93eba427c439eaab0bc0677d6"
+    },
+    {
+      "path": "src/uav_downloader/daemon/task_manager.py",
+      "kind": "file",
+      "md5": "2e653af829f3582f2ec21852be09efb8"
+    },
+    {
+      "path": "src/uav_downloader/metadata.py",
+      "kind": "file",
+      "md5": "05a57959bb56b2c4dbf44b4937341131"
+    },
+    {
+      "path": "uav-web/Cargo.lock",
+      "kind": "file",
+      "md5": "5fac99e2817be7d2d32f695c0c53bf7f"
+    },
+    {
+      "path": "uav-web/Cargo.toml",
+      "kind": "file",
+      "md5": "bcda7cc4e8a9585810ba08fc262afbb5"
+    },
+    {
+      "path": "uav-web/frontend/download-batch.js",
+      "kind": "file",
+      "md5": "8a4152c17a5f81bfbeae87c4516219bb"
+    },
+    {
+      "path": "uav-web/frontend/index.html",
+      "kind": "file",
+      "md5": "a93d89688dabb24043b1e510ead5eba3"
+    },
+    {
+      "path": "uav-web/frontend/video-selection.js",
+      "kind": "file",
+      "md5": "e329cc8d8c9c688a0345d8f600165d69"
+    },
+    {
+      "path": "uav-web/src/client.rs",
+      "kind": "file",
+      "md5": "fb4698e8e95a53f5f31fa70d8184d00f"
+    },
+    {
+      "path": "uav-web/src/routes.rs",
+      "kind": "file",
+      "md5": "9b79b083b14b8d2d373c27f140a7074b"
+    },
+    {
+      "path": "uav-web/frontend/mobile-actions.js",
+      "kind": "file",
+      "md5": "36e2e4c62e28b336a1cdb0d824ab0fd9"
+    },
+    {
+      "path": "uav-web/frontend/mobile-actions.css",
+      "kind": "file",
+      "md5": "570b80e92e7fd71c44140daa0b37b522"
+    },
+    {
+      "path": "uav-web/frontend/subtitle-settings.js",
+      "kind": "file",
+      "md5": "330768ed0d07a417a259277a59184df8"
+    },
+    {
+      "path": "src/uav_downloader/daemon/subtitle_http.py",
+      "kind": "file",
+      "md5": "813b6ae082c224a1b794b30539950cd1"
+    },
+    {
+      "path": "src/uav_downloader/subtitles/profiles.py",
+      "kind": "file",
+      "md5": "10f33a1440b3ff4cd4d251ba291783fd"
+    },
+    {
+      "path": "src/uav_downloader/subtitles/settings.py",
+      "kind": "file",
+      "md5": "2881e3376a7cd0de27dbeecfe96a66f2"
+    },
+    {
+      "path": "src/uav_downloader/subtitles/asr.py",
+      "kind": "file",
+      "md5": "d946338ef095124a7b7a7716124d43bb"
+    },
+    {
+      "path": "src/uav_downloader/core/media_errors.py",
+      "kind": "file",
+      "md5": "53f5cf60b4921b9af5a93638b108a506"
+    }
+  ],
+  "features": [
+    {
+      "id": "download.batch",
+      "flow": "docs/flows/download.batch.mmd",
+      "depends_on": [
+        "storage.destination",
+        "queue.enqueue"
+      ],
+      "mappings": [
+        {
+          "node": "UI",
+          "path": "uav-web/frontend/video-selection.js"
+        },
+        {
+          "node": "DONE",
+          "path": "uav-web/frontend/video-selection.js"
+        },
+        {
+          "node": "ERROR",
+          "path": "uav-web/frontend/video-selection.js"
+        },
+        {
+          "node": "CANCEL",
+          "path": "uav-web/frontend/video-selection.js"
+        },
+        {
+          "node": "UI",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "PREVIEW",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "DEST",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "CONFIRM",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "RESPONSE",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "DONE",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "RETRY",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "ERROR",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "CANCEL",
+          "path": "uav-web/frontend/download-batch.js"
+        },
+        {
+          "node": "UI",
+          "path": "uav-web/frontend/index.html"
+        },
+        {
+          "node": "DONE",
+          "path": "uav-web/frontend/index.html"
+        },
+        {
+          "node": "RPC",
+          "path": "uav-web/src/routes.rs"
+        },
+        {
+          "node": "RPC",
+          "path": "uav-web/src/client.rs"
+        },
+        {
+          "node": "AUTH",
+          "path": "src/uav_downloader/daemon/server.py"
+        },
+        {
+          "node": "ACTION",
+          "path": "src/uav_downloader/daemon/server.py"
+        },
+        {
+          "node": "ERROR",
+          "path": "src/uav_downloader/daemon/server.py"
+        },
+        {
+          "node": "RPC",
+          "path": "uav-web/Cargo.toml"
+        },
+        {
+          "node": "RPC",
+          "path": "uav-web/Cargo.lock"
+        },
+        {
+          "node": "VALID",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "submit"
+        },
+        {
+          "node": "CACHED",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "submit"
+        },
+        {
+          "node": "REPLAY",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "submit"
+        },
+        {
+          "node": "COMMIT",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "submit"
+        },
+        {
+          "node": "ADD",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "submit"
+        },
+        {
+          "node": "SAVE",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "submit"
+        },
+        {
+          "node": "ROLLBACK",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "submit"
+        },
+        {
+          "node": "START",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "submit"
+        },
+        {
+          "node": "UI",
+          "path": "uav-web/frontend/mobile-actions.js"
+        },
+        {
+          "node": "UI",
+          "path": "uav-web/frontend/mobile-actions.css"
+        },
+        {
+          "node": "UI",
+          "path": "uav-web/frontend/subtitle-settings.js"
+        },
+        {
+          "node": "VALID",
+          "path": "src/uav_downloader/daemon/subtitle_http.py"
+        },
+        {
+          "node": "VALID",
+          "path": "src/uav_downloader/subtitles/profiles.py"
+        },
+        {
+          "node": "VALID",
+          "path": "src/uav_downloader/subtitles/settings.py"
+        },
+        {
+          "node": "VALID",
+          "path": "src/uav_downloader/subtitles/asr.py"
+        }
+      ]
+    },
+    {
+      "id": "storage.destination",
+      "flow": "docs/flows/storage.destination.mmd",
+      "depends_on": [],
+      "mappings": [
+        {
+          "node": "OPTIONS",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "folder_name"
+        },
+        {
+          "node": "OPTIONS",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "SETTINGS",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "MODE",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "LOCAL",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "DIRECT",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "SMB",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "INSPECT",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "BUSY",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "PHASE",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "RETURN",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "VERIFY",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "CREATE",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "CLOSE",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "ERROR",
+          "path": "src/uav_downloader/daemon/download_batch.py",
+          "symbol": "destination"
+        },
+        {
+          "node": "SETTINGS",
+          "path": "src/uav_downloader/daemon/nas.py"
+        },
+        {
+          "node": "DIRECT",
+          "path": "src/uav_downloader/daemon/nas.py"
+        },
+        {
+          "node": "SMB",
+          "path": "src/uav_downloader/daemon/nas.py"
+        },
+        {
+          "node": "CREATE",
+          "path": "src/uav_downloader/daemon/nas.py"
+        },
+        {
+          "node": "LOCAL",
+          "path": "src/uav_downloader/core/storage.py"
+        },
+        {
+          "node": "SMB",
+          "path": "src/uav_downloader/core/storage.py"
+        },
+        {
+          "node": "INSPECT",
+          "path": "src/uav_downloader/core/storage.py"
+        },
+        {
+          "node": "BUSY",
+          "path": "src/uav_downloader/core/storage.py"
+        },
+        {
+          "node": "CLOSE",
+          "path": "src/uav_downloader/core/storage.py"
+        },
+        {
+          "node": "SMB",
+          "path": "src/uav_downloader/core/smb_storage.py"
+        },
+        {
+          "node": "INSPECT",
+          "path": "src/uav_downloader/core/smb_storage.py"
+        },
+        {
+          "node": "BUSY",
+          "path": "src/uav_downloader/core/smb_storage.py"
+        },
+        {
+          "node": "CREATE",
+          "path": "src/uav_downloader/core/smb_storage.py"
+        },
+        {
+          "node": "CLOSE",
+          "path": "src/uav_downloader/core/smb_storage.py"
+        },
+        {
+          "node": "ERROR",
+          "path": "src/uav_downloader/core/smb_storage.py"
+        },
+        {
+          "node": "SETTINGS",
+          "path": "src/uav_downloader/core/config.py"
+        },
+        {
+          "node": "SETTINGS",
+          "path": "src/uav_downloader/core/paths.py"
+        },
+        {
+          "node": "SETTINGS",
+          "path": "src/uav_downloader/metadata.py"
+        },
+        {
+          "node": "SETTINGS",
+          "path": "pyproject.toml"
+        },
+        {
+          "node": "SMB",
+          "path": "requirements.txt"
+        },
+        {
+          "node": "SMB",
+          "path": "requirements-docker.txt"
+        },
+        {
+          "node": "SMB",
+          "path": "src/uav_downloader/core/media_errors.py"
+        }
+      ]
+    },
+    {
+      "id": "queue.enqueue",
+      "flow": "docs/flows/queue.enqueue.mmd",
+      "depends_on": [
+        "storage.destination"
+      ],
+      "mappings": [
+        {
+          "node": "DEFAULTS",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "VALIDATE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "SNAPSHOT",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "TASK",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "DUPLICATE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "SKIP",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "QUEUE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "DEFER",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "PERSIST",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "WRITE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "ATOMIC",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "START",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "ERROR",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "DUPLICATE",
+          "path": "src/uav_downloader/daemon/download_files.py"
+        },
+        {
+          "node": "PERSIST",
+          "path": "src/uav_downloader/daemon/download_files.py"
+        },
+        {
+          "node": "DUPLICATE",
+          "path": "src/uav_downloader/core/video_identity.py"
+        },
+        {
+          "node": "DEFAULTS",
+          "path": "src/uav_downloader/core/config.py"
+        },
+        {
+          "node": "CHANGED",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "SNAPSHOT",
+          "path": "src/uav_downloader/subtitles/profiles.py"
+        }
+      ]
+    }
+  ],
+  "reviews": [
+    {
+      "feature": "download.batch",
+      "fingerprint": "78288dfd6c4cce7b3e89d84daff8f695a4e1a680618b23c15b80ab28d6f53d58",
+      "reviewer": "/root/review_batch",
+      "verdict": "fail",
+      "evidence": "docs/flow-evidence/reviews/download.batch/78288dfd6c4cce7b3e89d84daff8f695a4e1a680618b23c15b80ab28d6f53d58.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "59d4ff4a5178fb734b1bbd36a1670faab6c7895ef296e5d489c57ab5eb25db0e",
+      "reviewer": "/root/review_queue",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/59d4ff4a5178fb734b1bbd36a1670faab6c7895ef296e5d489c57ab5eb25db0e.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "ba743f12b6ea15ba2e73c6cfc3dd459e89ef19f5b1351f7b793a127298405bfd",
+      "reviewer": "/root/review_storage",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/ba743f12b6ea15ba2e73c6cfc3dd459e89ef19f5b1351f7b793a127298405bfd.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "8e9e837e8f51e085118ca85f697772e4ac56ec9cc985f71e7b9fd23b87c34f63",
+      "reviewer": "/root/review_batch_final",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/8e9e837e8f51e085118ca85f697772e4ac56ec9cc985f71e7b9fd23b87c34f63.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "b4386133c84f74e91ccd3d7a04128853517d0012c0c527dfedffc8db2a78ca8b",
+      "reviewer": "/root/review_queue_final",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/b4386133c84f74e91ccd3d7a04128853517d0012c0c527dfedffc8db2a78ca8b.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "8d7a030c2847979e0442d4dbc4aa37814cdd0da3669d90c0cbb4a266b524492c",
+      "reviewer": "/root/review_storage_final",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/8d7a030c2847979e0442d4dbc4aa37814cdd0da3669d90c0cbb4a266b524492c.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "793063d88cbcfba6a06f33b4ef845886804c27c8bb01aa838d11a76aabbfddfe",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/793063d88cbcfba6a06f33b4ef845886804c27c8bb01aa838d11a76aabbfddfe.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "909d52c09be0a14f7e0b51521074a94ee4d0f066e3c4baa7cc2c1d12fba37771",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/909d52c09be0a14f7e0b51521074a94ee4d0f066e3c4baa7cc2c1d12fba37771.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "2f7f8f6592580875338a184123c3ccd7e8e30b02d883c893e47c894147b6b77a",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/2f7f8f6592580875338a184123c3ccd7e8e30b02d883c893e47c894147b6b77a.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "8cebec2f169637e12c71e571828294334cb75a928324da3a546755d4f8d2a653",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/8cebec2f169637e12c71e571828294334cb75a928324da3a546755d4f8d2a653.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "3d58c51218fbc4bb0d1126e7abeae36bd8b6fc8e74990715c6bf52b9d0874875",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/3d58c51218fbc4bb0d1126e7abeae36bd8b6fc8e74990715c6bf52b9d0874875.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "e9f496adb111bd3861aa80daaa829e663e8e4e955f2c9eeb2de2b4bc87cefcb9",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/e9f496adb111bd3861aa80daaa829e663e8e4e955f2c9eeb2de2b4bc87cefcb9.json"
+    }
+  ],
+  "policy_inputs": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "tools/flow-docs/flow_checker.py",
+    "tools/flow-docs/flow_parsers.py",
+    "tools/flow-docs/requirements-ast.txt",
+    "tests/test_flow_docs.py",
+    "tests/test_daemon_downloads.py",
+    "tests/test_web_download_settings.py",
+    "tests/download_batch.cjs",
+    "tests/mobile_actions.cjs",
+    "tools/web-ci/check_mobile_actions.cjs"
+  ],
+  "limits": {
+    "nodes": 25,
+    "branch_depth": 12
+  }
+}

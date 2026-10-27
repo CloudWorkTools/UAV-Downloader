@@ -1,0 +1,5 @@
+$ .venv/bin/python -m pytest -q tests/test_daemon_downloads.py tests/test_web_download_settings.py -k batch
+...........................                                              [100%]
+27 passed, 115 deselected in 11.19s
+
+exit_code=0

@@ -1,0 +1,4 @@
+$ node tests/download_batch.cjs
+Download dialog, cancel, stale preview, overwrite, retry and double submit: PASS
+
+exit_code=0

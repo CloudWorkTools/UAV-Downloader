@@ -1,0 +1,19 @@
+{
+  "purpose": "Record current read identities; this record alone does not prove comprehension or ordering.",
+  "base": "1d4d6993f8b3881f9e9e27a97010d4147352e81e",
+  "candidate": "worktree",
+  "features": [
+    "download.batch",
+    "storage.destination",
+    "queue.enqueue"
+  ],
+  "documents": {
+    "docs/agents/flow-docs-sync.md": "e1445a4e78022daf94b1833a5d95a1daff039c71a1c14bf821476589fa753aba",
+    "docs/flows/README.md": "b589b02b6537578b9de03e3248735c504db58ff55ab9e4559670463fc66acd31",
+    "docs/flow-manifest.json": "8c4c958a560f14d06bddf80500ae015d19d2c2f911a9917e58f58358ac968015",
+    "docs/flows/contracts.md": "003c743824ded2546dd32bc9157ce68f03e6150e75adf4f0223c069b6f1b22cf",
+    "docs/flows/download.batch.mmd": "0523f83f66c84d1283a8045dbb3fa9afab1ff0f6eed4c17ec09ee80acf7b368f",
+    "docs/flows/storage.destination.mmd": "caaca245d34eba3f118e1cda190380c1478a97c25074946c38272c7f4b7b1a8e",
+    "docs/flows/queue.enqueue.mmd": "64bf5e5b08162df75c0a4164c24406bc988060c6a0c3ed39286c1ef9ec6959f0"
+  }
+}

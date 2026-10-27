@@ -1,0 +1,44 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "78288dfd6c4cce7b3e89d84daff8f695a4e1a680618b23c15b80ab28d6f53d58",
+  "reviewer": "/root/review_batch",
+  "verdict": "fail",
+  "findings": [
+    {
+      "location": "docs/flows/download.batch.mmd: RETRY/CANCEL branches; docs/flows/contracts.md: 瀏覽器狀態",
+      "consequence": "The actual browser enables Cancel again after an uncertain submission result: download-batch.js finally sets batch-cancel.disabled=false even while pendingRequest remains. Clicking Cancel or pressing Escape closes the dialog and preserves selection, although the daemon may already have persisted tasks. The diagram has only RETRY → RPC and describes CANCEL as not sending tasks, omitting this reachable cancellation path and its existing-task consequence. Reopening also resets pendingRequest and generates a new request_id, so the previous identity is no longer available for retry.",
+      "smallest_correction": "Add RETRY → CANCEL and clarify the cancellation node/shared contract: closing sends no further request and preserves selection, but does not undo a submission whose result is unknown; reopening generates a new request identity."
+    }
+  ],
+  "evidence": [
+    "AGENTS.md",
+    "docs/agents/flow-docs-sync.md",
+    "docs/flows/README.md",
+    "docs/flow-manifest.json",
+    "docs/flows/contracts.md",
+    "docs/flows/download.batch.mmd",
+    "docs/flows/storage.destination.mmd",
+    "docs/flows/queue.enqueue.mmd",
+    "docs/flow-evidence/candidate-inputs.json",
+    "uav-web/frontend/download-batch.js",
+    "uav-web/frontend/video-selection.js",
+    "uav-web/frontend/index.html",
+    "uav-web/src/routes.rs",
+    "uav-web/src/client.rs",
+    "src/uav_downloader/daemon/server.py",
+    "src/uav_downloader/daemon/download_batch.py",
+    "src/uav_downloader/daemon/task_manager.py",
+    "tests/download_batch.cjs",
+    "tests/test_web_download_settings.py",
+    "tests/test_daemon_downloads.py",
+    "docs/flow-evidence/runtime/download.batch/offline-regression.md",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/python-tests.log",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/browser-tests.log"
+  ],
+  "limitations": [
+    "Read-only source and recorded-test-evidence review; no application code or tests executed by this reviewer.",
+    "Existing browser tests exercise lost-response retry and cancellation separately, but do not exercise cancellation after an uncertain response.",
+    "Rust end-to-end forwarding, real NAS, external services, production environment and diagram rendering remain unverified as recorded in supplied evidence.",
+    "Index coverage for relied-on application and test paths reported no_recorded_issue / metadata_match; this is best-effort metadata, not proof of semantic completeness."
+  ]
+}

@@ -1,0 +1,39 @@
+flowchart TD
+OPTIONS["檢查儲存、衝突及命名選項；清理資料夾名稱"]
+SETTINGS["讀取一般偏好與 NAS 設定；必要時解密密碼"]
+MODE{"儲存後端？"}
+LOCAL["使用設定或環境提供的本機根目錄"]
+DIRECT["確認絕對路徑存在且為網路掛載"]
+SMB["建立獨立 SMB 連線並暫時註冊虛擬根目錄"]
+INSPECT["拒絕符號連結與同名檔案；依命名規則避開衝突"]
+BUSY["檢查同目的地未完成與覆寫任務；計算一般檔案數"]
+PHASE{"只做預覽？"}
+RETURN["回傳存在、忙碌與可提交狀態；不建立資料夾"]
+VERIFY["核對目的地；忙碌時僅允許無覆寫任務的合併追加"]
+CREATE["依策略建立目錄；upload 使用本機批次暫存；SMB 使用虛擬路徑"]
+CLOSE["離開範圍時取消註冊並關閉 SMB 連線"]
+ERROR["拋出驗證或儲存例外；已建立目錄不回復"]
+OPTIONS -->|有效| SETTINGS
+OPTIONS -->|無效| ERROR
+SETTINGS --> MODE
+SETTINGS -->|讀取或解密失敗| ERROR
+MODE -->|停用 NAS| LOCAL
+MODE -->|direct| DIRECT
+MODE -->|smb 或 upload| SMB
+LOCAL --> INSPECT
+DIRECT -->|掛載有效| INSPECT
+DIRECT -->|無效| ERROR
+SMB -->|成功| INSPECT
+SMB -->|登入失敗| ERROR
+INSPECT -->|有效| BUSY
+INSPECT -->|失敗| ERROR
+BUSY -->|成功| PHASE
+BUSY -->|失敗| ERROR
+PHASE -->|是| RETURN
+PHASE -->|否| VERIFY
+VERIFY -->|符合| CREATE
+VERIFY -->|不符合| ERROR
+CREATE -->|成功| CLOSE
+CREATE -->|失敗| ERROR
+RETURN --> CLOSE
+ERROR -->|若已取得連線| CLOSE

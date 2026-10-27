@@ -1,0 +1,10 @@
+{
+  "feature": "storage.destination",
+  "fingerprint": "909d52c09be0a14f7e0b51521074a94ee4d0f066e3c4baa7cc2c1d12fba37771",
+  "reviewer": "/root/flow_review",
+  "verdict": "pass",
+  "evidence": "docs/flow-evidence/reviews/storage.destination/909d52c09be0a14f7e0b51521074a94ee4d0f066e3c4baa7cc2c1d12fba37771.json",
+  "findings": [],
+  "base": "10f17d5268cee40d31b54c948e689368d84e1348",
+  "scope": "獨立審查目前流程圖、共用契約與宣告的批次提交邊界；不涵蓋完整字幕生成、影片下載、實際 NAS、圖形渲染或 CI 權限。索引不適用候選版本，直接核對候選來源。"
+}

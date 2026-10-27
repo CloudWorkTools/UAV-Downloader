@@ -1,0 +1,10 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "793063d88cbcfba6a06f33b4ef845886804c27c8bb01aa838d11a76aabbfddfe",
+  "reviewer": "/root/flow_review",
+  "verdict": "pass",
+  "evidence": "docs/flow-evidence/reviews/download.batch/793063d88cbcfba6a06f33b4ef845886804c27c8bb01aa838d11a76aabbfddfe.json",
+  "findings": [],
+  "base": "10f17d5268cee40d31b54c948e689368d84e1348",
+  "scope": "獨立審查目前流程圖、共用契約與宣告的批次提交邊界；不涵蓋完整字幕生成、影片下載、實際 NAS、圖形渲染或 CI 權限。索引不適用候選版本，直接核對候選來源。"
+}

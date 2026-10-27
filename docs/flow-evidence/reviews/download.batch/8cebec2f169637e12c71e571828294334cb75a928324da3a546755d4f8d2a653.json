@@ -1,0 +1,10 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "8cebec2f169637e12c71e571828294334cb75a928324da3a546755d4f8d2a653",
+  "reviewer": "/root/flow_review",
+  "verdict": "pass",
+  "evidence": "docs/flow-evidence/reviews/download.batch/8cebec2f169637e12c71e571828294334cb75a928324da3a546755d4f8d2a653.json",
+  "findings": [],
+  "base": "10f17d5268cee40d31b54c948e689368d84e1348",
+  "scope": "獨立審查原流程與契約，並複核新增手機測試與正式映像驗收輸入；不代表正式映像測試、完整字幕生成、實際 NAS 或圖形渲染已通過。"
+}

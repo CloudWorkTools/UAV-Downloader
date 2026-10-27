@@ -1,0 +1,34 @@
+{
+  "base": "1d4d6993f8b3881f9e9e27a97010d4147352e81e",
+  "candidate_inputs": "docs/flow-evidence/candidate-inputs.json",
+  "checks": [
+    {
+      "command": [
+        "python3",
+        "tools/flow-docs/flow_checker.py",
+        "check",
+        "--root",
+        ".",
+        "--base",
+        "1d4d6993f8b3881f9e9e27a97010d4147352e81e"
+      ],
+      "exit_code": 0,
+      "stdout": "baseline: base has no manifest; all features require review\ncheck passed (worktree); affected features: download.batch, queue.enqueue, storage.destination\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        ".venv/bin/python",
+        "tools/flow-docs/flow_checker.py",
+        "check",
+        "--root",
+        ".",
+        "--base",
+        "1d4d6993f8b3881f9e9e27a97010d4147352e81e"
+      ],
+      "exit_code": 0,
+      "stdout": "baseline: base has no manifest; all features require review\ncheck passed (worktree); affected features: download.batch, queue.enqueue, storage.destination\n",
+      "stderr": ""
+    }
+  ]
+}

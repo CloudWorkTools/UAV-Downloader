@@ -1,0 +1,19 @@
+{
+  "base": "1d4d6993f8b3881f9e9e27a97010d4147352e81e",
+  "candidate": "isolated Git index; result file written after checked snapshot",
+  "tree": "f60948a276da54daf606533d4e39ab92c6cc0060",
+  "command": [
+    "python3",
+    "tools/flow-docs/flow_checker.py",
+    "check",
+    "--root",
+    ".",
+    "--base",
+    "1d4d6993f8b3881f9e9e27a97010d4147352e81e",
+    "--staged"
+  ],
+  "stdout": "baseline: base has no manifest; all features require review\ncheck passed (index); affected features: download.batch, queue.enqueue, storage.destination\n",
+  "stderr": "",
+  "exit_code": 0,
+  "actual_index_unchanged": true
+}
