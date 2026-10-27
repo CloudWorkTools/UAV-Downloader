@@ -1,5 +1,6 @@
 """Exercise the installed checker in disposable Git repos; reviews here are fixtures."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import unittest
 CHECKER = Path(__file__).resolve().parents[1] / 'tools/flow-docs/flow_checker.py'
 
 
-class FlowCheckerTests(unittest.TestCase):
+class FlowCheckerFixture(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='uav-flow-check-')
         self.addCleanup(self.temporary.cleanup)
@@ -85,11 +86,33 @@ class FlowCheckerTests(unittest.TestCase):
                                              'evidence': evidence})
         self.save()
 
+
+class FlowCheckerTests(FlowCheckerFixture):
+    def test_symbol_type_ignore_anchor_uses_code_not_comment_metadata(self):
+        path = self.root / 'src/jobs.py'
+        original = path.read_text()
+        path.write_text('# type: ignore\n' + original)
+        self.cli('snapshot')
+        self.review(self.base)
+        self.git('add', '.')
+        self.git('commit', '-qm', 'TypeIgnore baseline')
+        self.base = self.git('rev-parse', 'HEAD').stdout.strip()
+        path.write_text('\n# type: ignore\n\n' + original)
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        path.write_text(original.replace('def other', '# type: ignore\ndef other'))
+        self.assertEqual(set(json.loads(self.cli('impact', '--base', self.base))['review_required']), {'job.run', 'job.other'})
+
+    def test_symbol_mode_preserves_tool_directives(self):
+        path = self.root / 'src/jobs.py'
+        path.write_text('# pylint: disable=all\n' + path.read_text())
+        impact = json.loads(self.cli('impact', '--base', self.base))
+        self.assertEqual(set(impact['review_required']), {'job.run', 'job.other'})
+
     def test_cosmetic_change_refreshes_md5_without_review(self):
         before = self.fingerprint('job.run')
         path = self.root / 'src/jobs.py'
         path.write_text('# ordinary comment\n' + path.read_text())
-        self.assertIn('stale md5', self.cli('check', '--base', self.base, ok=False))
+        self.cli('check', '--base', self.base)
         self.cli('snapshot')
         self.assertEqual(self.fingerprint('job.run'), before)
         self.cli('check', '--base', self.base)
@@ -163,7 +186,7 @@ class FlowCheckerTests(unittest.TestCase):
         self.git('add', 'src/jobs.py')
         path.write_text(original)
         self.cli('check', '--base', self.base)
-        self.assertIn('stale md5', self.cli('check', '--base', self.base, '--staged', ok=False))
+        self.assertIn('stale symbols', self.cli('check', '--base', self.base, '--staged', ok=False))
         self.assertIn('snapshot --staged is unsupported', self.cli('snapshot', '--staged', ok=False))
 
     def test_missing_base_and_removed_feature_fail(self):
@@ -212,6 +235,140 @@ class FlowCheckerTests(unittest.TestCase):
         self.manifest['policy_inputs'] = ['../outside']
         self.save()
         self.assertIn('unsafe path', self.cli('check', '--base', self.base, ok=False))
+
+
+class ModuleAstTests(FlowCheckerFixture):
+    def module_baseline(self, kind='python-module', language=None, content=None):
+        self.load()
+        source = self.manifest['sources'][1]
+        source['kind'] = kind
+        if language:
+            source['language'] = language
+        for mapping in self.manifest['features'][2]['mappings']:
+            mapping.pop('symbol', None)
+        if content:
+            self.write('src/shared.py', content)
+        self.save()
+        self.cli('snapshot')
+        self.review(self.base)
+        self.git('add', '.')
+        self.git('commit', '-qm', 'Module AST baseline')
+        self.base = self.git('rev-parse', 'HEAD').stdout.strip()
+
+    def test_module_cosmetic_edit_needs_no_review_but_logic_edit_does(self):
+        self.module_baseline()
+        self.write('src/shared.py', '# ordinary comment\n\ndef helper( ):\n    return (3)\n')
+        impact = json.loads(self.cli('impact', '--base', self.base))
+        self.assertEqual(impact['review_required'], [])
+        self.assertEqual(impact['byte_only_sources'], ['src/shared.py'])
+        self.cli('check', '--base', self.base)
+        self.write('src/shared.py', 'def helper():\n    return 4\n')
+        impact = json.loads(self.cli('impact', '--base', self.base))
+        self.assertEqual(set(impact['review_required']), {'job.run', 'shared'})
+        self.cli('snapshot')
+        self.assertIn('missing current review', self.cli('check', '--base', self.base, ok=False))
+        self.review(self.base)
+        impact = json.loads(self.cli('impact', '--base', self.base))
+        self.assertEqual(impact['review_required'], [])
+        self.assertEqual(set(impact['review_reused']), {'job.run', 'shared'})
+
+    def test_module_literal_whitespace_and_invalid_syntax_are_not_skipped(self):
+        self.module_baseline(content='VALUE = "a b"\n')
+        self.write('src/shared.py', 'VALUE = "a  b"\n')
+        self.cli('snapshot')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+        self.write('src/shared.py', 'VALUE = (\n')
+        self.assertIn('flow checker:', self.cli('snapshot', ok=False))
+
+    def test_javascript_module_ignores_prose_but_keeps_tool_directives(self):
+        self.module_baseline('tree-sitter-module', 'javascript', 'function helper() { return 3; }\n')
+        self.write('src/shared.py', '// ordinary comment\nfunction helper( ) {\nreturn 3;\n}\n')
+        self.cli('snapshot')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        self.write('src/shared.py', '/* istanbul ignore next */\nfunction helper() { return 3; }\n')
+        self.cli('snapshot')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+
+    def test_rust_module_ignores_formatting_but_not_literal_changes(self):
+        self.module_baseline('tree-sitter-module', 'rust', 'fn helper() -> i32 { 3 }\n')
+        self.write('src/shared.py', '// ordinary comment\nfn helper( ) -> i32 {\n 3\n}\n')
+        self.cli('snapshot')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        self.write('src/shared.py', 'fn helper() -> i32 { 4 }\n')
+        self.cli('snapshot')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+
+    def test_javascript_literal_and_parse_error_fail_closed(self):
+        self.module_baseline('tree-sitter-module', 'javascript', 'const helper = () => "a b";\n')
+        self.write('src/shared.py', 'const helper = () => "a  b";\n')
+        self.cli('snapshot')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+        self.write('src/shared.py', 'const helper = ( => ;\n')
+        self.assertIn('parse error', self.cli('snapshot', ok=False))
+
+    def test_policy_code_uses_ast_and_preserves_python_tool_directives(self):
+        self.load()
+        self.write('policy.py', 'VALUE = 3\n')
+        self.manifest['policy_inputs'] = ['policy.py']
+        self.save()
+        self.cli('snapshot')
+        self.review(self.base)
+        self.git('add', '.')
+        self.git('commit', '-qm', 'Policy AST baseline')
+        self.base = self.git('rev-parse', 'HEAD').stdout.strip()
+        self.write('policy.py', '# ordinary comment\nVALUE = (3)\n')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        self.write('policy.py', '# noqa\nVALUE = 3\n')
+        self.assertEqual(len(json.loads(self.cli('impact', '--base', self.base))['review_required']), 3)
+
+    def test_python_directive_attachment_changes_but_blank_lines_do_not(self):
+        self.module_baseline(content='first()  # noqa\nsecond()\n')
+        self.write('src/shared.py', '\nfirst()  # noqa\n\nsecond()\n')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        self.write('src/shared.py', 'first()\nsecond()  # noqa\n')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+        self.module_baseline(content='def helper():\n    # fmt: off\n    first()\n    second()\n')
+        self.write('src/shared.py', 'def helper():\n    first()\n    # fmt: off\n    second()\n')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+
+    def test_module_type_ignore_anchor_uses_code_not_comment_metadata(self):
+        self.module_baseline(content='# type: ignore\nfirst()\nsecond()\n')
+        self.write('src/shared.py', '\n# type: ignore\n\nfirst()\nsecond()\n')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        self.write('src/shared.py', 'first()\n# type: ignore\nsecond()\n')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+
+    def test_python_and_javascript_tool_annotations_are_not_prose(self):
+        self.module_baseline(content='first()\n')
+        for directive in ('# pylint: disable=all', '# custom-tool: ignore-next', '# ruff: noqa'):
+            with self.subTest(directive=directive):
+                self.write('src/shared.py', directive + '\nfirst()\n')
+                self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+        self.module_baseline('tree-sitter-module', 'javascript', 'const value = first();\n')
+        self.write('src/shared.py', 'const value = /*#__PURE__*/ first();\n')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+
+
+class FlowCiTests(FlowCheckerFixture):
+    def test_ci_requires_a_real_ancestor_and_propagates_review_failure(self):
+        project = CHECKER.parents[2]
+        self.write('scripts/check_flow_docs.sh', (project / 'scripts/check_flow_docs.sh').read_text())
+        for name in ('flow_checker.py', 'flow_parsers.py'):
+            self.write('tools/flow-docs/' + name, (CHECKER.parent / name).read_text())
+        self.git('add', '.')
+        self.git('commit', '-qm', 'CI candidate')
+        def ci(base):
+            return subprocess.run(['bash', 'scripts/check_flow_docs.sh', base], cwd=self.root,
+                                  env={**os.environ, 'PYTHON': sys.executable}, capture_output=True, text=True)
+        result = ci(self.base)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(ci('HEAD').returncode, 0)
+        self.assertNotEqual(ci(self.git('rev-parse', 'HEAD').stdout.strip()).returncode, 0)
+        self.write('src/shared.py', 'def helper():\n    return 99\n')
+        self.cli('snapshot')
+        result = ci(self.base)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('missing current review', result.stderr)
 
 
 if __name__ == '__main__':

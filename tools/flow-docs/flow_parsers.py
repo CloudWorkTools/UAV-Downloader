@@ -4,19 +4,19 @@ from importlib.metadata import PackageNotFoundError, version
 import json
 import re
 
-ADAPTER_ID = 'tree-sitter-language-pack-0.13.0-v1'
+ADAPTER_ID = 'tree-sitter-language-pack-0.13.0-v2'
 LANGUAGES = frozenset(('javascript', 'typescript', 'tsx', 'go', 'rust', 'java',
                        'csharp', 'c', 'cpp', 'gdscript', 'sql', 'prisma', 'json'))
 COMMENT_TYPES = frozenset(('comment', 'line_comment', 'block_comment', 'marginalia'))
 # These comments affect tools/builds; ordinary prose comments do not affect hashes.
-DIRECTIVE = re.compile(rb'go:|@|eslint|prettier|istanbul|c8\b|sourceMappingURL|sourceURL|^///|^//!|^/\*[!+]|^//\s*line\s|^/\*line\s|#(?:if|else|endif|pragma|region|endregion)|coding[:=]|noinspection|deno-|biome-|jshint|flowlint', re.I)
+DIRECTIVE = re.compile(rb'go:|@|eslint|prettier|istanbul|c8\b|sourceMappingURL|sourceURL|^///|^//!|^/\*[!+#]|^//\s*[#@]|^//\s*line\s|^/\*line\s|#(?:if|else|endif|pragma|region|endregion)|coding[:=]|noinspection|deno-|biome-|jshint|jslint|\bglobals?\b|\bexported\b|flowlint', re.I)
 
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def tree_sitter_hashes(data: bytes, language: str, path: str):
+def tree_sitter_hashes(data: bytes, language: str, path: str, *, module=False):
     """Return context and independently tracked definitions; never execute source.
 
     Overloads and duplicate qualified names deliberately require whole-file tracking.
@@ -176,6 +176,8 @@ def tree_sitter_hashes(data: bytes, language: str, path: str):
             visit(child, scope)
 
     try:
+        if module:
+            return _digest(normalized(root)), {}
         visit(root)
         context = _digest(normalized(root, masks))
     except UnicodeDecodeError as exc:

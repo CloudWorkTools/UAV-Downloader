@@ -12,14 +12,20 @@ import re
 import subprocess
 import sys
 import tempfile
+import io
+import tokenize
 
 
 AST_KINDS = ('python', 'tree-sitter')
+MODULE_KINDS = ('python-module', 'tree-sitter-module')
 ADAPTER_IDS = {
-    'python': 'stdlib-python-ast-v2',
-    'tree-sitter': 'tree-sitter-language-pack-0.13.0-v1',
+    'python': 'stdlib-python-ast-v3',
+    'tree-sitter': 'tree-sitter-language-pack-0.13.0-v2',
     'file': 'raw-bytes-sha256-v1',
+    'python-module': 'stdlib-python-module-ast-v2',
+    'tree-sitter-module': 'tree-sitter-language-pack-0.13.0-module-v2',
 }
+PYTHON_DIRECTIVE = re.compile(r'^#!|coding[:=]|type:|noqa|nosec|fmt:|isort:|pragma:|pylint|pyright|mypy|ruff|coverage|doctest|pyre-|pytype|^#\s*[\w-]+\s*[:=]', re.I)
 
 
 class Invalid(ValueError):
@@ -125,8 +131,42 @@ def canonical_python_ast(value):
     raise Invalid('unsupported Python AST scalar: ' + type(value).__name__)
 
 
+def python_directives(data, tree):
+    nodes = []
+    def visit(node, path=()):
+        if isinstance(node, ast.TypeIgnore):
+            return
+        if hasattr(node, 'lineno'):
+            nodes.append((path, node))
+        for name, child in ast.iter_fields(node):
+            if isinstance(child, ast.AST):
+                visit(child, (*path, name))
+            elif isinstance(child, list):
+                for index, value in enumerate(child):
+                    if isinstance(value, ast.AST):
+                        visit(value, (*path, name, index))
+    visit(tree)
+    directives = []
+    for token in tokenize.tokenize(io.BytesIO(data).readline):
+        if token.type != tokenize.COMMENT or not PYTHON_DIRECTIVE.search(token.string):
+            continue
+        line, column = token.start
+        inline = [(path, node) for path, node in nodes
+                  if node.lineno == line or getattr(node, 'end_lineno', None) == line]
+        if inline:
+            path, _ = max(inline, key=lambda item: (getattr(item[1], 'end_lineno', line) == line,
+                                                   getattr(item[1], 'end_col_offset', 0) <= column,
+                                                   getattr(item[1], 'end_col_offset', 0), len(item[0])))
+        else:
+            following = [(path, node) for path, node in nodes if node.lineno > line]
+            path = min(following, key=lambda item: (item[1].lineno, len(item[0])))[0] if following else ('end',)
+        directives.append([path, token.string])
+    return directives
+
+
 def python_hashes(data, path):
-    tree = ast.parse(data, filename=path)
+    tree = ast.parse(data, filename=path, type_comments=True)
+    directives = python_directives(data, tree)
     symbols = {}
     def header(node):
         node = copy.deepcopy(node)
@@ -145,17 +185,23 @@ def python_hashes(data, path):
                 visit(node.body, prefix + node.name + '.')
     visit(tree.body)
     context = ast.Module(body=[header(node) for node in tree.body], type_ignores=[])
-    return digest(canonical_python_ast(context)), symbols
+    return digest({'ast': canonical_python_ast(context), 'directives': directives}), symbols
 
 
 def source_record(tree, record):
     path = safe_path(record['path'])
     data = tree.read(path)
     result = {'path': path, 'kind': record['kind'], 'md5': hashlib.md5(data, usedforsecurity=False).hexdigest()}
-    require(record['kind'] in (*AST_KINDS, 'file'), 'unsupported source kind: ' + path)
+    require(record['kind'] in (*AST_KINDS, *MODULE_KINDS, 'file'), 'unsupported source kind: ' + path)
     if record['kind'] == 'python':
         result['context_hash'], result['symbols'] = python_hashes(data, path)
-    elif record['kind'] == 'tree-sitter':
+    elif record['kind'] == 'python-module':
+        parsed = ast.parse(data, filename=path, type_comments=True)
+        directives = python_directives(data, parsed)
+        parsed.type_ignores = []
+        result['semantic_hash'] = digest({'ast': canonical_python_ast(parsed),
+                                         'directives': directives})
+    elif record['kind'] in ('tree-sitter', 'tree-sitter-module'):
         language = record.get('language')
         require(isinstance(language, str) and language, 'tree-sitter source requires explicit language: ' + path)
         sys.dont_write_bytecode = True
@@ -165,7 +211,11 @@ def source_record(tree, record):
             raise Invalid('optional parser unavailable; copy flow_parsers.py and install requirements-ast.txt: ' + str(error)) from error
         require(ADAPTER_ID == ADAPTER_IDS['tree-sitter'], 'optional parser adapter identity mismatch')
         result['language'] = language
-        result['context_hash'], result['symbols'] = tree_sitter_hashes(data, language, path)
+        context, symbols = tree_sitter_hashes(data, language, path, module=record['kind'] == 'tree-sitter-module')
+        if record['kind'] == 'tree-sitter-module':
+            result['semantic_hash'] = context
+        else:
+            result['context_hash'], result['symbols'] = context, symbols
     return result
 
 
@@ -239,7 +289,7 @@ def indexed(items, key, label):
     return result
 
 
-def load(tree, manifest_path, verify=True):
+def load(tree, manifest_path, verify=True, refresh=False):
     manifest = tree.json(manifest_path)
     require(manifest.get('version') == 1, 'manifest version must be 1')
     scope = manifest['scope']
@@ -250,9 +300,12 @@ def load(tree, manifest_path, verify=True):
     require(features, 'manifest has no features')
     for path, source in sources.items():
         actual = source_record(tree, source)
-        if verify:
+        if verify and not refresh:
             for key, value in actual.items():
+                if key == 'md5' and source['kind'] in (*AST_KINDS, *MODULE_KINDS):
+                    continue
                 require(source.get(key) == value, 'stale ' + key + ': ' + path + '; run snapshot')
+        source.update(actual)
     if verify:
         included = {path for path in tree.entries if any(fnmatch.fnmatchcase(path, p) for p in scope['include']) and not any(fnmatch.fnmatchcase(path, p) for p in scope['exclude'])}
         require(included <= sources.keys(), 'unregistered source inputs: ' + ', '.join(sorted(included - sources.keys())))
@@ -315,8 +368,16 @@ def closure(features):
 
 
 def policy(manifest, tree):
+    def input_hash(path):
+        language = {'.js': 'javascript', '.cjs': 'javascript', '.rs': 'rust'}.get(Path(path).suffix)
+        if Path(path).suffix == '.py' or language:
+            record = {'path': path, 'kind': 'tree-sitter-module' if language else 'python-module'}
+            if language:
+                record['language'] = language
+            return source_record(tree, record)['semantic_hash']
+        return hashlib.sha256(tree.read(path)).hexdigest()
     return {'scope': manifest['scope'], 'limits': manifest.get('limits', {}), 'hash_adapters': ADAPTER_IDS,
-            'policy_inputs': {path: hashlib.sha256(tree.read(path)).hexdigest() for path in manifest.get('policy_inputs', [])}}
+            'policy_inputs': {path: input_hash(path) for path in manifest.get('policy_inputs', [])}}
 
 
 def feature_content(identity, tree, sources, features):
@@ -326,10 +387,12 @@ def feature_content(identity, tree, sources, features):
         source = sources[mapping['path']]
         if source['kind'] in AST_KINDS:
             value = {'context_hash': source['context_hash'], 'symbol_hash': source['symbols'][mapping['symbol']]}
+        elif source['kind'] in MODULE_KINDS:
+            value = {'semantic_hash': source['semantic_hash']}
         else:
             value = {'sha256': hashlib.sha256(tree.read(mapping['path'])).hexdigest()}
         adapter = {'kind': source['kind'], 'identity': ADAPTER_IDS[source['kind']]}
-        if source['kind'] == 'tree-sitter':
+        if source['kind'] in ('tree-sitter', 'tree-sitter-module'):
             adapter['language'] = source['language']
         relevant.append({'mapping': mapping, 'adapter': adapter, 'source': value})
     return {'feature': feature, 'flow_sha256': hashlib.sha256(tree.read(feature['flow'])).hexdigest(), 'inputs': relevant}
@@ -341,6 +404,18 @@ def fingerprints(tree, loaded, base_oid):
     contents = {identity: feature_content(identity, tree, sources, features) for identity in features}
     closures = closure(features)
     return {identity: digest({'base': base_oid, 'policy': common, 'features': {key: contents[key] for key in sorted(closures[identity])}}) for identity in features}
+
+
+def valid_review(tree, reviews, identity, fingerprint):
+    matching = [review for review in reviews if review.get('feature') == identity
+                and review.get('fingerprint') == fingerprint and review.get('verdict') == 'pass'
+                and isinstance(review.get('reviewer'), str) and review['reviewer'].strip()]
+    for review in matching:
+        evidence = tree.json(review['evidence'])
+        if (isinstance(evidence, dict) and all(evidence.get(key) == review[key]
+                for key in ('feature', 'fingerprint', 'reviewer', 'verdict')) and evidence.get('findings') == []):
+            return True
+    return False
 
 
 def run(args):
@@ -372,40 +447,66 @@ def run(args):
         print('snapshot refreshed registered sources (worktree only)')
         return
     oid = tree.git('rev-parse', '--verify', args.base + '^{commit}').decode().strip()
-    loaded = load(tree, args.manifest)
+    loaded = load(tree, args.manifest, refresh=args.command == 'impact')
     current = fingerprints(tree, loaded, oid)
     if args.command == 'fingerprint':
         require(args.feature in current, 'unknown feature: ' + args.feature)
         print(current[args.feature])
         return
     base_tree = Tree(root, ref=oid)
+    previous = None
     if args.manifest not in base_tree.entries:
         affected = set(current)
-        print('baseline: base has no manifest; all features require review')
+        if args.command != 'impact':
+            print('baseline: base has no manifest; all features require review')
     else:
-        previous = load(base_tree, args.manifest)
+        previous = load(base_tree, args.manifest, refresh=True)
         removed = previous[2].keys() - loaded[2].keys()
         require(not removed, 'removed features require explicit disposition (unsupported): ' + ', '.join(sorted(removed)))
         old = fingerprints(base_tree, previous, oid)
         affected = {identity for identity in current if current[identity] != old.get(identity)}
     reviews = loaded[0].get('reviews', [])
     require(isinstance(reviews, list), 'reviews must be a list')
+    if args.command == 'impact':
+        reused = {identity for identity in affected if valid_review(tree, reviews, identity, current[identity])}
+        byte_only = []
+        changed_sources = []
+        changed_content = []
+        changed_modes = []
+        for path, source in loaded[1].items():
+            old_source = previous[1].get(path) if previous else None
+            semantic = lambda value: {key: item for key, item in value.items() if key != 'md5'}
+            if old_source is None or semantic(source) != semantic(old_source):
+                changed_sources.append(path)
+            elif source['md5'] != old_source['md5']:
+                byte_only.append(path)
+            if old_source is None or source['md5'] != old_source['md5']:
+                changed_content.append(path)
+            if old_source and (source['kind'], source.get('language')) != (old_source['kind'], old_source.get('language')):
+                changed_modes.append(path)
+        old_policy = policy(previous[0], base_tree)['policy_inputs'] if previous else {}
+        current_policy = policy(loaded[0], tree)['policy_inputs']
+        print(json.dumps({'base': oid, 'candidate': 'index' if args.staged else 'worktree',
+                          'affected': [{'feature': identity, 'fingerprint': current[identity]} for identity in sorted(affected)],
+                          'review_required': sorted(affected - reused), 'review_reused': sorted(reused),
+                          'unaffected': sorted(current.keys() - affected), 'changed_sources': sorted(changed_sources),
+                          'changed_source_content': sorted(changed_content), 'changed_source_modes': sorted(changed_modes),
+                          'changed_policy_inputs': sorted(path for path in old_policy.keys() | current_policy.keys()
+                                                         if old_policy.get(path) != current_policy.get(path)),
+                          'byte_only_sources': sorted(byte_only),
+                          'raw_fallbacks': sorted(path for path, source in loaded[1].items() if source['kind'] == 'file')}, indent=2))
+        return
     for identity in sorted(affected):
         matching = [review for review in reviews if review.get('feature') == identity and review.get('fingerprint') == current[identity] and review.get('verdict') == 'pass' and isinstance(review.get('reviewer'), str) and review['reviewer'].strip()]
         require(matching, 'missing current review: ' + identity + '; fingerprint ' + current[identity])
-        valid = False
-        for review in matching:
-            evidence = tree.json(review['evidence'])
-            if (isinstance(evidence, dict) and all(evidence.get(key) == review[key] for key in ('feature', 'fingerprint', 'reviewer', 'verdict')) and evidence.get('findings') == []):
-                valid = True
-        require(valid, 'invalid review evidence: ' + identity)
+        require(valid_review(tree, reviews, identity, current[identity]), 'invalid review evidence: ' + identity)
     print('check passed (' + ('index' if args.staged else 'worktree') + '); affected features: ' + ', '.join(sorted(affected)))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    for name in ('snapshot', 'fingerprint', 'check'):
+    for name in ('snapshot', 'fingerprint', 'impact', 'check'):
         command = commands.add_parser(name)
         command.add_argument('--root', default='.')
         command.add_argument('--manifest', default='docs/flow-manifest.json')

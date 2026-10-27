@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       candidate_sha:
@@ -12,13 +13,71 @@ on:
         required: false
         type: string
 
+      comparison_sha:
+        description: '流程檢查的完整比較基準 SHA；分支未指定時使用 origin/master'
+        required: false
+        type: string
+
 permissions:
   contents: read
 
 jobs:
+  flow-docs:
+    name: Flow docs consistency
+    outputs:
+      comparison_base: ${{ steps.candidate.outputs.base }}
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on:
+      group: shared-runners
+      labels: [self-hosted, Linux, X64, shared]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 準備流程比較基準與實際候選
+        id: candidate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || inputs.comparison_sha }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ -n "$CANDIDATE_SHA" ]; then
+            [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git config user.name 'Compatibility check'
+            git config user.email 'compatibility@users.noreply.github.com'
+            git fetch origin "$BASE_BRANCH"
+            BASE_SHA=$(git rev-parse FETCH_HEAD)
+            git merge --no-edit FETCH_HEAD
+          elif [ -z "$BASE_SHA" ]; then
+            BASE_SHA=$(git rev-parse "origin/$BASE_BRANCH")
+          fi
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "FLOW_BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
+          echo "base=$BASE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: 建立隔離的 AST 檢查環境
+        run: |
+          python3 -m venv "$RUNNER_TEMP/flow-ast-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          "$RUNNER_TEMP/flow-ast-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/bin/python" -m pip install -r tools/flow-docs/requirements-ast.txt
+      - name: 驗證檢查器與 AST 差異判定
+        run: '"$RUNNER_TEMP/flow-ast-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/bin/python" -m unittest discover -s tests -p test_flow_docs.py'
+      - name: 檢查實際候選的流程一致性
+        run: |
+          export PYTHON="$RUNNER_TEMP/flow-ast-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/bin/python"
+          bash scripts/check_flow_docs.sh "$FLOW_BASE_SHA"
+      - name: 清理本次 AST 環境
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/flow-ast-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
   compatibility:
     name: Web / UI compatibility
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: flow-docs
+    if: always() && (needs.flow-docs.result == 'success' || needs.flow-docs.result == 'skipped') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on:
       group: shared-runners
       labels: [self-hosted, Linux, X64, shared]
@@ -35,12 +94,13 @@ jobs:
       - name: 將上游候選版本與主分支合併測試
         if: inputs.candidate_sha != ''
         env:
-          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE_SHA: ${{ needs.flow-docs.outputs.comparison_base }}
         run: |
           git config core.hooksPath /dev/null
           git config user.name 'Compatibility check'
           git config user.email 'compatibility@users.noreply.github.com'
-          git fetch origin "$BASE_BRANCH"
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch origin "$BASE_SHA"
           git merge --no-edit FETCH_HEAD
       - name: 驗證部署提交
         if: inputs.candidate_sha == ''
@@ -56,6 +116,11 @@ jobs:
         run: |
           docker build -f Dockerfile.web -t "$CI_IMAGE" .
           docker build -f Dockerfile.web-tests --build-arg APP_IMAGE="$CI_IMAGE" -t "$CI_TEST_IMAGE" .
+      - name: 正式映像的原生 AST 驗證
+        run: |
+          docker run --rm --entrypoint python \
+            --mount "type=bind,source=$PWD/tools/flow-docs,target=/checks,readonly" \
+            "$CI_IMAGE" /checks/runtime_smoke.py
       - name: 執行共用 Web 回歸檢查
         run: |
           docker run --rm --user "$(id -u):$(id -g)" \
