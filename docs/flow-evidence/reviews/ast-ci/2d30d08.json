@@ -1,0 +1,138 @@
+{
+  "reviews": [
+    {
+      "feature": "download.batch",
+      "fingerprint": "19340fab709ea0291b553cb59afc5a3acd20c8dbca2f6bf35b50992a7e45dafe",
+      "reviewer": "/root/ast_gate_review",
+      "verdict": "fail",
+      "findings": ["AST-1", "AST-2"],
+      "evidence": [
+        "HEAD 已核對為 2d30d08c8cc7871f623bd539cb17c4daf12d9546。",
+        "相對 base 的 src、uav-web、四份流程圖沒有差異；manifest features 完全相同。沿用既有 batch 審查；本次阻擋來自共用 AST 政策輸入。"
+      ],
+      "limitations": [
+        "指紋取自凍結候選的 impact 清單，未獨立重算。",
+        "靜態審查；未重跑24項測試、應用或生產驗證。"
+      ]
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "81a4779d55634e7bce2fe6ddceba4d87c109378ff64051d9be3d9dd07d7229d6",
+      "reviewer": "/root/ast_gate_review",
+      "verdict": "fail",
+      "findings": ["AST-1", "AST-2"],
+      "evidence": [
+        "下載應用來源、流程與映射未變，沿用既有 download.execute 審查。",
+        "本次阻擋來自共用 AST 政策輸入；未重新審查下載執行邏輯。"
+      ],
+      "limitations": [
+        "指紋取自 impact 清單，未獨立重算。",
+        "未執行應用、測試或生產驗證。"
+      ]
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "d0e16ac2952fd108c0341810abf084ed894ea5a9e24b8a7ecba46fe9f114ef50",
+      "reviewer": "/root/ast_gate_review",
+      "verdict": "fail",
+      "findings": ["AST-1", "AST-2"],
+      "evidence": [
+        "佇列來源、流程與映射未變，沿用既有 queue.enqueue 審查。",
+        "本次阻擋來自共用 AST 政策輸入。"
+      ],
+      "limitations": [
+        "指紋取自 impact 清單，未獨立重算。",
+        "未執行應用、測試或生產驗證。"
+      ]
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "4e045a1e1467378b3ed1bcc7e0d4e63277c19543b9440f24798a6663ab8513ef",
+      "reviewer": "/root/ast_gate_review",
+      "verdict": "fail",
+      "findings": ["AST-1", "AST-2"],
+      "evidence": [
+        "目的地來源、流程與映射未變，沿用既有 storage.destination 審查。",
+        "本次阻擋來自共用 AST 政策輸入。"
+      ],
+      "limitations": [
+        "指紋取自 impact 清單，未獨立重算。",
+        "未執行應用、測試或遠端 NAS 驗證。"
+      ]
+    }
+  ],
+  "code_findings": [
+    {
+      "id": "AST-1",
+      "severity": "P2",
+      "blocking": true,
+      "category": "實質門檻缺口",
+      "path": "tools/flow-docs/flow_checker.py",
+      "lines": "165-169",
+      "title": "Python 工具指令沒有綁定所作用的敘述",
+      "problem": "python-module 僅保存工具註解的文字列表，AST 又排除一般節點位置。因此將 first() 行尾的 # noqa 移到 second() 行尾，AST 與 directives 均完全相同，impact/check 可重用原證據，但被豁免檢查的敘述已改變。nosec 等行級指令也有相同問題。",
+      "evidence": [
+        "以標準函式庫進行唯讀資料核對：first()  # noqa\nsecond()\n 與 first()\nsecond()  # noqa\n 的 ast.dump(include_attributes=False) 及本次實作的 directives 列表完全相同。",
+        "新測試只驗證加入 # noqa，未驗證既有指令改變附著位置。"
+      ],
+      "fix": "將工具指令綁定穩定的語法節點或有效作用範圍，讓一般格式／註解仍可略過，但行級指令轉移不能沿用證據；加入指令移動案例。"
+    },
+    {
+      "id": "AST-2",
+      "severity": "P2",
+      "blocking": true,
+      "category": "實質門檻缺口",
+      "path": "tools/flow-docs/flow_checker.py",
+      "lines": "165-167",
+      "related_paths": ["tools/flow-docs/flow_parsers.py:12,56-58"],
+      "title": "工具註解辨識漏項會直接當成普通註解略過",
+      "problem": "新 python-module 的正規式漏掉 # pylint: disable=all 等工具指令；tree-sitter-module 沿用的 DIRECTIVE 也漏掉 JavaScript /*#__PURE__*/ 註記。這些註解在本次由 file 遷移的來源原本會按位元組觸發檢查，現在可完全消失於語意摘要，與政策宣告的工具指令保留不符。",
+      "evidence": [
+        "唯讀核對確認 first()\n 與 # pylint: disable=all\nfirst()\n 的 AST 及本次 directives 列表完全相同。",
+        "從 flow_parsers.py 的 AST 讀取 DIRECTIVE 常數後比對，/*#__PURE__*/ 不符合該正規式；normalized 對此 comment 返回 None。",
+        "新案例覆蓋 noqa 與 istanbul，沒有上述漏項或保守 fallback 案例。"
+      ],
+      "fix": "補齊實際承諾支援的工具指令，對無法安全分類的指令形態採保守比較或明示 file 模式；新增 Python 工具指令及 JavaScript PURE 註記的失效案例。"
+    }
+  ],
+  "newly_read_paths": [
+    "/tmp/uav-ast-impact.json",
+    "docs/agents/review-efficiency.md",
+    "docs/agents/flow-docs-sync.md",
+    "docs/flows/README.md",
+    "docs/flow-manifest.json",
+    "CONTRIBUTING.md",
+    "tools/flow-docs/flow_checker.py",
+    "tools/flow-docs/flow_parsers.py",
+    "tools/flow-docs/runtime_smoke.py",
+    "tools/flow-docs/requirements-ast.txt",
+    "tests/test_flow_docs.py",
+    "scripts/check_flow_docs.sh",
+    ".github/workflows/web-check.yml",
+    "docs/flow-evidence/reviews/download.batch/cb56dc26b26d4b7d5f7aaa5257fa71ce9eb6e405f375c8065eae122384aa99f8.json",
+    "docs/flow-evidence/reviews/download.execute/d22f906979eea412273e342c9fde5bf3538fa99aadb54583fd4322ab871cf822.json",
+    "docs/flow-evidence/reviews/queue.enqueue/6bcc58fcea369d1c653224b0283a40bf936eccf9e01253ea7ee774f8f4f68ecf.json",
+    "docs/flow-evidence/reviews/storage.destination/707013570e785e11ba7d3adf1d9fcce3aa9d394fc361ba3daffb31a583b5d353.json"
+  ],
+  "reused_evidence": [
+    "上述四份既有獨立審查，搭配來源／流程零差異及 manifest features 相等的機械核對，保留既有應用語意結論。",
+    "AST 值與解析失敗路徑、新測試 fixture、快照及 review reuse 邏輯已靜態核對。",
+    "CI 使用完整 SHA、禁止候選自比、要求 ancestor；PR 使用事件 base、push 使用 before；外部 fork 的兩個自架執行 job 均被排除。未發現新增 CI 信任邊界阻擋。",
+    "git diff --check 通過；審查結束 HEAD 未變且工作區乾淨。"
+  ],
+  "additional_reads": [
+    {
+      "paths": ["tools/flow-docs/requirements-ast.txt"],
+      "reason": "核對新 CI 隔離環境與 Tree-sitter adapter 的版本要求一致。"
+    },
+    {
+      "paths": ["四份既有審查 JSON"],
+      "reason": "確認被重用的應用審查實際存在、判定為 pass，並保留其原有限制。"
+    },
+    {
+      "paths": ["tools/flow-docs/flow_checker.py:165-169", "tools/flow-docs/flow_parsers.py:12,56-58"],
+      "reason": "針對工具指令分類與附著位置的具體疑點，做唯讀標準函式庫核對；未執行目標應用或重跑測試。"
+    }
+  ],
+  "token_usage": "unavailable"
+}

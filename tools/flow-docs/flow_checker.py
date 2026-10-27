@@ -19,12 +19,13 @@ import tokenize
 AST_KINDS = ('python', 'tree-sitter')
 MODULE_KINDS = ('python-module', 'tree-sitter-module')
 ADAPTER_IDS = {
-    'python': 'stdlib-python-ast-v2',
-    'tree-sitter': 'tree-sitter-language-pack-0.13.0-v1',
+    'python': 'stdlib-python-ast-v3',
+    'tree-sitter': 'tree-sitter-language-pack-0.13.0-v2',
     'file': 'raw-bytes-sha256-v1',
-    'python-module': 'stdlib-python-module-ast-v1',
-    'tree-sitter-module': 'tree-sitter-language-pack-0.13.0-module-v1',
+    'python-module': 'stdlib-python-module-ast-v2',
+    'tree-sitter-module': 'tree-sitter-language-pack-0.13.0-module-v2',
 }
+PYTHON_DIRECTIVE = re.compile(r'^#!|coding[:=]|type:|noqa|nosec|fmt:|isort:|pragma:|pylint|pyright|mypy|ruff|coverage|doctest|pyre-|pytype|^#\s*[\w-]+\s*[:=]', re.I)
 
 
 class Invalid(ValueError):
@@ -130,8 +131,40 @@ def canonical_python_ast(value):
     raise Invalid('unsupported Python AST scalar: ' + type(value).__name__)
 
 
+def python_directives(data, tree):
+    nodes = []
+    def visit(node, path=()):
+        if hasattr(node, 'lineno'):
+            nodes.append((path, node))
+        for name, child in ast.iter_fields(node):
+            if isinstance(child, ast.AST):
+                visit(child, (*path, name))
+            elif isinstance(child, list):
+                for index, value in enumerate(child):
+                    if isinstance(value, ast.AST):
+                        visit(value, (*path, name, index))
+    visit(tree)
+    directives = []
+    for token in tokenize.tokenize(io.BytesIO(data).readline):
+        if token.type != tokenize.COMMENT or not PYTHON_DIRECTIVE.search(token.string):
+            continue
+        line, column = token.start
+        inline = [(path, node) for path, node in nodes
+                  if node.lineno == line or getattr(node, 'end_lineno', None) == line]
+        if inline:
+            path, _ = max(inline, key=lambda item: (getattr(item[1], 'end_lineno', line) == line,
+                                                   getattr(item[1], 'end_col_offset', 0) <= column,
+                                                   getattr(item[1], 'end_col_offset', 0), len(item[0])))
+        else:
+            following = [(path, node) for path, node in nodes if node.lineno > line]
+            path = min(following, key=lambda item: (item[1].lineno, len(item[0])))[0] if following else ('end',)
+        directives.append([path, token.string])
+    return directives
+
+
 def python_hashes(data, path):
-    tree = ast.parse(data, filename=path)
+    tree = ast.parse(data, filename=path, type_comments=True)
+    directives = python_directives(data, tree)
     symbols = {}
     def header(node):
         node = copy.deepcopy(node)
@@ -150,7 +183,7 @@ def python_hashes(data, path):
                 visit(node.body, prefix + node.name + '.')
     visit(tree.body)
     context = ast.Module(body=[header(node) for node in tree.body], type_ignores=[])
-    return digest(canonical_python_ast(context)), symbols
+    return digest({'ast': canonical_python_ast(context), 'directives': directives}), symbols
 
 
 def source_record(tree, record):
@@ -162,9 +195,8 @@ def source_record(tree, record):
         result['context_hash'], result['symbols'] = python_hashes(data, path)
     elif record['kind'] == 'python-module':
         parsed = ast.parse(data, filename=path, type_comments=True)
-        directives = [token.string for token in tokenize.tokenize(io.BytesIO(data).readline)
-                      if token.type == tokenize.COMMENT and re.search(
-                          r'^#!|coding[:=]|type:|noqa|nosec|fmt:|isort:|pragma:', token.string)]
+        directives = python_directives(data, parsed)
+        parsed.type_ignores = []
         result['semantic_hash'] = digest({'ast': canonical_python_ast(parsed),
                                          'directives': directives})
     elif record['kind'] in ('tree-sitter', 'tree-sitter-module'):
@@ -426,7 +458,7 @@ def run(args):
         if args.command != 'impact':
             print('baseline: base has no manifest; all features require review')
     else:
-        previous = load(base_tree, args.manifest)
+        previous = load(base_tree, args.manifest, refresh=True)
         removed = previous[2].keys() - loaded[2].keys()
         require(not removed, 'removed features require explicit disposition (unsupported): ' + ', '.join(sorted(removed)))
         old = fingerprints(base_tree, previous, oid)

@@ -80,13 +80,13 @@
       "path": "src/uav_downloader/core/video_identity.py",
       "kind": "python-module",
       "md5": "3c34e49b3a04f7f7b64bbec92ad37451",
-      "semantic_hash": "2b91ab05055414b19718eec80e3cc7f05986cb91d9216239febe1852a34871db"
+      "semantic_hash": "5e0b68f2bca37b3f9a08f037761113a813519bda2ed1c73dbb166a97d84be129"
     },
     {
       "path": "src/uav_downloader/daemon/download_batch.py",
       "kind": "python",
       "md5": "43fed3e5a1df398a8a994f799b04430c",
-      "context_hash": "9c14c315e4d5e2f9a4a0eb123aa5e6916748278b4cb479854267af499df9c632",
+      "context_hash": "217dce6839045f4d69cc93c0a9ff18719c2eef30333406277acfa07326bc9ea2",
       "symbols": {
         "folder_name": "2196496ad73a3d91460307f3872d7858c075ce0f148aa8b0d426ab529184e590",
         "destination": "8308a30402c000408373b8b4d83678a64ab8d50729670dba6b14cc8ce5ae4ae4",

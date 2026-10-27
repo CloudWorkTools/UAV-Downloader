@@ -15,6 +15,9 @@ def main():
     assert signature('# ordinary comment\n\ndef run( ):\n    return ("a b")\n') == original
     assert signature('def run():\n    return "a  b"\n') != original
     assert signature('# noqa\ndef run():\n    return "a b"\n') != original
+    directive = signature('first()  # noqa\nsecond()\n')
+    assert signature('\nfirst()  # noqa\n\nsecond()\n') == directive
+    assert signature('first()\nsecond()  # noqa\n') != directive
     try:
         signature('def run(:\n')
     except SyntaxError:

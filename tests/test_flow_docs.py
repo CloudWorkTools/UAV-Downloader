@@ -88,6 +88,12 @@ class FlowCheckerFixture(unittest.TestCase):
 
 
 class FlowCheckerTests(FlowCheckerFixture):
+    def test_symbol_mode_preserves_tool_directives(self):
+        path = self.root / 'src/jobs.py'
+        path.write_text('# pylint: disable=all\n' + path.read_text())
+        impact = json.loads(self.cli('impact', '--base', self.base))
+        self.assertEqual(set(impact['review_required']), {'job.run', 'job.other'})
+
     def test_cosmetic_change_refreshes_md5_without_review(self):
         before = self.fingerprint('job.run')
         path = self.root / 'src/jobs.py'
@@ -300,6 +306,26 @@ class ModuleAstTests(FlowCheckerFixture):
         self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
         self.write('policy.py', '# noqa\nVALUE = 3\n')
         self.assertEqual(len(json.loads(self.cli('impact', '--base', self.base))['review_required']), 3)
+
+    def test_python_directive_attachment_changes_but_blank_lines_do_not(self):
+        self.module_baseline(content='first()  # noqa\nsecond()\n')
+        self.write('src/shared.py', '\nfirst()  # noqa\n\nsecond()\n')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        self.write('src/shared.py', 'first()\nsecond()  # noqa\n')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+        self.module_baseline(content='def helper():\n    # fmt: off\n    first()\n    second()\n')
+        self.write('src/shared.py', 'def helper():\n    first()\n    # fmt: off\n    second()\n')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+
+    def test_python_and_javascript_tool_annotations_are_not_prose(self):
+        self.module_baseline(content='first()\n')
+        for directive in ('# pylint: disable=all', '# custom-tool: ignore-next', '# ruff: noqa'):
+            with self.subTest(directive=directive):
+                self.write('src/shared.py', directive + '\nfirst()\n')
+                self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+        self.module_baseline('tree-sitter-module', 'javascript', 'const value = first();\n')
+        self.write('src/shared.py', 'const value = /*#__PURE__*/ first();\n')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
 
 
 class FlowCiTests(FlowCheckerFixture):
