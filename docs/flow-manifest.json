@@ -675,6 +675,27 @@
       "reviewer": "/root/flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/queue.enqueue/2f7f8f6592580875338a184123c3ccd7e8e30b02d883c893e47c894147b6b77a.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "8cebec2f169637e12c71e571828294334cb75a928324da3a546755d4f8d2a653",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/8cebec2f169637e12c71e571828294334cb75a928324da3a546755d4f8d2a653.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "3d58c51218fbc4bb0d1126e7abeae36bd8b6fc8e74990715c6bf52b9d0874875",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/3d58c51218fbc4bb0d1126e7abeae36bd8b6fc8e74990715c6bf52b9d0874875.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "e9f496adb111bd3861aa80daaa829e663e8e4e955f2c9eeb2de2b4bc87cefcb9",
+      "reviewer": "/root/flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/e9f496adb111bd3861aa80daaa829e663e8e4e955f2c9eeb2de2b4bc87cefcb9.json"
     }
   ],
   "policy_inputs": [
@@ -687,7 +708,9 @@
     "tests/test_flow_docs.py",
     "tests/test_daemon_downloads.py",
     "tests/test_web_download_settings.py",
-    "tests/download_batch.cjs"
+    "tests/download_batch.cjs",
+    "tests/mobile_actions.cjs",
+    "tools/web-ci/check_mobile_actions.cjs"
   ],
   "limits": {
     "nodes": 25,

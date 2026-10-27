@@ -26,12 +26,14 @@ async function checkMobileActions(url) {
     assert.equal(await c.evaluate('getComputedStyle(document.querySelector("#select-page-button")).display'), 'none');
     await c.evaluate('renderVideos([{url:"https://example.invalid/mobile-check",title:"Mobile acceptance",thumbnail:"/mascot-fab.svg"}])');
     await openSelection();
-    assert.equal(await c.evaluate('document.querySelector("[data-mobile-source=download-selected-button]").disabled'), true);
+    assert.equal(await c.evaluate('document.querySelector("[data-mobile-source=download-selected-button]").hidden'), true);
     await click('[data-mobile-source=select-page-button]');
     assert.equal(await c.evaluate('document.querySelector("#video-grid input[type=checkbox]").checked'), true);
+    await c.until('document.querySelector("#mobile-selection-count").textContent === "1" && !document.querySelector("#mobile-selection-count").hidden');
     assert.equal(await c.evaluate('document.activeElement.id'), 'mobile-action-fab');
     await openSelection();
-    await c.until('!document.querySelector("[data-mobile-source=download-selected-button]").disabled && document.querySelector("[data-mobile-source=download-selected-button]").textContent.includes("(1)")');
+    await c.until('!document.querySelector("[data-mobile-source=download-selected-button]").hidden && document.querySelector("[data-mobile-source=download-selected-button]").textContent.includes("(1)")');
+    assert.equal(await c.evaluate('getComputedStyle(document.querySelector("[data-mobile-source=download-selected-button]")).borderRadius'), '50%');
     await click('[data-mobile-source=download-selected-button]');
     await c.until('document.querySelector("#download-batch-dialog").open');
     await click('#batch-cancel');
@@ -39,7 +41,7 @@ async function checkMobileActions(url) {
     await openSelection();
     await click('[data-mobile-source=select-page-button]');
     await openSelection();
-    await c.until('document.querySelector("[data-mobile-source=download-selected-button]").disabled');
+    await c.until('document.querySelector("[data-mobile-source=download-selected-button]").hidden');
     await click('#mobile-action-close');
     assert.equal(await c.evaluate('document.activeElement.id'), 'mobile-action-fab');
     await click('#mobile-action-fab');
