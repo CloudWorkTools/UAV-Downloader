@@ -9,19 +9,22 @@ PUBLISH["發布完成檔；上傳模式將影片傳送 NAS"]
 STORE{"發布或傳送結果"}
 STOREWAIT["保留已發布的任務檔案並重試該步驟，最多五次"]
 DONE["完成後清除暫存；清除失敗保留完成狀態與警告"]
+DONEWARN["連線釋放失敗；保持完成狀態並顯示警告"]
 SKIP["重複影片或目的地已有影片時略過"]
+SKIPWARN["暫存清理或連線釋放失敗；保持略過狀態並顯示警告"]
 CANCEL["取消後只清理可確認歸屬的檔案；未知歸屬保留"]
 CANCELCHECK{"清理或連線釋放失敗？"}
-CANCELRETRY["釋放工作名額後再嘗試清理；結果可能取消或失敗"]
 CANCELLED["取消完成；未知歸屬檔案保留"]
 PAUSE["暫停後保留片段及可能已發布的檔案供續傳"]
 PAUSECHECK{"連線釋放失敗？"}
 PAUSED["任務已暫停"]
+RELEASEFAIL["本次嘗試清理或釋放失敗；停止自動重試，清理可能已移除部分歸屬檔案"]
 START --> ATTEMPT
 ATTEMPT --> RESULT
 RESULT -->|成功| PUBLISH
 RESULT -->|失敗且仍可重試| WAIT
 RESULT -->|重試耗盡| FINISHFAIL
+RESULT -->|失敗且清理或釋放失敗| RELEASEFAIL
 RESULT -->|略過| SKIP
 RESULT -->|取消| CANCEL
 RESULT -->|暫停| PAUSE
@@ -34,16 +37,17 @@ STORE -->|成功| DONE
 STORE -->|成功時服務停止設置暫停| PAUSE
 STORE -->|失敗且仍可重試| STOREWAIT
 STORE -->|重試耗盡| FINISHFAIL
+STORE -->|重試耗盡且連線釋放失敗| RELEASEFAIL
 STORE -->|取消| CANCEL
 STOREWAIT -->|繼續| PUBLISH
 STOREWAIT -->|取消| CANCEL
 STOREWAIT -->|服務停止設置暫停| PAUSE
 CANCEL --> CANCELCHECK
 CANCELCHECK -->|否| CANCELLED
-CANCELCHECK -->|是| CANCELRETRY
-CANCELRETRY -->|成功| CANCELLED
-CANCELRETRY -->|失敗| FINISHFAIL
+CANCELCHECK -->|是| RELEASEFAIL
+DONE -->|連線釋放失敗| DONEWARN
+SKIP -->|暫存清理失敗| SKIPWARN
+SKIP -->|連線釋放失敗| SKIPWARN
 PAUSE --> PAUSECHECK
 PAUSECHECK -->|否| PAUSED
-PAUSECHECK -->|是，該次失敗且仍有重試次數| WAIT
-PAUSECHECK -->|是，其他情況| FINISHFAIL
+PAUSECHECK -->|是| RELEASEFAIL

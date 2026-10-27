@@ -318,6 +318,105 @@ def test_cancelled_task_with_storage_close_failure_stays_visible(manager, monkey
     assert 'lock permission denied' in manager.list_tasks()[0]['error']
 
 
+def test_paused_failed_attempt_with_storage_close_failure_does_not_retry(manager, monkeypatch):
+    from contextlib import ExitStack
+    attempts = []
+
+    class FailingCloseStack(ExitStack):
+        def close(self):
+            super().close()
+            raise PermissionError('lock permission denied')
+
+    monkeypatch.setattr(tm, 'ExitStack', FailingCloseStack)
+    monkeypatch.setattr(tm, '_DOWNLOAD_RETRY_DELAY', 0)
+    task = manager.add_task('https://missav.ai/mimk-290')
+
+    def create_site(url, savepath, **kw):
+        attempts.append(savepath)
+
+        def download(job):
+            (Path(job.dest_folder()) / 'partial.part').write_bytes(b'keep')
+            assert manager.pause_task(task.task_id)
+            raise ConnectionError('network lost')
+
+        return job_at(savepath, download)
+
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', create_site)
+    manager._run_task_with_retries(task)
+
+    assert len(attempts) == 1
+    assert task.status == 'failed'
+    assert 'network lost' in task.error
+    assert 'lock permission denied' in task.error
+    assert (Path(task.files.workdir) / 'partial.part').read_bytes() == b'keep'
+
+
+def test_failed_attempt_with_storage_close_failure_finishes_as_failed(manager, monkeypatch):
+    from contextlib import ExitStack
+
+    class FailingCloseStack(ExitStack):
+        def close(self):
+            super().close()
+            raise PermissionError('lock permission denied')
+
+    monkeypatch.setattr(tm, 'ExitStack', FailingCloseStack)
+    monkeypatch.setattr(tm, '_DOWNLOAD_RETRY_DELAY', 0)
+    task = manager.add_task('https://missav.ai/mimk-290')
+
+    def download(job):
+        (Path(job.dest_folder()) / 'partial.part').write_bytes(b'keep')
+        raise ConnectionError('network lost')
+
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task_with_retries(task)
+
+    assert task.status == 'failed'
+    assert 'network lost' in task.error
+    assert 'lock permission denied' in task.error
+    assert (Path(task.files.workdir) / 'partial.part').read_bytes() == b'keep'
+
+
+def test_cancel_cleanup_and_close_failures_remain_visible_and_preserve_files(manager, monkeypatch):
+    from contextlib import ExitStack
+    original_cleanup = tm.DownloadFiles.cleanup
+    cleanup_calls = []
+
+    class FailingCloseStack(ExitStack):
+        def close(self):
+            super().close()
+            raise PermissionError('lock permission denied')
+
+    def fail_first_cleanup(files, *, cancelled=False):
+        cleanup_calls.append(files.workdir)
+        if len(cleanup_calls) == 1:
+            raise OSError('disk offline')
+        return original_cleanup(files, cancelled=cancelled)
+
+    monkeypatch.setattr(tm, 'ExitStack', FailingCloseStack)
+    monkeypatch.setattr(tm.DownloadFiles, 'cleanup', fail_first_cleanup)
+    task = manager.add_task('https://missav.ai/mimk-290')
+    folder = Path(task.dest)
+    folder.mkdir()
+    (folder / 'unknown.mp4').write_bytes(b'keep')
+
+    def download(job):
+        partial = Path(job.dest_folder()) / 'partial.part'
+        partial.write_bytes(b'keep')
+        manager.cancel_tasks([task.task_id], remove_records=True)
+        return False
+
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task_with_retries(task)
+
+    assert cleanup_calls == [task.files.workdir]
+    assert task.status == 'failed'
+    assert 'disk offline' in task.error
+    assert 'lock permission denied' in task.error
+    assert (Path(task.files.workdir) / 'partial.part').read_bytes() == b'keep'
+    assert (folder / 'unknown.mp4').read_bytes() == b'keep'
+    assert manager.get_task(task.task_id).status == 'failed'
+
+
 def test_pause_resume_keeps_segments_and_settings(manager, monkeypatch, tmp_path):
     task = manager.add_task('https://missav.ai/mimk-290', resolution='720', max_workers=3, download_cover=False)
     workdirs = []

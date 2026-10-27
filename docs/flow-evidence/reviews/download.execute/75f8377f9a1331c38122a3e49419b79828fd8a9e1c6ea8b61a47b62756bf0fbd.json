@@ -1,0 +1,23 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "75f8377f9a1331c38122a3e49419b79828fd8a9e1c6ea8b61a47b62756bf0fbd",
+  "reviewer": "/root/review_final_execute3",
+  "verdict": "fail",
+  "findings": [
+    {
+      "location": "docs/flows/download.execute.mmd: STORE → FINISHFAIL",
+      "consequence": "When publication or NAS upload retries are exhausted and connection or lock release also fails, the task remains failed and reports both errors. The flow has no release-failure branch after STORE, so it omits that warning and its associated cleanup uncertainty.",
+      "correction": "Add a release-failure path from the publication failure outcome to RELEASEFAIL, preserving the failed status and warning."
+    }
+  ],
+  "evidence": [
+    "src/uav_downloader/daemon/task_manager.py:800-812 retries publication and raises after exhaustion; lines 1047-1081 mark the attempt failed and append a release warning when storage.close() raises.",
+    "src/uav_downloader/daemon/task_manager.py:765-798 retains the active slot across download retries and stops on cancellation, pause, exhausted publication retries, or release failure.",
+    "src/uav_downloader/daemon/task_manager.py:672-719 and src/uav_downloader/daemon/download_files.py:106-116 implement cancellation cleanup and preserve files with unknown ownership.",
+    "tests/test_daemon_downloads.py:321-419 and 1348-1475 cover retry, pause, cancellation, cleanup, release failure and publication exhaustion; tests/test_nas.py:571-594 covers upload retry after partial publication."
+  ],
+  "limitations": [
+    "Read-only review; application and tests were not executed, and no execution results were supplied.",
+    "Mermaid rendering and live NAS behavior were not verified."
+  ]
+}

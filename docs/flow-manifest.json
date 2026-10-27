@@ -106,7 +106,7 @@
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
       "kind": "file",
-      "md5": "92cdabba2ea191539f86e134a8c1f86a"
+      "md5": "87d78db288beccd89a0bf71d69105673"
     },
     {
       "path": "src/uav_downloader/metadata.py",
@@ -688,10 +688,6 @@
           "path": "src/uav_downloader/daemon/task_manager.py"
         },
         {
-          "node": "CANCELRETRY",
-          "path": "src/uav_downloader/daemon/task_manager.py"
-        },
-        {
           "node": "CANCELLED",
           "path": "src/uav_downloader/daemon/task_manager.py"
         },
@@ -701,6 +697,18 @@
         },
         {
           "node": "PAUSED",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "RELEASEFAIL",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "DONEWARN",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "SKIPWARN",
           "path": "src/uav_downloader/daemon/task_manager.py"
         }
       ]
@@ -811,6 +819,27 @@
       "reviewer": "/root/flow_batch",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/342c47c701aaa0d945e89e7bedc465c96a2c1ef59207b431c2d14a0441dda51c.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "6bcc58fcea369d1c653224b0283a40bf936eccf9e01253ea7ee774f8f4f68ecf",
+      "reviewer": "/root/review_final_queue",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/6bcc58fcea369d1c653224b0283a40bf936eccf9e01253ea7ee774f8f4f68ecf.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "707013570e785e11ba7d3adf1d9fcce3aa9d394fc361ba3daffb31a583b5d353",
+      "reviewer": "/root/review_final_storage",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/707013570e785e11ba7d3adf1d9fcce3aa9d394fc361ba3daffb31a583b5d353.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "cb56dc26b26d4b7d5f7aaa5257fa71ce9eb6e405f375c8065eae122384aa99f8",
+      "reviewer": "/root/review_final_batch",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/cb56dc26b26d4b7d5f7aaa5257fa71ce9eb6e405f375c8065eae122384aa99f8.json"
     }
   ],
   "policy_inputs": [

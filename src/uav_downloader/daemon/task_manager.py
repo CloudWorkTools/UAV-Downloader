@@ -770,9 +770,10 @@ class TaskManager:
                 task._retry_attempt = attempt
                 task._attempt_failed = False
                 task._publication_retries_exhausted = False
+                task._retry_blocked = False
                 self._run_task(task, retain_active=True)
                 if (not task._attempt_failed or task.subtitles_only or task._publication_retries_exhausted
-                        or attempt == _DOWNLOAD_RETRY_LIMIT):
+                        or task._retry_blocked or attempt == _DOWNLOAD_RETRY_LIMIT):
                     break
                 with self._lock:
                     if task.cancelled_event.is_set() or task.paused_event.is_set():
@@ -791,7 +792,7 @@ class TaskManager:
                 if task.paused_event.is_set() and not task.cancelled_event.is_set():
                     task.status = 'paused'
                     task.error = None
-            if task.cancelled_event.is_set() and task.status != 'cancelled':
+            if task.cancelled_event.is_set() and task.status not in ('cancelled', 'failed'):
                 self.cancel_task(task.task_id)
             self._remove_requested_record(task)
             self._save_tasks()
@@ -1065,7 +1066,8 @@ class TaskManager:
             except OSError as exc:
                 warning = f"NAS 連線或下載鎖釋放失敗：{exc}；請確認連線後重試"
                 task.error = f"{task.error}；{warning}" if task.error else warning
-                if task.cancelled_event.is_set():
+                task._retry_blocked = True
+                if task.cancelled_event.is_set() or getattr(task, '_attempt_failed', False):
                     task.status = "failed"
                 if task.paused_event.is_set():
                     task.paused_event.clear()
