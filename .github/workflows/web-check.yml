@@ -57,6 +57,9 @@ jobs:
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           echo "FLOW_BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
           echo "base=$BASE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
       - name: 建立隔離的 AST 檢查環境
         run: |
           python3 -m venv "$RUNNER_TEMP/flow-ast-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
