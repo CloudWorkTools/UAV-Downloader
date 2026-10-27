@@ -1,6 +1,6 @@
 # AST 流程門檻驗證
 
-- 比較基準：`3b78b60b581b09b65b6880f5e597a4d2cae0c238`；實作候選：`69481904c69a627aa0fd8e257c666cfe0a64af51`。後續提交僅加入獨立審查證據與本紀錄。
+- 比較基準：`3b78b60b581b09b65b6880f5e597a4d2cae0c238`；實作候選：`69481904c69a627aa0fd8e257c666cfe0a64af51`。CI 環境候選 `a37a0c555d789c1742d9f7dea2d415eac2859b07` 另補第一方固定提交的 Python setup，因實際 runner 缺少 ensurepip；AST 實作未變。後續證據提交不改動檢查行為。
 - `python -m unittest discover -s tests -p test_flow_docs.py`：22 項通過，包含 AST 相同略過、邏輯／字串／工具指令位置變更失效、解析錯誤、證據重用、實際 CI 基準與失敗傳遞。
 - `flow_checker.py impact --root . --base <BASE>`：應用來源內容零變更；21 個來源改採整模組 AST，政策更新導致四功能需綁定新指紋。集中 reviewer 重用既有應用審查，只增讀本次工具、CI、規範與修正差異；token 計數不可取得，未宣稱實測節省量。
 - `flow_checker.py check --root . --base <BASE>`：四個受影響功能皆通過；集中審查原始回報見 `docs/flow-evidence/reviews/ast-ci/6948190.json`。
