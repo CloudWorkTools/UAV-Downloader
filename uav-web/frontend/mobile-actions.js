@@ -30,6 +30,7 @@ window.addEventListener('DOMContentLoaded', () => {
   function close() {
     if (!dialog.hidden) dialog.close();
     dialog.hidden = true;
+    document.body.append(fab);
     fab.setAttribute('aria-expanded', 'false');
     syncRows();
     if (!fab.hidden && mobile.matches) fab.focus();
@@ -48,6 +49,16 @@ window.addEventListener('DOMContentLoaded', () => {
         const source = byId(id);
         return source && !source.disabled && !source.hidden && (id !== 'browse-clear-mobile' || count > 0);
       });
+    });
+    const visible = [...dialog.querySelectorAll('#mobile-action-items button:not([hidden])')];
+    dialog.style.setProperty('--menu-height', visible.length > 4 ? '330px' : '270px');
+    visible.forEach((button, index) => {
+      const outer = visible.length > 4 && index >= 3;
+      const ringCount = visible.length > 4 ? (outer ? visible.length - 3 : 3) : visible.length;
+      const slot = outer ? index - 3 : index;
+      button.style.setProperty('--angle', `${ringCount === 1 ? 45 : slot * 90 / (ringCount - 1)}deg`);
+      button.style.setProperty('--radius', `${visible.length > 4 ? (outer ? 192 : 104) : 140}px`);
+      button.style.setProperty('--delay', `${index * 25}ms`);
     });
     badge.textContent = count;
     badge.hidden = !count || page !== 'browse';
@@ -76,6 +87,8 @@ window.addEventListener('DOMContentLoaded', () => {
     (dialog.querySelector('#mobile-action-items button:not([hidden])') || byId('mobile-action-close')).focus();
   }
   fab.onclick = () => {
+    if (!dialog.hidden) {close();return;}
+    dialog.append(fab);
     stack = [page];
     dialog.hidden = false;
     dialog.showModal();

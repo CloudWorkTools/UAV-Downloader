@@ -1,21 +1,24 @@
 #mobile-action-fab { display: none; }
-#mobile-action-dialog { color: #f3f1f6; background: transparent; border: 0; padding: 12px; }
-#mobile-action-dialog::backdrop { background: #0005; }
-#mobile-action-dialog header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; border-radius: 14px; background: #242630; }
-#mobile-action-title { flex: 1; }
-#mobile-action-dialog button { min-height: 44px; padding: 10px 12px; border-radius: 10px; }
-#mobile-action-dialog button:focus-visible, #mobile-action-fab:focus-visible { outline: 3px solid #91b7ff; outline-offset: 3px; }
-#mobile-action-items { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
-#mobile-action-items button { width: 76px; height: 76px; padding: 7px; border-radius: 50%; background: linear-gradient(145deg, #503746, #252630); color: white; font-size: 12px; line-height: 1.2; border: 1px solid #e89aad; box-shadow: 0 5px 16px #0008; }
-#mobile-action-items button:nth-child(2) { transform: translateY(-10px); }
+#mobile-action-dialog { color: #f8eed8; background: transparent; border: 0; padding: 0; }
+#mobile-action-dialog::backdrop { background: #17131980; backdrop-filter: blur(3px); }
+#mobile-action-dialog header { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid #b58791; border-radius: 24px; background: #302730; box-shadow: 0 8px 24px #0004; }
+#mobile-action-title { flex: 1; font-size: 14px; text-align: center; }
+#mobile-action-dialog button { min-height: 44px; padding: 10px 12px; border: 0; color: inherit; background: transparent; border-radius: 20px; cursor: pointer; }
+#mobile-action-dialog button:focus-visible, #mobile-action-fab:focus-visible { outline: 3px solid #f8eed8; outline-offset: 3px; }
+#mobile-action-items { position: absolute; right: 0; bottom: 0; width: 64px; height: 64px; }
+#mobile-action-items button { position: absolute; inset: 0; width: 64px; height: 64px; padding: 6px; border-radius: 50%; background: linear-gradient(145deg, #f8eed8, #eac6c4); color: #4b2937; font-size: 12px; font-weight: 600; line-height: 1.35; border: 1px solid #fff5e6; box-shadow: 0 6px 18px #0005, inset 0 1px #fff9; transform: translate(calc(-1 * cos(var(--angle)) * var(--radius)), calc(-1 * sin(var(--angle)) * var(--radius))); animation: mobile-action-bloom .28s cubic-bezier(.2,.8,.3,1.1) var(--delay) both; }
+#mobile-action-items button:hover { background: #fff3df; }
+#mobile-action-items button:active { background: #e7b4bd; }
 #mobile-action-items button[hidden], #mobile-selection-count[hidden] { display: none; }
 #mobile-selection-count { position: absolute; top: -3px; right: -3px; min-width: 24px; height: 24px; padding: 0 4px; display: grid; place-items: center; border: 2px solid #e11d48; border-radius: 99px; background: white; color: #be123c; font-size: 12px; font-weight: 700; }
 #mobile-action-items button:disabled { opacity: .4; cursor: default; }
+@keyframes mobile-action-bloom { from { opacity: 0; transform: translate(0, 0) scale(.25); } to { opacity: 1; } }
 @media (max-width: 639px) {
   #mobile-action-fab:not([hidden]) { display: block; position: fixed; z-index: 45; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); width: 64px; height: 64px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; transition: transform .18s; }
   #mobile-action-fab:active { transform: scale(.92); }
-  #mobile-action-dialog { position: fixed; inset: auto 12px max(92px, calc(env(safe-area-inset-bottom) + 80px)); width: calc(100% - 24px); max-width: 300px; max-height: calc(100dvh - 125px - env(safe-area-inset-bottom)); overflow-y: auto; margin: 0 0 0 auto; }
+  #mobile-action-dialog { position: fixed; inset: auto max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) auto; width: min(288px, calc(100vw - 32px - env(safe-area-inset-right))); height: min(var(--menu-height, 270px), calc(100dvh - 32px - env(safe-area-inset-bottom))); max-width: none; max-height: none; overflow: visible; margin: 0; }
+  #mobile-action-dialog #mobile-action-fab { position: absolute; right: 0; bottom: 0; }
   #select-page-button, #download-selected-button, #selection-bar, #queue-selection-mode, #queue-add-mobile, #queue-more-mobile, #queue-batch-actions { display: none !important; }
   #tab-browse, #tab-queue { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 }
-@media (prefers-reduced-motion: reduce) { #mobile-action-fab { transition: none; } }
+@media (prefers-reduced-motion: reduce) { #mobile-action-fab { transition: none; } #mobile-action-items button { animation: none; } }
