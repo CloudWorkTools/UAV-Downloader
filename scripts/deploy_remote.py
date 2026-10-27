@@ -3,6 +3,7 @@ import ipaddress
 import argparse
 import base64
 import json
+import hashlib
 from pathlib import Path, PurePosixPath
 import re
 import shlex
@@ -101,6 +102,7 @@ except Exception as exc:
 REMOTE_INSTALL = r'''
 import base64, json, pathlib, secrets, subprocess, sys, time, urllib.request
 root, image, host, port, bundle = sys.argv[1:6]
+assets = json.loads(sys.argv[8]) if len(sys.argv) > 8 else {}
 install_firecrawl = len(sys.argv) < 7 or sys.argv[6] == '1'
 staging_dir = sys.argv[7] if len(sys.argv) > 7 else ''
 root = pathlib.Path(root)
@@ -140,10 +142,14 @@ existing = subprocess.check_output(['docker', 'ps', '-a', '--format', '{{.Names}
 if name + '-previous' in existing:
     docker('rm', name + '-previous')
 old = name in existing
-if old:
-    docker('stop', name)
-    docker('rename', name, name + '-previous')
+renamed = False
+replacement_attempted = False
 try:
+    if old:
+        docker('stop', name)
+        docker('rename', name, name + '-previous')
+        renamed = True
+    replacement_attempted = True
     docker('run', '-d', '--name', name, '--restart', 'unless-stopped',
            '-p', f'{host}:{port}:8080', '-e', 'TZ=Asia/Taipei',
            '-e', 'APPDATA=/appdata',
@@ -160,23 +166,77 @@ try:
         time.sleep(1)
     else:
         raise RuntimeError('New deployment failed health check')
+    if assets:
+        import hashlib
+        info = json.loads(subprocess.check_output(['docker', 'inspect', name], text=True))[0]
+        if not info['State']['Running'] or info['Config']['Image'] != image:
+            raise RuntimeError('Deployed revision mismatch')
+        for path, digest in assets.items():
+            with opener.open(f'http://{host}:{port}' + path, timeout=20) as response:
+                if hashlib.sha256(response.read()).hexdigest() != digest:
+                    raise RuntimeError('Deployed frontend asset mismatch')
+        print('Deployed revision and frontend assets: OK', flush=True)
     print('Service startup: OK', flush=True)
     docker('exec', name, 'sh', '-c',
            'if [ "$PUID" -ne 0 ]; then exec gosu "$PUID:$PGID" python -c "$1"; else exec python -c "$1"; fi',
            'storage-probe', STORAGE_PROBE)
 except Exception:
-    subprocess.run(['docker', 'rm', '-f', name])
-    if old:
+    if replacement_attempted:
+        subprocess.run(['docker', 'rm', '-f', name])
+    if renamed:
         docker('rename', name + '-previous', name)
+    if old:
         docker('start', name)
     raise
-print(f'Deployed and healthy: http://{host}:{port}')
+print('Deployed and healthy')
 if bundle and install_firecrawl:
     smoke = subprocess.run(['docker', 'exec', name, 'python', '-c',
         "from uav_downloader.core.firecrawl import scrape; scrape('https://example.com')"])
     print('Private Firecrawl functional scrape: ' + ('OK; test each target site in settings' if smoke.returncode == 0 else 'FAILED; keep disabled and inspect the stack'))
 '''
 REMOTE_INSTALL = REMOTE_INSTALL.replace('STORAGE_PROBE)', repr(STORAGE_PROBE) + ')')
+QUEUE_SOURCE = (ROOT / 'scripts/deploy_queue.py').read_text()
+REMOTE_INSTALL = QUEUE_SOURCE + """
+import sys, subprocess
+queue = DeploymentQueue(sys.argv[1], 'http://' + sys.argv[3] + ':' + sys.argv[4])
+queue.lock()
+if queue.path.exists():
+    raise RuntimeError('Queue recovery required: run --recover-queue before deploying')
+existing = subprocess.check_output(['docker', 'ps', '-a', '--format', '{{.Names}}'], text=True).splitlines()
+try:
+    if 'uav-downloader' in existing:
+        queue.pause()
+    exec(INSTALL_SOURCE)
+finally:
+    queue.resume()
+""".replace('INSTALL_SOURCE', repr(REMOTE_INSTALL))
+
+
+def check_ci(commit, run_id=None):
+    if run_id is None:
+        runs = json.loads(subprocess.check_output(['gh', 'run', 'list', '--workflow', 'web-check.yml',
+            '--commit', commit, '--limit', '1', '--json', 'databaseId'], cwd=ROOT, text=True))
+        if not runs:
+            raise RuntimeError('No web-check.yml CI run for deployment revision')
+        run_id = str(runs[0]['databaseId'])
+    if not str(run_id).isdecimal():
+        raise ValueError('Invalid CI run ID')
+    run = json.loads(subprocess.check_output(['gh', 'api', 'repos/{owner}/{repo}/actions/runs/' + str(run_id)], cwd=ROOT, text=True))
+    if (run.get('head_sha') != commit or run.get('status') != 'completed'
+            or run.get('conclusion') != 'success' or run.get('path') != '.github/workflows/web-check.yml'):
+        raise RuntimeError('Deployment requires successful same-HEAD web-check.yml CI')
+    jobs = json.loads(subprocess.check_output(['gh', 'api', 'repos/{owner}/{repo}/actions/runs/' + str(run_id) + '/jobs?per_page=100'], cwd=ROOT, text=True))
+    if not any(job.get('name') == 'Web / UI compatibility' and job.get('conclusion') == 'success'
+               and any(step.get('name') == '驗證部署提交' and step.get('conclusion') == 'success'
+                       for step in job.get('steps', [])) for job in jobs.get('jobs', [])):
+        raise RuntimeError('CI lacks successful checked-out deployment revision proof')
+    print('Exact-revision GitHub CI: OK', flush=True)
+
+
+def asset_manifest():
+    frontend = ROOT / 'uav-web/frontend'
+    return {'/' if path.relative_to(frontend).as_posix() == 'index.html' else '/' + path.relative_to(frontend).as_posix():
+            hashlib.sha256(path.read_bytes()).hexdigest() for path in frontend.rglob('*') if path.is_file()}
 
 
 def check_image(image):
@@ -187,7 +247,7 @@ def check_image(image):
         subprocess.run(['docker', 'run', '--rm', '--user', '1000:1000',
                         '--mount', f'type=bind,source={ROOT},target=/workspace,readonly',
                         '--workdir', '/workspace', test_image], cwd=ROOT, check=True)
-        subprocess.run(['bash', 'scripts/check_web_container.sh', image], cwd=ROOT, check=True)
+        subprocess.run(['bash', 'scripts/check_web_container.sh', image, test_image], cwd=ROOT, check=True)
         subprocess.run(['bash', 'scripts/check_smb_batch_container.sh', image], cwd=ROOT, check=True)
     finally:
         subprocess.run(['docker', 'image', 'rm', test_image], stdout=subprocess.DEVNULL,
@@ -199,13 +259,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--with-firecrawl', action='store_true', default=True, help='Build and deploy the private Firecrawl stack (default)')
     parser.add_argument('--without-firecrawl', action='store_false', dest='with_firecrawl', help='Skip installing Firecrawl; disable it in settings when no stack is running')
+    parser.add_argument('--ci-run', help='Successful web-check.yml run ID (default: newest run for HEAD)')
+    parser.add_argument('--recover-queue', action='store_true', help='Resume only deployment-paused tasks from the remote journal')
     options = parser.parse_args()
     config = load_config()
+    if options.recover_queue:
+        ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', config['user'] + '@' + config['host']]
+        code = QUEUE_SOURCE + '\nqueue = DeploymentQueue(' + repr(config['remote_dir']) + ', ' + repr('http://' + config['host'] + ':' + str(config['port'])) + '); queue.lock(); queue.restore_service(); queue.resume()'
+        subprocess.run([*ssh, 'python3 -'], input=code, text=True, check=True)
+        print('Deployment queue recovery: OK', flush=True)
+        return
     if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
         raise RuntimeError('Commit source changes before deploying; local target settings remain ignored')
     target = config['user'] + '@' + config['host']
     ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', target]
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    check_ci(commit, options.ci_run)
     image = 'uav-downloader:' + commit
     images = [image, SPEACHES_IMAGE]
     bundle = base64.b64encode(json.dumps({
@@ -232,8 +301,7 @@ def main():
         with archive.open('rb') as source:
             subprocess.run([*ssh, 'docker load'], stdin=source, check=True)
     args = [config['remote_dir'], image, config['host'], str(config['port']), bundle, '1' if options.with_firecrawl else '0']
-    if config.get('staging_host_dir'):
-        args.append(config['staging_host_dir'])
+    args.extend([config.get('staging_host_dir', ''), json.dumps(asset_manifest())])
     subprocess.run([*ssh, 'python3 - ' + ' '.join(map(shlex.quote, args))], input=REMOTE_INSTALL, text=True, check=True)
 
 

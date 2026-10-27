@@ -30,6 +30,27 @@ def job_at(destination, action, name='MIMK-290'):
     return job
 
 
+def test_remux_failure_persists_reason_and_logs_task_and_phase(manager, monkeypatch, caplog, tmp_path):
+    from uav_downloader.core.media_errors import MediaRemuxError
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/mimk-290')
+    def download(job):
+        task.set_phase('重新封裝 MP4')
+        raise MediaRemuxError('MP4 重新封裝失敗（FFmpeg 22）：non monotonically increasing dts')
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+
+    assert task.status == 'failed'
+    assert 'non monotonically increasing dts' in task.error
+    assert manager.get_task(task.task_id).to_dict()['error'] == task.error
+    restored = tm.TaskManager(state_path=manager._state_path).get_task(task.task_id)
+    assert restored.error == task.error
+    assert restored.phase == '重新封裝 MP4'
+    assert any(task.task_id in record.getMessage() and '重新封裝 MP4' in record.getMessage()
+               and 'non monotonically increasing dts' in record.getMessage() for record in caplog.records)
+    assert task.url not in caplog.text
+
+
 def test_same_code_is_skipped_across_sites_and_versions(manager):
     first = manager.add_task('https://missav.ai/mimk-290')
     duplicate = manager.add_task('https://jable.tv/videos/MIMK-290-chinese-subtitle/')
@@ -275,8 +296,8 @@ def test_cleanup_failure_survives_restart_without_claiming_files_removed(manager
     restored = tm.TaskManager(state_path=path)
     assert 'permission denied' in restored.list_tasks()[0]['error']
     assert restored.cancel_task(task.task_id)
-    assert restored.list_tasks()[0]['status'] == 'failed'
-    assert '無法確認清除範圍' in restored.list_tasks()[0]['error']
+    assert restored.list_tasks()[0]['status'] == 'cancelled'
+    assert '檔案已保留' in restored.list_tasks()[0]['error']
 
 
 def test_cancelled_task_with_storage_close_failure_stays_visible(manager, monkeypatch):
@@ -877,3 +898,351 @@ def test_batch_edit_assigns_independent_smb_roots(manager, monkeypatch):
     assert first.dest != second.dest
     assert first.nas_settings['_smb_path'] == first.dest
     assert second.nas_settings['_smb_path'] == second.dest
+
+
+def batch_payload(manager, request_id, urls, **options):
+    from uav_downloader.daemon import download_batch
+    body = dict(name='collection', policy='merge', request_id=request_id, urls=urls, **options)
+    return dict(body, expected_destination=download_batch.destination(manager, body)['destination'])
+
+
+@pytest.mark.parametrize('status', ['pending', 'downloading', 'paused', 'cancelling'])
+@pytest.mark.parametrize('storage', ['query', 'settings'])
+def test_batch_append_preserves_original_and_skips_duplicates(manager, tmp_path, status, storage):
+    manager._state_path = tmp_path / 'tasks.json'
+    from uav_downloader.daemon import download_batch
+    first_body = batch_payload(manager, 'first', ['https://missav.ai/mimk-290'], storage=storage)
+    first = download_batch.submit(manager, first_body)['tasks'][0]
+    original = manager.get_task(first['task_id'])
+    original.status = status
+    snapshot = original.to_dict()
+    body = batch_payload(manager, 'second', ['https://jable.tv/videos/mimk-290/', 'https://missav.ai/mimk-291'], storage=storage)
+    preview = download_batch.destination(manager, body)
+    assert preview['busy'] and not preview['overwrite_busy'] and preview['can_submit']
+    result = download_batch.submit(manager, body)
+    assert [task['status'] for task in result['tasks']] == ['skipped', 'pending']
+    assert manager.get_task(first['task_id']).to_dict() == snapshot
+    assert {task['dest'] for task in result['tasks']} == {original.dest}
+    assert download_batch.submit(manager, body) == result
+    assert len(manager._tasks) == 3
+    duplicates = download_batch.submit(manager, dict(body, request_id='all-duplicates'))
+    assert all(task['status'] == 'skipped' for task in duplicates['tasks'])
+    assert len(manager._queue) == 2
+    assert not download_batch.destination(manager, dict(body, policy='overwrite'))['can_submit']
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert set(restored._tasks) == set(manager._tasks)
+    assert restored.get_task(result['tasks'][1]['task_id']).dest == original.dest
+
+
+def test_batch_append_rechecks_overwrite_after_preview(manager):
+    from uav_downloader.daemon import download_batch
+    append = batch_payload(manager, 'append', ['https://missav.ai/mimk-291'])
+    overwrite = dict(append, request_id='overwrite', policy='overwrite', urls=['https://missav.ai/mimk-290'])
+    download_batch.submit(manager, overwrite)
+    before_tasks, before_queue = dict(manager._tasks), list(manager._queue)
+    preview = download_batch.destination(manager, append)
+    assert preview['busy'] and preview['overwrite_busy'] and not preview['can_submit']
+    with pytest.raises(ValueError, match='覆寫任務'):
+        download_batch.submit(manager, append)
+    assert manager._tasks == before_tasks and manager._queue == before_queue
+
+
+def test_batch_append_concurrent_retry_and_duplicate_requests(manager):
+    from concurrent.futures import ThreadPoolExecutor
+    from uav_downloader.daemon import download_batch
+    first = batch_payload(manager, 'first', ['https://missav.ai/mimk-290'])
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: download_batch.submit(manager, first), range(16)))
+    assert all(result == results[0] for result in results)
+    assert len(manager._tasks) == len(manager._queue) == 1
+    bodies = [batch_payload(manager, str(i), ['https://missav.ai/mimk-291']) for i in range(8)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda body: download_batch.submit(manager, body), bodies))
+    assert sum(result['tasks'][0]['status'] == 'pending' for result in results) == 1
+    assert len(manager._queue) == 2
+
+
+def test_batch_append_save_failure_preserves_original(manager, monkeypatch, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    from uav_downloader.daemon import download_batch
+    body = batch_payload(manager, 'first', ['https://missav.ai/mimk-290'])
+    first = download_batch.submit(manager, body)
+    before_tasks, before_queue = dict(manager._tasks), list(manager._queue)
+    before_state = Path(manager._state_path).read_bytes()
+    monkeypatch.setattr(manager, '_save_tasks', MagicMock(side_effect=OSError('disk full')))
+    with pytest.raises(OSError, match='disk full'):
+        download_batch.submit(manager, batch_payload(manager, 'second', ['https://missav.ai/mimk-291']))
+    assert manager._tasks == before_tasks and manager._queue == before_queue
+    assert Path(manager._state_path).read_bytes() == before_state
+    assert download_batch.submit(manager, body) == first
+
+
+def test_batch_append_cancel_preserves_other_batch_files(manager, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    from uav_downloader.daemon import download_batch
+    from uav_downloader.daemon.download_files import DownloadFiles
+    first = download_batch.submit(manager, batch_payload(manager, 'first', ['https://missav.ai/mimk-290']))
+    second = download_batch.submit(manager, batch_payload(manager, 'second', ['https://missav.ai/mimk-291']))
+    tasks = [manager.get_task(result['tasks'][0]['task_id']) for result in (first, second)]
+    for index, task in enumerate(tasks):
+        task.files = DownloadFiles(task.dest, task.task_id)
+        Path(task.files.workdir, f'{index}.mp4').write_bytes(bytes([index]))
+        task.files.publish(task.cancelled_event)
+    manager._save_tasks()
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert restored.cancel_task(tasks[0].task_id)
+    assert not Path(tasks[0].dest, '0.mp4').exists()
+    assert Path(tasks[1].dest, '1.mp4').read_bytes() == bytes([1])
+    assert Path(tasks[1].files.workdir).is_dir()
+
+
+@pytest.mark.parametrize('status', ['pending', 'paused', 'failed', 'cancelled'])
+def test_start_now_bypasses_limit_once_and_preserves_settings(manager, monkeypatch, status):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    manager.max_concurrent = 1
+    occupied = manager.add_task('https://missav.ai/mimk-100')
+    task = manager.add_task('https://missav.ai/mimk-101')
+    task.status = status
+    if status != 'pending':
+        manager._queue.remove(task.task_id)
+    manager._queue.remove(occupied.task_id)
+    manager._active[occupied.task_id] = occupied
+    started, release = threading.Event(), threading.Event()
+    calls = []
+    def worker(current):
+        calls.append(current.task_id)
+        started.set()
+        release.wait(3)
+        with manager._lock:
+            manager._active.pop(current.task_id, None)
+    monkeypatch.setattr(manager, '_run_task', worker)
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: manager.start_now(task.task_id), range(16)))
+        assert started.wait(1)
+        assert results.count(True) == 1
+        assert calls == [task.task_id]
+        assert manager.max_concurrent == 1 and len(manager._active) == 2
+        assert occupied.task_id in manager._active and task.task_id not in manager._queue
+    finally:
+        release.set()
+        if task.thread:
+            task.thread.join(2)
+
+
+def test_start_now_does_not_release_extra_normal_slots(manager, monkeypatch):
+    import threading
+    manager.max_concurrent = 1
+    tasks = [manager.add_task(f'https://missav.ai/mimk-{i}') for i in (100,101,102)]
+    occupied, forced, waiting = tasks
+    manager._queue.remove(occupied.task_id)
+    manager._active[occupied.task_id] = occupied
+    forced_started, waiting_started, release = threading.Event(), threading.Event(), threading.Event()
+    def worker(task):
+        (forced_started if task is forced else waiting_started).set()
+        release.wait(3)
+        with manager._lock:
+            manager._active.pop(task.task_id, None)
+    monkeypatch.setattr(manager, '_run_task', worker)
+    dispatcher = threading.Thread(target=manager._dispatch_loop)
+    try:
+        assert manager.start_now(forced.task_id)
+        assert forced_started.wait(1)
+        dispatcher.start()
+        assert not waiting_started.wait(.1)
+        release.set()
+        forced.thread.join(2)
+        assert not waiting_started.wait(.1), 'The ordinary limit must still count the occupied task'
+        with manager._lock:
+            manager._active.pop(occupied.task_id)
+        assert waiting_started.wait(2)
+    finally:
+        manager._running = False
+        release.set()
+        if dispatcher.ident:
+            dispatcher.join(2)
+        if waiting.thread:
+            waiting.thread.join(2)
+
+
+def test_start_now_rejects_duplicates_and_finished_tasks(manager, monkeypatch):
+    running = manager.add_task('https://missav.ai/mimk-100')
+    duplicate = manager.add_task('https://jable.tv/videos/mimk-100/')
+    duplicate.status = 'pending'
+    with pytest.raises(ValueError, match='相同'):
+        manager.start_now(duplicate.task_id)
+    for status in ('completed', 'skipped', 'downloading', 'pausing'):
+        running.status = status
+        assert not manager.start_now(running.task_id)
+    assert not manager.start_now('missing')
+
+
+@pytest.mark.parametrize('failure', ['construct', 'start'])
+def test_start_now_thread_failure_preserves_queue(manager, monkeypatch, failure):
+    task = manager.add_task('https://missav.ai/mimk-100')
+    before = list(manager._queue)
+    if failure == 'construct':
+        monkeypatch.setattr(tm.threading, 'Thread', MagicMock(side_effect=RuntimeError('no threads')))
+    else:
+        monkeypatch.setattr(tm.threading.Thread, 'start', MagicMock(side_effect=RuntimeError('no threads')))
+    with pytest.raises(RuntimeError, match='no threads'):
+        manager.start_now(task.task_id)
+    assert manager._queue == before and not manager._active
+
+
+def test_start_now_preserves_subtitle_only_retry_history_exemption(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/mimk-100', enable_subtitles=True, subtitle_mode='ja')
+    task.name, task.status = 'MIMK-100', 'completed'
+    tm.get_history_manager().record_download(task.url, title=task.name)
+    assert manager.restart_task(task.task_id, subtitles_only=True)
+    occupied = manager.add_task('https://missav.ai/mimk-101')
+    manager._queue.remove(occupied.task_id)
+    manager._active[occupied.task_id] = occupied
+    manager.max_concurrent = 1
+    thread = MagicMock()
+    monkeypatch.setattr(tm.threading, 'Thread', MagicMock(return_value=thread))
+    assert manager.start_now(task.task_id)
+    thread.start.assert_called_once_with()
+    assert task.subtitles_only and len(manager._active) == 2
+
+
+def test_batch_cancel_stops_entire_selection_before_cleaning(manager, monkeypatch):
+    tasks = [manager.add_task(f'https://missav.ai/batch-{i}') for i in range(4)]
+    tasks[0].status = 'downloading'
+    manager._active[tasks[0].task_id] = object()
+    tasks[1].status = 'failed'
+    tasks[3].status = 'completed'
+    cleaned = []
+    original = manager._cleanup_cancelled
+
+    def cleanup(task):
+        assert all(t.cancelled_event.is_set() for t in tasks[:3])
+        assert not any(t.task_id in manager._queue for t in tasks[:3])
+        cleaned.append(task.task_id)
+        if task is tasks[1]:
+            task.status, task.error = 'failed', 'NAS 離線'
+        else:
+            original(task)
+
+    monkeypatch.setattr(manager, '_cleanup_cancelled', cleanup)
+    ids = [t.task_id for t in tasks]
+    result = manager.cancel_tasks(ids + [ids[0], 'missing'])
+    assert result == {'accepted': ids[:3], 'skipped': [ids[3], 'missing'], 'errors': []}
+    assert cleaned == ids[1:3], 'One cleanup failure must not stop the batch'
+    assert [t.status for t in tasks] == ['cancelling', 'failed', 'cancelled', 'completed']
+    assert not tasks[3].cancelled_event.is_set()
+
+
+@pytest.mark.parametrize('ids', [None, [], 'one', ['one', 2], ['']])
+def test_batch_cancel_rejects_invalid_selection_before_mutating(manager, ids):
+    task = manager.add_task('https://missav.ai/batch-invalid')
+    with pytest.raises(ValueError):
+        manager.cancel_tasks(ids)
+    assert task.status == 'pending'
+    assert not task.cancelled_event.is_set()
+
+
+def test_batch_remove_preserves_completed_and_unverified_files(manager, tmp_path):
+    tasks = [manager.add_task(f'https://missav.ai/remove-{i}') for i in range(4)]
+    files = tm.DownloadFiles(tasks[0].dest, tasks[0].task_id)
+    video = Path(tasks[0].dest) / 'finished.mp4'
+    video.write_bytes(b'keep')
+    files.published.append(str(video))
+    tasks[0].files = files
+    tasks[0].status = 'completed'
+    tasks[1].status = 'cancelled'
+    tasks[2].status = 'failed'
+    tasks[2].cleanup_unverified = True
+    ids = [t.task_id for t in tasks]
+    workspace = Path(tasks[2].dest) / f'.uav-{tasks[2].task_id}-unknown'
+    workspace.mkdir()
+    unknown = workspace / 'segment.part'
+    unknown.write_bytes(b'preserve')
+    result = manager.cancel_tasks(ids, remove_records=True)
+    assert result['unverified'] == [ids[2]]
+    assert all(manager.get_task(tid) is None for tid in ids)
+    assert video.read_bytes() == b'keep'
+    assert unknown.read_bytes() == b'preserve'
+
+
+def test_batch_removal_finishes_in_worker_without_browser_polling(manager, monkeypatch, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/removal-worker')
+    def download(job):
+        Path(job._temp_folder).mkdir(parents=True, exist_ok=True)
+        (Path(job._temp_folder) / '000001.ts').write_bytes(b'segment')
+        manager.cancel_tasks([task.task_id], remove_records=True)
+        assert manager.get_task(task.task_id) is task
+        assert task.status == 'cancelling'
+        import json
+        saved = json.loads(manager._state_path.read_text())
+        assert next(record for record in saved if record['task_id'] == task.task_id)['remove_after_cancel'] is True
+        return False
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    manager._run_task(task)
+    assert manager.get_task(task.task_id) is None
+    assert not Path(task.files.workdir).exists()
+
+
+def test_retry_after_failed_removal_clears_removal_intent(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/retry-removal')
+    task.status = 'failed'
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    def fail_cleanup(**kwargs):
+        raise OSError('permission denied')
+    monkeypatch.setattr(task.files, 'cleanup', fail_cleanup)
+    manager.cancel_tasks([task.task_id], remove_records=True)
+    assert task.remove_after_cancel and task.status == 'failed'
+    assert 'permission denied' in task.error
+    assert manager.restart_task(task.task_id)
+    assert task.status == 'pending'
+    assert task.remove_after_cancel is False
+
+
+def test_batch_removal_saves_intent_and_result_once_each(manager, monkeypatch, tmp_path):
+    tasks = [manager.add_task(f'https://missav.ai/save-batch-{i}') for i in range(4)]
+    manager._state_path = tmp_path / 'tasks.json'
+    replace = MagicMock(wraps=tm.os.replace)
+    monkeypatch.setattr(tm.os, 'replace', replace)
+    manager.cancel_tasks([task.task_id for task in tasks], remove_records=True)
+    assert replace.call_count == 2, 'Persist batch intent and final result, not the entire queue per item'
+
+
+def test_restored_unverified_task_can_be_removed_without_deleting_its_workspace(manager, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/restored-unknown')
+    task.status = 'failed'
+    manager._save_tasks()
+    workspace = Path(task.dest) / f'.uav-{task.task_id}-old'
+    workspace.mkdir(parents=True)
+    fragment = workspace / 'fragment.part'
+    fragment.write_bytes(b'keep')
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert restored.get_task(task.task_id).cleanup_unverified
+    result = restored.cancel_tasks([task.task_id], remove_records=True)
+    assert result['unverified'] == [task.task_id]
+    assert restored.get_task(task.task_id) is None
+    assert fragment.read_bytes() == b'keep'
+    assert tm.TaskManager(state_path=manager._state_path).get_task(task.task_id) is None
+
+
+def test_unverified_cancel_then_restart_and_remove_reports_preserved_files(manager, tmp_path):
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/unknown-cancel-first')
+    task.status = 'failed'
+    manager._save_tasks()
+    workspace = Path(task.dest) / f'.uav-{task.task_id}-old'
+    workspace.mkdir(parents=True)
+    fragment = workspace / 'fragment.part'
+    fragment.write_bytes(b'keep')
+    first = tm.TaskManager(state_path=manager._state_path)
+    assert first.cancel_task(task.task_id)
+    assert first.get_task(task.task_id).status == 'cancelled'
+    assert '保留' in first.get_task(task.task_id).error
+    second = tm.TaskManager(state_path=manager._state_path)
+    assert second.get_task(task.task_id).cleanup_unverified
+    result = second.cancel_tasks([task.task_id], remove_records=True)
+    assert result['unverified'] == [task.task_id]
+    assert second.get_task(task.task_id) is None
+    assert fragment.read_bytes() == b'keep'

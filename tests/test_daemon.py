@@ -248,6 +248,15 @@ class TestDaemon(unittest.TestCase):
             self.assertGreaterEqual(result['removed'], 1)
             self.assertIsNone(self.server.task_manager.get_task(completed.task_id))
 
+    def test_start_now_action_uses_immediate_dispatch_and_rejects_busy_task(self):
+        for allowed, expected in ((True, 200), (False, 409)):
+            with patch.object(self.server.task_manager, 'start_now', return_value=allowed) as operation:
+                status, body = request_json(f'{self.base_url}/api/download/action', method='POST',
+                                           data={'action':'start_now', 'task_id':'force-task'})
+            self.assertEqual(status, expected)
+            self.assertEqual(body['success'], allowed)
+            operation.assert_called_once_with('force-task')
+
     def test_nas_space_action_returns_capacity_without_credentials(self):
         result = {'enabled':True, 'space':{'total_bytes':1000, 'free_bytes':400, 'available_bytes':300, 'used_bytes':600}}
         with patch('uav_downloader.daemon.nas.storage_space', return_value=result):

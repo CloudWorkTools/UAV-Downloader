@@ -332,6 +332,9 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
             elif path == '/api/download/action':
                 action, task_id = body.get('action'), body.get('task_id')
+                if action in ('cancel', 'cancel_remove'):
+                    return self._send_json({'success': True, **self.task_manager.cancel_tasks(
+                        body.get('task_ids'), remove_records=action == 'cancel_remove')})
                 if action == 'update_settings':
                     result = self.task_manager.update_tasks(body.get('task_ids'), storage=body.get('storage'),
                                                             dest=body.get('dest'), subtitle_mode=body.get('subtitle_mode'),
@@ -354,6 +357,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     return self._send_json(result)
                 operations = {'retry_subtitles': lambda task_id: self.task_manager.restart_task(task_id, subtitles_only=True),
                               'pause': self.task_manager.pause_task,
+                              'start_now': self.task_manager.start_now,
                               'resume': self.task_manager.restart_task,
                               'retry': self.task_manager.restart_task,
                               'remove': self.task_manager.remove_task}

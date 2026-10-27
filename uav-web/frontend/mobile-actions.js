@@ -1,0 +1,87 @@
+window.addEventListener('DOMContentLoaded', () => {
+  const mobile = matchMedia('(max-width: 639px)');
+  const byId = id => document.getElementById(id);
+  const fab = document.createElement('button');
+  fab.id = 'mobile-action-fab';
+  fab.type = 'button';
+  fab.setAttribute('aria-label', '開啟功能選單');
+  fab.setAttribute('aria-expanded', 'false');
+  fab.setAttribute('aria-controls', 'mobile-action-dialog');
+  fab.innerHTML = '<img src="/mascot-fab.svg" alt="" width="64" height="64">';
+  const dialog = document.createElement('dialog');
+  dialog.id = 'mobile-action-dialog';
+  dialog.hidden = true;
+  dialog.setAttribute('aria-labelledby', 'mobile-action-title');
+  dialog.innerHTML = '<header><button type="button" id="mobile-action-back" aria-label="返回上一層">‹ 返回</button><strong id="mobile-action-title"></strong><button type="button" id="mobile-action-close" aria-label="關閉功能選單">✕</button></header><div id="mobile-action-items"></div>';
+  document.body.append(fab, dialog);
+  const groups = {
+    browse: ['瀏覽功能', [['影片選取', 'selection'], ['新增網址', 'queue-add-mobile']]],
+    queue: ['下載功能', [['新增任務', 'queue-add-mobile'], ['批次處理', 'batch'], ['佇列整理', 'organize']]],
+    selection: ['影片選取', ['select-page-button', 'download-selected-button', 'browse-clear-mobile']],
+    batch: ['批次處理', ['queue-selection-mode', 'select-tasks-button', 'pause-tasks-button', 'resume-tasks-button', 'retry-tasks-button', 'edit-tasks-button', 'cancel-tasks-button']],
+    organize: ['佇列整理', ['resume-unfinished-button', 'remove-duplicate-tasks-button', 'clear-completed-button', 'queue-probe-mobile']],
+  };
+  let stack = [];
+  let page;
+  function close() {
+    if (!dialog.hidden) dialog.close();
+    dialog.hidden = true;
+    fab.setAttribute('aria-expanded', 'false');
+    fab.setAttribute('aria-label', '開啟功能選單');
+    if (!fab.hidden && mobile.matches) fab.focus();
+  }
+  function syncRows() {
+    dialog.querySelectorAll('[data-mobile-source]').forEach(button => {
+      const source = byId(button.dataset.mobileSource);
+      button.textContent = source.textContent;
+      button.disabled = source.disabled || source.hidden;
+    });
+  }
+  function render() {
+    const [title, entries] = groups[stack.at(-1)];
+    byId('mobile-action-title').textContent = title;
+    byId('mobile-action-back').hidden = stack.length === 1;
+    byId('mobile-action-items').replaceChildren(...entries.map(entry => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      if (Array.isArray(entry) && entry[1] in groups) {
+        button.textContent = entry[0] + ' ›';
+        button.dataset.mobileGroup = entry[1];
+        button.onclick = () => {stack.push(entry[1]);render();};
+      } else {
+        const id = Array.isArray(entry) ? entry[1] : entry;
+        button.dataset.mobileSource = id;
+        button.onclick = () => {const source = byId(id);if (source.disabled || source.hidden) return;close();source.click();};
+      }
+      return button;
+    }));
+    syncRows();
+    (dialog.querySelector('#mobile-action-items button:not(:disabled)') || byId('mobile-action-close')).focus();
+  }
+  fab.onclick = () => {
+    stack = [page];
+    dialog.hidden = false;
+    dialog.showModal();
+    fab.setAttribute('aria-expanded', 'true');
+    fab.setAttribute('aria-label', '關閉功能選單');
+    render();
+  };
+  byId('mobile-action-close').onclick = close;
+  byId('mobile-action-back').onclick = () => {stack.pop();render();};
+  dialog.addEventListener('cancel', event => {event.preventDefault();close();});
+  dialog.addEventListener('click', event => {if (event.target === dialog) {const r = dialog.getBoundingClientRect();if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) close();}});
+  function syncPage() {
+    const next = ['browse', 'queue'].find(id => !byId('tab-' + id).classList.contains('hidden'));
+    if (next !== page || !mobile.matches) close();
+    page = next;
+    fab.hidden = !next;
+  }
+  const tabObserver = new MutationObserver(syncPage);
+  ['browse', 'queue'].forEach(id => tabObserver.observe(byId('tab-' + id), {attributes:true, attributeFilter:['class']}));
+  const stateObserver = new MutationObserver(syncRows);
+  Object.values(groups).flatMap(group => group[1]).filter(entry => typeof entry === 'string').forEach(id => {
+    stateObserver.observe(byId(id), {attributes:true, attributeFilter:['disabled','hidden'],childList:true,subtree:true,characterData:true});
+  });
+  mobile.addEventListener('change', syncPage);
+  syncPage();
+});

@@ -162,10 +162,9 @@ def test_windows_distribution_is_hardened_and_verifiable():
         assert documentation in workflow
 
 
-def test_all_readme_languages_are_complete_and_cross_linked():
+def test_web_readme_and_upstream_desktop_readmes_have_working_entry_points():
     root = Path(__file__).resolve().parents[1]
     readmes = {
-        'zh': root / 'README.md',
         'zh-Hans': root / 'README.zh-CN.md',
         'en': root / 'README.en.md',
         'ja': root / 'README.ja.md',
@@ -185,7 +184,15 @@ def test_all_readme_languages_are_complete_and_cross_linked():
             'JableTV', 'MissAV', 'SupJav', 'Hanime1',
         )), language
 
-    assert '重新排隊' in readmes['zh'].read_text(encoding='utf-8')
+    web = (root / 'README.md').read_text(encoding='utf-8')
+    assert web.startswith('# 影匣')
+    assert all(token in web for token in ('JableTV', 'MissAV', 'SupJav', 'Hanime1', 'NAS',
+                                          'docker compose up -d --build --wait', '/api/status'))
+    assert all(f'({path})' in web for path in ('docs/install.md', 'docs/web-ui.md', 'docs/README.md'))
+    for path in [root / 'README.md', *readmes.values()]:
+        for target in re.findall(r'\]\(([^)]+)\)', path.read_text(encoding='utf-8')):
+            if not target.startswith(('https://', 'http://', '#')):
+                assert (path.parent / target.split('#', 1)[0]).is_file(), (path.name, target)
     assert '重新排队' in readmes['zh-Hans'].read_text(encoding='utf-8')
     assert 'requeue' in readmes['en'].read_text(encoding='utf-8').lower()
     assert '再キュー' in readmes['ja'].read_text(encoding='utf-8')
@@ -215,8 +222,9 @@ def test_windows_security_guidance_does_not_ask_for_defender_bypass():
     assert 'unsigned' in security.lower()
     assert '不要為了上傳而自行還原隔離檔' in security
     assert 'Do not restore a quarantined file merely to upload it' in security
-    assert '若備用包也被偵測，請停止並回報' in traditional
-    assert 'stop and report it if the fallback is also detected' in english
+    assert '(docs/README.md)' in traditional
+    assert '(../WINDOWS_SECURITY.md)' in (root / 'docs/README.md').read_text(encoding='utf-8')
+    assert '(./WINDOWS_SECURITY.md)' in english
 
     lowered = combined.lower()
     for unsafe_advice in (

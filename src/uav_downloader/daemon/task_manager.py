@@ -19,6 +19,7 @@ from uav_downloader.core import config
 from uav_downloader.daemon import nas
 from uav_downloader.daemon.download_files import DownloadFiles, existing_video, video_key
 from uav_downloader.core.history import get_history_manager
+from uav_downloader.core.media_errors import MediaRemuxError, safe_media_message
 from uav_downloader.core.storage import SMB_PATH_ROOT, StorageWriteError, storage_fs, probe_destination
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.sites.base import MirrorsBlockedError
@@ -39,6 +40,7 @@ class DownloadTask:
     files: Any = field(default=None, repr=False)
     remote_files: list = field(default_factory=list, repr=False)
     cleanup_unverified: bool = field(default=False, repr=False)
+    remove_after_cancel: bool = field(default=False, repr=False)
     name: str = ""
     status: str = "pending"
     progress: float = 0.0
@@ -129,6 +131,8 @@ class TaskManager:
             for record in records:
                 files = record.pop('files', None)
                 task = DownloadTask(**record)
+                if task.remove_after_cancel and task.status in ('completed', 'skipped', 'cancelled'):
+                    continue
                 if task.dest.startswith('smb://') and not task.nas_settings:
                     current = nas.load_settings()
                     if current.get('enabled') and current.get('mode') == 'smb' and nas.public_destination(current) == task.dest:
@@ -148,7 +152,7 @@ class TaskManager:
                 if files:
                     task.files = DownloadFiles.restore(task.dest, task.task_id, files, task.staging_dir)
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
-                task.cleanup_unverified = not task.subtitles_only and not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused")
+                task.cleanup_unverified = task.cleanup_unverified or (not task.subtitles_only and not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused"))
                 if task.status == 'pausing':
                     task.status = 'paused'
                 if task.status not in ("completed", "skipped", "cancelled", "failed", "paused"):
@@ -167,6 +171,10 @@ class TaskManager:
             records = []
             for task in self._tasks.values():
                 record = {key: value for key, value in task.to_dict().items() if key not in ('speed_formatted', 'final_dest')}
+                if task.remove_after_cancel:
+                    record['remove_after_cancel'] = True
+                if task.cleanup_unverified:
+                    record['cleanup_unverified'] = True
                 record['dest'] = task.dest
                 record['nas_settings'] = {key: value for key, value in task.nas_settings.items()
                                           if key not in ('password', 'password_encrypted', 'password_saved')}
@@ -436,6 +444,15 @@ class TaskManager:
             self._save_tasks()
             return True
 
+    def _restore_task_password(self, settings):
+        if settings.get('_task_password_encrypted') and not settings.get('password'):
+            settings['password'] = nas.decrypt_password(settings['_task_password_encrypted'])
+        if settings.get('enabled') and settings.get('mode') in ('smb', 'upload') and not settings.get('password'):
+            current = nas.load_settings(secret=True)
+            if not current.get('enabled') or any(current.get(k) != settings.get(k) for k in ('host', 'share', 'username', 'mode')):
+                raise nas.NasError('NAS 設定已變更，請恢復原任務的 NAS 連線設定後重試')
+            settings['password'] = current['password']
+
     def restart_task(self, task_id: str, *, subtitles_only=False) -> bool:
         with self._lock:
             task = self._tasks.get(task_id)
@@ -443,13 +460,7 @@ class TaskManager:
                 return False
             if subtitles_only and (not task.name or not task.enable_subtitles or task.subtitle_mode == 'none'):
                 return False
-            if task.nas_settings.get('_task_password_encrypted') and not task.nas_settings.get('password'):
-                task.nas_settings['password'] = nas.decrypt_password(task.nas_settings['_task_password_encrypted'])
-            if task.nas_settings.get('enabled') and task.nas_settings.get('mode') in ('smb', 'upload') and not task.nas_settings.get('password'):
-                current = nas.load_settings(secret=True)
-                if not current.get('enabled') or any(current.get(k) != task.nas_settings.get(k) for k in ('host', 'share', 'username', 'mode')):
-                    raise ValueError('NAS 設定已變更，請恢復原任務的 NAS 連線設定後重試')
-                task.nas_settings['password'] = current['password']
+            self._restore_task_password(task.nas_settings)
             if task.dest.startswith('smb:') and not task.nas_settings.get('enabled'):
                 raise ValueError('舊任務缺少 NAS 設定，請使用目前儲存設定重新加入網址')
             if not (subtitles_only or task.subtitles_only):
@@ -463,6 +474,7 @@ class TaskManager:
                 task.remote_files = []
                 task.cleanup_unverified = False
             task.cancelled_event.clear()
+            task.remove_after_cancel = False
             task.paused_event.clear()
             task.job = None
             task.error = None
@@ -474,6 +486,33 @@ class TaskManager:
             self._save_tasks()
         self.start_dispatcher()
         return True
+
+    def start_now(self, task_id: str) -> bool:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task or task_id in self._active or task.status not in ('pending', 'paused', 'failed', 'cancelled'):
+                return False
+            if task.status != 'pending':
+                if not self.restart_task(task_id):
+                    return False
+            elif not task.subtitles_only:
+                reason = self._duplicate_reason(task)
+                if reason:
+                    raise ValueError(reason)
+            position = self._queue.index(task_id) if task_id in self._queue else len(self._queue)
+            if task_id in self._queue:
+                self._queue.remove(task_id)
+            # Reserve under the dispatcher lock so concurrent requests cannot start it twice.
+            self._active[task_id] = task
+            try:
+                task.thread = threading.Thread(target=self._run_task, args=(task,), daemon=True,
+                                               name=f'worker-{task_id}')
+                task.thread.start()
+            except Exception:
+                self._active.pop(task_id, None)
+                self._queue.insert(position, task_id)
+                raise
+            return True
 
     def resume_unfinished(self):
         with self._lock:
@@ -492,7 +531,7 @@ class TaskManager:
             waiting = sum(task.status == 'pending' and task.task_id not in self._active for task in self._tasks.values())
             return {'resumed': resumed, 'errors': errors, 'waiting': waiting, 'running': len(self._active)}
 
-    def remove_task(self, task_id: str) -> bool:
+    def remove_task(self, task_id: str, *, defer_save=False) -> bool:
         with self._lock:
             task = self._tasks.get(task_id)
             if not task or task_id in self._active or task.status not in ('completed', 'skipped', 'cancelled', 'failed'):
@@ -500,8 +539,13 @@ class TaskManager:
             if task.files and task.status == 'failed':
                 raise ValueError('此任務仍有暫存檔，請先取消並清除檔案後再移除紀錄')
             del self._tasks[task_id]
-            self._save_tasks()
+            if not defer_save:
+                self._save_tasks()
             return True
+
+    def _remove_requested_record(self, task, *, defer_save=False):
+        if task.remove_after_cancel and task.status in ('completed', 'skipped', 'cancelled'):
+            self.remove_task(task.task_id, defer_save=defer_save)
 
     def clear_completed(self) -> int:
         with self._lock:
@@ -582,7 +626,47 @@ class TaskManager:
             return "相同番號或網址已有下載紀錄，已略過"
         return ""
 
-    def cancel_task(self, task_id: str) -> bool:
+    def cancel_tasks(self, task_ids, *, remove_records=False):
+        if (not isinstance(task_ids, list) or not task_ids
+                or any(not isinstance(tid, str) or not tid for tid in task_ids)):
+            raise ValueError('請提供非空的 task_ids 文字清單')
+        accepted, skipped, errors, unverified = [], [], [], []
+        with self._lock:
+            for tid in dict.fromkeys(task_ids):
+                task = self._tasks.get(tid)
+                if task and remove_records:
+                    task.remove_after_cancel = True
+                if task and task.cleanup_unverified and task.status not in ('completed', 'skipped'):
+                    unverified.append(tid)
+                if not task or task.status in ('completed', 'skipped', 'cancelled'):
+                    skipped.append(tid)
+                    continue
+                # 先停止整批派送，避免清理前面的任務時後面的任務開始下載。
+                task.cancelled_event.set()
+                if task.job is not None:
+                    task.job._cancel_job = True
+                task.status = 'cancelling'
+                if tid in self._queue:
+                    self._queue.remove(tid)
+                accepted.append(tid)
+            self._save_tasks()
+        accepted_ids = set(accepted)
+        for tid in accepted + skipped:
+            try:
+                if tid in accepted_ids:
+                    self.cancel_task(tid, defer_save=True)
+                task = self.get_task(tid)
+                if task:
+                    self._remove_requested_record(task, defer_save=True)
+            except Exception as exc:
+                errors.append({'task_id': tid, 'error': str(exc)})
+        self._save_tasks()
+        result = {'accepted': accepted, 'skipped': skipped, 'errors': errors}
+        if remove_records:
+            result['unverified'] = unverified
+        return result
+
+    def cancel_task(self, task_id: str, *, defer_save=False) -> bool:
         with self._lock:
             task = self._tasks.get(task_id)
             if not task or task.status in ("completed", "skipped", "cancelled"):
@@ -600,20 +684,26 @@ class TaskManager:
         if not active:
             try:
                 with ExitStack() as storage:
+                    if not task.cleanup_unverified and (task.files or task.remote_files):
+                        self._restore_task_password(task.nas_settings)
                     if task.files and task.nas_settings.get("mode") == "smb":
                         storage.enter_context(nas.open_smb_storage(task.nas_settings, task.dest))
                         task.files.filesystem = storage_fs(task.staging_dir or task.dest)
                     self._cleanup_cancelled(task)
             except (OSError, nas.NasError) as exc:
-                task.error = f"取消後檔案清除失敗，請恢復儲存連線後重試取消：{exc}"
+                task.error = f"取消後檔案清除失敗：{exc}"
                 task.status = "failed"
-        self._save_tasks()
+        if not defer_save:
+            self._save_tasks()
         return True
 
     def _cleanup_cancelled(self, task):
         try:
             if task.cleanup_unverified:
-                raise OSError("服務重啟後缺少檔案歸屬紀錄，無法確認清除範圍；請手動檢查下載目錄")
+                task.error = "缺少檔案歸屬紀錄，相關檔案已保留；請手動檢查下載目錄"
+                task.status = "cancelled"
+                task.updated_at = datetime.now(timezone.utc).isoformat()
+                return
             if task.remote_files:
                 nas.cleanup_upload(task.nas_settings, task.remote_files)
             if task.files:
@@ -623,7 +713,7 @@ class TaskManager:
             task.status = "cancelled"
             task.updated_at = datetime.now(timezone.utc).isoformat()
         except (OSError, nas.NasError) as exc:
-            task.error = f"取消後檔案清除失敗，請恢復儲存連線後重試取消：{exc}"
+            task.error = f"取消後檔案清除失敗：{exc}"
             task.status = "failed"
 
     def cancel_all(self) -> None:
@@ -670,6 +760,8 @@ class TaskManager:
             self._cleanup_cancelled(task)
             with self._lock:
                 self._active.pop(task.task_id, None)
+            self._remove_requested_record(task)
+            self._save_tasks()
             return
         if task.paused_event.is_set():
             with self._lock:
@@ -892,6 +984,9 @@ class TaskManager:
                 self._finish_task(task, "cancelled")
             else:
                 task.error = str(exc)
+                if isinstance(exc, MediaRemuxError):
+                    logging.error('Download task %s failed during %s: %s',
+                                  task.task_id, safe_media_message(task.phase)[:256], task.error)
                 self._finish_task(task, "failed")
 
         finally:
@@ -919,6 +1014,7 @@ class TaskManager:
                     task.status = 'paused'
                     task.error = None
                     task.updated_at = datetime.now(timezone.utc).isoformat()
+            self._remove_requested_record(task)
             self._save_tasks()
 
     def _run_subtitles(self, task: DownloadTask, job: Any) -> None:

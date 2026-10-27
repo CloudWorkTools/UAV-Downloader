@@ -10,6 +10,7 @@ from contextlib import contextmanager, ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from uav_downloader.core.storage import StorageWriteError
+from uav_downloader.core.media_errors import capture_remux_errors
 
 
 def smb_lock(path, **options):
@@ -247,7 +248,7 @@ class SmbStorage:
 
         # Faststart reopens the output to move its index ahead of the media data.
         try:
-            with ExitStack() as files:
+            with capture_remux_errors(), ExitStack() as files:
                 def open_media(path, mode, **kwargs):
                     return MediaIO(files.enter_context(storage_open(path, mode, **kwargs)))
 
@@ -265,12 +266,28 @@ class SmbStorage:
                                    for stream in media.streams if stream.type in ('video', 'audio')}
                         if not streams:
                             return False
+                        output.start_encoding()
+                        audio_dts = {}
                         for packet in media.demux():
                             if cancelled():
                                 return False
                             if packet.dts is None or packet.stream.index not in streams:
                                 continue
                             packet.stream = streams[packet.stream.index]
+                            if packet.stream.type == 'audio':
+                                # MP4 uses audio sample ticks; repair overlaps after rescaling.
+                                scale = packet.time_base / packet.stream.time_base
+                                packet.dts = round(packet.dts * scale)
+                                if packet.pts is not None:
+                                    packet.pts = round(packet.pts * scale)
+                                packet.duration = round(packet.duration * scale)
+                                packet.time_base = packet.stream.time_base
+                                previous = audio_dts.get(packet.stream.index)
+                                if previous is not None and packet.dts <= previous:
+                                    if packet.pts is not None:
+                                        packet.pts += previous + 1 - packet.dts
+                                    packet.dts = previous + 1
+                                audio_dts[packet.stream.index] = packet.dts
                             output.mux(packet)
         except InterruptedError:
             if not cancelled():

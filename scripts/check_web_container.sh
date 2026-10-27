@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-image=${1:?usage: check_web_container.sh IMAGE}
+image=${1:?usage: check_web_container.sh IMAGE TEST_IMAGE}
+test_image=${2:-${CI_TEST_IMAGE:?TEST_IMAGE argument or CI_TEST_IMAGE is required}}
+root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d)
 container=$(docker run -d -p 127.0.0.1::8080 "$image")
 cleanup() {
@@ -18,6 +20,10 @@ for attempt in {1..30}; do
 done
 curl --fail --silent "http://127.0.0.1:$port/" -o "$scratch/index.html"
 grep -q 'select-page-button' "$scratch/index.html"
+for asset in mobile-actions.js mobile-actions.css mascot-fab.svg; do
+  curl --fail --silent "http://127.0.0.1:$port/$asset" -o "$scratch/$asset"
+  test -s "$scratch/$asset"
+done
 curl --fail --silent "http://127.0.0.1:$port/nas-settings.js" -o "$scratch/nas-settings.js"
 grep -q '^window.NasSettings' "$scratch/nas-settings.js"
 curl --fail --silent "http://127.0.0.1:$port/video-selection.js" -o "$scratch/video-selection.js"
@@ -25,3 +31,6 @@ grep -q '^window.createVideoSelection' "$scratch/video-selection.js"
 curl --fail --silent "http://127.0.0.1:$port/api/settings" | python3 -c 'import json,sys; s=json.load(sys.stdin); assert "nas" in s and "password" not in s["nas"]'
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "ok"' "$scratch/status.json"
 rm -f "$scratch/status.json"
+
+docker run --rm --network host --volume "$root:/workspace:ro" --workdir /workspace \
+  --entrypoint node "$test_image" tools/web-ci/check_mobile_actions.cjs "http://127.0.0.1:$port/"

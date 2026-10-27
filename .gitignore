@@ -35,6 +35,7 @@ target/
 
 # Deployment target and machine-specific settings
 .deploy.local*
+.deployment-queue.*
 
 # Compose secrets and persistent application data
 .env
