@@ -566,3 +566,26 @@ def test_explicit_upload_overwrite_keeps_replaced_file_on_cancel(profile, remote
     assert remote.files[target] == b'new'
     assert remote.files[untouched] == b'keep'
     assert not any(path.endswith('.part') for path in remote.files)
+
+
+def test_upload_retry_keeps_owned_video_and_finishes_sidecar(profile, remote, tmp_path, monkeypatch):
+    video = tmp_path / 'movie.mp4'
+    video.write_bytes(b'video')
+    (tmp_path / 'movie.ja.srt').write_bytes(b'subtitle')
+    rename = remote.rename
+    attempts = []
+    def fail_sidecar_once(src, dst, **options):
+        if dst.endswith('.srt') and not attempts:
+            attempts.append(1)
+            raise OSError('temporary disconnect')
+        rename(src, dst, **options)
+    monkeypatch.setattr('smbclient.rename', fail_sidecar_once)
+    monkeypatch.setattr('smbclient.path.islink', lambda *args, **kw: False)
+    monkeypatch.setattr('smbclient.stat', lambda path, **kw: SimpleNamespace(st_size=len(remote.files[path])))
+    owned = []
+    with pytest.raises(nas.NasError):
+        nas.upload_video(profile, video, threading.Event(), owned)
+    assert len(owned) == 1
+    nas.upload_video(profile, video, threading.Event(), owned)
+    assert sorted(remote.files.values()) == [b'subtitle', b'video']
+    assert len(owned) == 2

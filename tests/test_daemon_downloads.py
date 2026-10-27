@@ -1016,7 +1016,7 @@ def test_start_now_bypasses_limit_once_and_preserves_settings(manager, monkeypat
         release.wait(3)
         with manager._lock:
             manager._active.pop(current.task_id, None)
-    monkeypatch.setattr(manager, '_run_task', worker)
+    monkeypatch.setattr(manager, '_run_task_with_retries', worker)
     try:
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(lambda _: manager.start_now(task.task_id), range(16)))
@@ -1044,7 +1044,7 @@ def test_start_now_does_not_release_extra_normal_slots(manager, monkeypatch):
         release.wait(3)
         with manager._lock:
             manager._active.pop(task.task_id, None)
-    monkeypatch.setattr(manager, '_run_task', worker)
+    monkeypatch.setattr(manager, '_run_task_with_retries', worker)
     dispatcher = threading.Thread(target=manager._dispatch_loop)
     try:
         assert manager.start_now(forced.task_id)
@@ -1246,3 +1246,132 @@ def test_unverified_cancel_then_restart_and_remove_reports_preserved_files(manag
     assert result['unverified'] == [task.task_id]
     assert second.get_task(task.task_id) is None
     assert fragment.read_bytes() == b'keep'
+
+
+def test_worker_retries_download_five_times_before_failing(manager, monkeypatch):
+    calls = []
+    task = manager.add_task('https://missav.ai/mimk-290')
+    def download(job):
+        calls.append(1)
+        raise ConnectionError('offline')
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    monkeypatch.setattr(tm, '_DOWNLOAD_RETRY_DELAY', 0, raising=False)
+    manager._run_task_with_retries(task)
+    assert len(calls) == 6
+    assert task.status == 'failed'
+    assert 'offline' in task.error
+    assert task.task_id not in manager._active
+
+
+def test_worker_stops_retrying_after_success(manager, monkeypatch):
+    calls = []
+    task = manager.add_task('https://missav.ai/mimk-290')
+    def download(job):
+        calls.append(1)
+        if len(calls) < 3:
+            raise ConnectionError('offline')
+        (Path(job.dest_folder()) / 'MIMK-290.mp4').write_bytes(b'video')
+        return True
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    monkeypatch.setattr(tm, '_DOWNLOAD_RETRY_DELAY', 0, raising=False)
+    manager._run_task_with_retries(task)
+    assert len(calls) == 3
+    assert task.status == 'completed'
+    assert (Path(task.dest) / 'MIMK-290.mp4').read_bytes() == b'video'
+
+
+def test_cancel_during_retry_wait_stops_and_cleans(manager, monkeypatch):
+    calls = []
+    task = manager.add_task('https://missav.ai/mimk-290')
+    def download(job):
+        calls.append(1)
+        (Path(job.dest_folder()) / 'partial').write_bytes(b'partial')
+        raise ConnectionError('offline')
+    def wait(task, seconds):
+        assert manager.cancel_task(task.task_id)
+        return True
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    monkeypatch.setattr(manager, '_wait_for_download_retry', wait, raising=False)
+    manager._run_task_with_retries(task)
+    assert len(calls) == 1
+    assert task.status == 'cancelled'
+    assert not Path(task.files.workdir).exists()
+
+
+def test_publication_failure_retries_without_redownloading(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    attempts = []
+    def download(job):
+        (Path(job.dest_folder()) / 'MIMK-290.mp4').write_bytes(b'video')
+        return True
+    publish = tm.DownloadFiles.publish
+    def flaky(files, *args, **kwargs):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise OSError('storage offline')
+        return publish(files, *args, **kwargs)
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    monkeypatch.setattr(tm.DownloadFiles, 'publish', flaky)
+    monkeypatch.setattr(tm, '_DOWNLOAD_RETRY_DELAY', 0)
+    manager._run_task_with_retries(task)
+    assert len(attempts) == 3
+    assert task.status == 'completed'
+    assert (Path(task.dest) / 'MIMK-290.mp4').read_bytes() == b'video'
+
+
+def test_pause_during_retry_wait_preserves_partials(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    calls = []
+    def download(job):
+        calls.append(1)
+        (Path(job.dest_folder()) / 'partial').write_bytes(b'partial')
+        raise ConnectionError('offline')
+    def wait(task, seconds):
+        assert manager.pause_task(task.task_id)
+        return True
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    monkeypatch.setattr(manager, '_wait_for_download_retry', wait)
+    manager._run_task_with_retries(task)
+    assert len(calls) == 1
+    assert task.status == 'paused'
+    assert (Path(task.files.workdir) / 'partial').read_bytes() == b'partial'
+
+
+def test_publication_failure_gives_up_after_five_retries(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    downloads, publications = [], []
+    def download(job):
+        downloads.append(1)
+        (Path(job.dest_folder()) / 'MIMK-290.mp4').write_bytes(b'video')
+        return True
+    def fail_publish(*args, **kwargs):
+        publications.append(1)
+        raise OSError('storage offline')
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    monkeypatch.setattr(tm.DownloadFiles, 'publish', fail_publish)
+    monkeypatch.setattr(tm, '_DOWNLOAD_RETRY_DELAY', 0)
+    manager._run_task_with_retries(task)
+    assert len(downloads) == 1
+    assert len(publications) == 6
+    assert task.status == 'failed'
+    assert (Path(task.files.workdir) / 'MIMK-290.mp4').read_bytes() == b'video'
+
+
+def test_failed_status_is_visible_only_after_final_attempt(manager, monkeypatch):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    observed = []
+    def download(job):
+        observed.append(task.status)
+        raise ConnectionError('offline')
+    original_save = manager._save_tasks
+    def record_save():
+        observed.append(task.status)
+        original_save()
+    monkeypatch.setattr(manager, '_save_tasks', record_save)
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    monkeypatch.setattr(tm, '_DOWNLOAD_RETRY_DELAY', 0)
+    manager._run_task_with_retries(task)
+    first_failed = observed.index('failed')
+    assert 'failed' not in observed[:first_failed]
+    assert observed.count('downloading') >= 6
+    assert task.status == 'failed'
