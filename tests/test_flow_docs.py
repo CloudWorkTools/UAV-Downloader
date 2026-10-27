@@ -88,6 +88,20 @@ class FlowCheckerFixture(unittest.TestCase):
 
 
 class FlowCheckerTests(FlowCheckerFixture):
+    def test_symbol_type_ignore_anchor_uses_code_not_comment_metadata(self):
+        path = self.root / 'src/jobs.py'
+        original = path.read_text()
+        path.write_text('# type: ignore\n' + original)
+        self.cli('snapshot')
+        self.review(self.base)
+        self.git('add', '.')
+        self.git('commit', '-qm', 'TypeIgnore baseline')
+        self.base = self.git('rev-parse', 'HEAD').stdout.strip()
+        path.write_text('\n# type: ignore\n\n' + original)
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        path.write_text(original.replace('def other', '# type: ignore\ndef other'))
+        self.assertEqual(set(json.loads(self.cli('impact', '--base', self.base))['review_required']), {'job.run', 'job.other'})
+
     def test_symbol_mode_preserves_tool_directives(self):
         path = self.root / 'src/jobs.py'
         path.write_text('# pylint: disable=all\n' + path.read_text())
@@ -315,6 +329,13 @@ class ModuleAstTests(FlowCheckerFixture):
         self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
         self.module_baseline(content='def helper():\n    # fmt: off\n    first()\n    second()\n')
         self.write('src/shared.py', 'def helper():\n    first()\n    # fmt: off\n    second()\n')
+        self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
+
+    def test_module_type_ignore_anchor_uses_code_not_comment_metadata(self):
+        self.module_baseline(content='# type: ignore\nfirst()\nsecond()\n')
+        self.write('src/shared.py', '\n# type: ignore\n\nfirst()\nsecond()\n')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+        self.write('src/shared.py', 'first()\n# type: ignore\nsecond()\n')
         self.assertIn('shared', json.loads(self.cli('impact', '--base', self.base))['review_required'])
 
     def test_python_and_javascript_tool_annotations_are_not_prose(self):

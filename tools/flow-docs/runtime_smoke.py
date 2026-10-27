@@ -18,6 +18,8 @@ def main():
     directive = signature('first()  # noqa\nsecond()\n')
     assert signature('\nfirst()  # noqa\n\nsecond()\n') == directive
     assert signature('first()\nsecond()  # noqa\n') != directive
+    type_ignore = signature('# type: ignore\nfirst()\nsecond()\n')
+    assert signature('first()\n# type: ignore\nsecond()\n') != type_ignore
     try:
         signature('def run(:\n')
     except SyntaxError:

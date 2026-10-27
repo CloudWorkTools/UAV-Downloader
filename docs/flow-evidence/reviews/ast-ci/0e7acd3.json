@@ -1,0 +1,128 @@
+{
+  "reviews": [
+    {
+      "feature": "download.batch",
+      "fingerprint": "3e59cb7bed229fbad16fe4fbe177de081432ea60b088bdec93138c942091b011",
+      "reviewer": "/root/ast_gate_review",
+      "verdict": "fail",
+      "findings": [
+        "AST-1"
+      ],
+      "evidence": [
+        "續審凍結候選 0e7acd3810365144830a43cae5a4e643a5b57a30；比較基準 3b78b60b581b09b65b6880f5e597a4d2cae0c238。只閱讀 2d30d08c8cc7871f623bd539cb17c4daf12d9546..HEAD 的修正 diff 與必要相鄰上下文。",
+        "沿用上一輪此功能的應用來源、流程與映射未變證據及原有獨立語意審查；未重新閱讀應用、CI或整份規範。",
+        "一般 noqa 行級指令移動與 fmt 區域指令移動已有 AST 路徑綁定及新案例；AST-2 的 pylint、未知冒號工具指令及 JavaScript PURE 漏項已補入。",
+        "仍存在共用 python_directives 的 TypeIgnore 自我綁定缺口，影響 python 與 python-module，阻擋本次共用門檻通過。"
+      ],
+      "limitations": [
+        "指紋取自協調者提供的本次 impact 清單，未獨立重算。",
+        "未重跑測試、正式映像、應用或生產驗證；協調者回報20項 checker tests 已驗證，沒有把該回報列為本 reviewer 自行執行的證據。",
+        "圖譜索引指向舊工作區；續審結論依凍結候選 diff 與標準函式庫唯讀資料核對。"
+      ]
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "5038da701163852442b847890e3b37877ba9e231c17f616ba4011447987685bc",
+      "reviewer": "/root/ast_gate_review",
+      "verdict": "fail",
+      "findings": [
+        "AST-1"
+      ],
+      "evidence": [
+        "續審凍結候選 0e7acd3810365144830a43cae5a4e643a5b57a30；比較基準 3b78b60b581b09b65b6880f5e597a4d2cae0c238。只閱讀 2d30d08c8cc7871f623bd539cb17c4daf12d9546..HEAD 的修正 diff 與必要相鄰上下文。",
+        "沿用上一輪此功能的應用來源、流程與映射未變證據及原有獨立語意審查；未重新閱讀應用、CI或整份規範。",
+        "一般 noqa 行級指令移動與 fmt 區域指令移動已有 AST 路徑綁定及新案例；AST-2 的 pylint、未知冒號工具指令及 JavaScript PURE 漏項已補入。",
+        "仍存在共用 python_directives 的 TypeIgnore 自我綁定缺口，影響 python 與 python-module，阻擋本次共用門檻通過。"
+      ],
+      "limitations": [
+        "指紋取自協調者提供的本次 impact 清單，未獨立重算。",
+        "未重跑測試、正式映像、應用或生產驗證；協調者回報20項 checker tests 已驗證，沒有把該回報列為本 reviewer 自行執行的證據。",
+        "圖譜索引指向舊工作區；續審結論依凍結候選 diff 與標準函式庫唯讀資料核對。"
+      ]
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "88df5c18f6b6d6908f42662fadac973ae45e12f0182f79737a50522a24846644",
+      "reviewer": "/root/ast_gate_review",
+      "verdict": "fail",
+      "findings": [
+        "AST-1"
+      ],
+      "evidence": [
+        "續審凍結候選 0e7acd3810365144830a43cae5a4e643a5b57a30；比較基準 3b78b60b581b09b65b6880f5e597a4d2cae0c238。只閱讀 2d30d08c8cc7871f623bd539cb17c4daf12d9546..HEAD 的修正 diff 與必要相鄰上下文。",
+        "沿用上一輪此功能的應用來源、流程與映射未變證據及原有獨立語意審查；未重新閱讀應用、CI或整份規範。",
+        "一般 noqa 行級指令移動與 fmt 區域指令移動已有 AST 路徑綁定及新案例；AST-2 的 pylint、未知冒號工具指令及 JavaScript PURE 漏項已補入。",
+        "仍存在共用 python_directives 的 TypeIgnore 自我綁定缺口，影響 python 與 python-module，阻擋本次共用門檻通過。"
+      ],
+      "limitations": [
+        "指紋取自協調者提供的本次 impact 清單，未獨立重算。",
+        "未重跑測試、正式映像、應用或生產驗證；協調者回報20項 checker tests 已驗證，沒有把該回報列為本 reviewer 自行執行的證據。",
+        "圖譜索引指向舊工作區；續審結論依凍結候選 diff 與標準函式庫唯讀資料核對。"
+      ]
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "f78dfa0df9d8df750c37a8a75155c0753535b8c65361b76b45bc1005676d529e",
+      "reviewer": "/root/ast_gate_review",
+      "verdict": "fail",
+      "findings": [
+        "AST-1"
+      ],
+      "evidence": [
+        "續審凍結候選 0e7acd3810365144830a43cae5a4e643a5b57a30；比較基準 3b78b60b581b09b65b6880f5e597a4d2cae0c238。只閱讀 2d30d08c8cc7871f623bd539cb17c4daf12d9546..HEAD 的修正 diff 與必要相鄰上下文。",
+        "沿用上一輪此功能的應用來源、流程與映射未變證據及原有獨立語意審查；未重新閱讀應用、CI或整份規範。",
+        "一般 noqa 行級指令移動與 fmt 區域指令移動已有 AST 路徑綁定及新案例；AST-2 的 pylint、未知冒號工具指令及 JavaScript PURE 漏項已補入。",
+        "仍存在共用 python_directives 的 TypeIgnore 自我綁定缺口，影響 python 與 python-module，阻擋本次共用門檻通過。"
+      ],
+      "limitations": [
+        "指紋取自協調者提供的本次 impact 清單，未獨立重算。",
+        "未重跑測試、正式映像、應用或生產驗證；協調者回報20項 checker tests 已驗證，沒有把該回報列為本 reviewer 自行執行的證據。",
+        "圖譜索引指向舊工作區；續審結論依凍結候選 diff 與標準函式庫唯讀資料核對。"
+      ]
+    }
+  ],
+  "code_findings": [
+    {
+      "id": "AST-1",
+      "severity": "P2",
+      "blocking": true,
+      "category": "實質門檻缺口",
+      "path": "tools/flow-docs/flow_checker.py",
+      "symbol": "python_directives",
+      "lines": "136-152",
+      "title": "TypeIgnore 節點會把獨立成行的 type: ignore 綁到自己，移動作用範圍仍可能沿用指紋",
+      "problem": "ast.parse(type_comments=True) 會為獨立的 # type: ignore 產生帶 lineno 的 ast.TypeIgnore。visit 將它加入 nodes，inline 候選因此命中該註解自己的 (type_ignores, 0) 路徑，沒有綁到相鄰實際敘述。module 模式隨後清除 parsed.type_ignores，symbol 模式也建立 type_ignores=[] 的 context，因此把檔首的 # type: ignore 移到 first() 與 second() 中間時，AST 與 directives 的路徑／文字均相同。檔首的檔案級忽略已改變作用範圍，impact/check 卻可重用證據。",
+      "evidence": [
+        "唯讀標準函式庫核對：對 # type: ignore\\nfirst()\\nsecond()\\n 與 first()\\n# type: ignore\\nsecond()\\n，註解行的 inline 候選都只有 ((type_ignores, 0), TypeIgnore)。",
+        "將兩個 AST 的 type_ignores 清空後，ast.dump(include_attributes=False) 完全相同；token.string 也同為 # type: ignore。",
+        "本次新增案例覆蓋 noqa／fmt 附著位置與 pylint／custom-tool／ruff／PURE 分類，未覆蓋 ast.TypeIgnore 自我綁定。"
+      ],
+      "fix": "在 directive anchor 候選中排除 ast.TypeIgnore 等註解元資料，讓獨立指令依實際語法節點或作用範圍綁定；為 python 與 python-module 加入檔首 type: ignore 移到程式中間必須失效、僅加空白行仍可重用的案例。"
+    }
+  ],
+  "newly_read_paths": [
+    "/tmp/uav-ast-impact.json",
+    "git diff 2d30d08c8cc7871f623bd539cb17c4daf12d9546..0e7acd3810365144830a43cae5a4e643a5b57a30 -- tools/flow-docs/flow_checker.py",
+    "git diff 2d30d08c8cc7871f623bd539cb17c4daf12d9546..0e7acd3810365144830a43cae5a4e643a5b57a30 -- tools/flow-docs/flow_parsers.py",
+    "git diff 2d30d08c8cc7871f623bd539cb17c4daf12d9546..0e7acd3810365144830a43cae5a4e643a5b57a30 -- tools/flow-docs/runtime_smoke.py",
+    "git diff 2d30d08c8cc7871f623bd539cb17c4daf12d9546..0e7acd3810365144830a43cae5a4e643a5b57a30 -- tests/test_flow_docs.py",
+    "git diff 2d30d08c8cc7871f623bd539cb17c4daf12d9546..0e7acd3810365144830a43cae5a4e643a5b57a30 -- docs/agents/review-efficiency.md"
+  ],
+  "reused_evidence": [
+    "沿用上一輪 /tmp/uav-ast-review-initial.json 的四功能應用來源／流程／manifest features 零差異及四份基線獨立審查結論；續審未重新閱讀這些檔案。",
+    "沿用上一輪 CI 同倉 PR／fork 信任邊界、完整 SHA／ancestor／禁止自比及快照、證據重用核對；未重讀 CI、部署規範或應用來源。",
+    "修正中 baseline load(refresh=True) 以同一 adapter 重算舊來源摘要，仍保留既有盤點、映射、依賴與解析檢查；候選 check 的來源摘要驗證未因此取消。",
+    "AST-2 已修正：Python 辨識 pylint／pyright／mypy／ruff 及通用工具冒號／等號指令，Tree-sitter 辨識 PURE 等 # 標記；新增回歸案例直接覆蓋原回報示例。",
+    "續審規則新增優先沿用原 reviewer 的一行，未改變獨立審查或交付門檻。",
+    "本輪除 AST-1 的 TypeIgnore 相鄰缺口外，未發現其他可證實阻擋；沒有純措辭建議。"
+  ],
+  "additional_reads": [
+    {
+      "paths": [
+        "Python stdlib ast/tokenize 的記憶體範例，未另讀候選檔案"
+      ],
+      "reason": "檢查新 helper 對 ast.TypeIgnore 這種帶行號的註解元資料是否誤判為 inline AST anchor；只做唯讀資料核對，沒有執行候選應用或重跑測試。"
+    }
+  ],
+  "token_usage": "unavailable"
+}

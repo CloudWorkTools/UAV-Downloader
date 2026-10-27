@@ -134,6 +134,8 @@ def canonical_python_ast(value):
 def python_directives(data, tree):
     nodes = []
     def visit(node, path=()):
+        if isinstance(node, ast.TypeIgnore):
+            return
         if hasattr(node, 'lineno'):
             nodes.append((path, node))
         for name, child in ast.iter_fields(node):
