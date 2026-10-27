@@ -8,6 +8,10 @@ window.addEventListener('DOMContentLoaded', () => {
   fab.setAttribute('aria-expanded', 'false');
   fab.setAttribute('aria-controls', 'mobile-action-dialog');
   fab.innerHTML = '<img src="/mascot-fab.svg" alt="" width="64" height="64">';
+  const badge = document.createElement('span');
+  badge.id = 'mobile-selection-count';
+  badge.hidden = true;
+  fab.append(badge);
   const dialog = document.createElement('dialog');
   dialog.id = 'mobile-action-dialog';
   dialog.hidden = true;
@@ -27,15 +31,28 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!dialog.hidden) dialog.close();
     dialog.hidden = true;
     fab.setAttribute('aria-expanded', 'false');
-    fab.setAttribute('aria-label', '開啟功能選單');
+    syncRows();
     if (!fab.hidden && mobile.matches) fab.focus();
   }
   function syncRows() {
     dialog.querySelectorAll('[data-mobile-source]').forEach(button => {
       const source = byId(button.dataset.mobileSource);
-      button.textContent = source.textContent;
-      button.disabled = source.disabled || source.hidden;
+      button.textContent = source.id === 'browse-clear-mobile' ? '清除全部' :
+        source.id === 'select-page-button' && source.textContent === '清除勾選' ? '清除本頁' : source.textContent;
+      button.hidden = source.disabled || source.hidden || (source.id === 'browse-clear-mobile' && byId('selected-count').textContent === '0');
     });
+    const count = Number(byId('selected-count').textContent) || 0;
+    dialog.querySelectorAll('[data-mobile-group]').forEach(button => {
+      const entries = groups[button.dataset.mobileGroup][1];
+      button.hidden = !entries.some(id => {
+        const source = byId(id);
+        return source && !source.disabled && !source.hidden && (id !== 'browse-clear-mobile' || count > 0);
+      });
+    });
+    badge.textContent = count;
+    badge.hidden = !count || page !== 'browse';
+    const label = dialog.hidden ? '開啟功能選單' : '關閉功能選單';
+    fab.setAttribute('aria-label', count && page === 'browse' ? `${label}，已選 ${count} 部` : label);
   }
   function render() {
     const [title, entries] = groups[stack.at(-1)];
@@ -56,7 +73,7 @@ window.addEventListener('DOMContentLoaded', () => {
       return button;
     }));
     syncRows();
-    (dialog.querySelector('#mobile-action-items button:not(:disabled)') || byId('mobile-action-close')).focus();
+    (dialog.querySelector('#mobile-action-items button:not([hidden])') || byId('mobile-action-close')).focus();
   }
   fab.onclick = () => {
     stack = [page];
@@ -75,6 +92,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (next !== page || !mobile.matches) close();
     page = next;
     fab.hidden = !next;
+    syncRows();
   }
   const tabObserver = new MutationObserver(syncPage);
   ['browse', 'queue'].forEach(id => tabObserver.observe(byId('tab-' + id), {attributes:true, attributeFilter:['class']}));
@@ -82,6 +100,7 @@ window.addEventListener('DOMContentLoaded', () => {
   Object.values(groups).flatMap(group => group[1]).filter(entry => typeof entry === 'string').forEach(id => {
     stateObserver.observe(byId(id), {attributes:true, attributeFilter:['disabled','hidden'],childList:true,subtree:true,characterData:true});
   });
+  stateObserver.observe(byId('selected-count'), {childList:true, subtree:true, characterData:true});
   mobile.addEventListener('change', syncPage);
   syncPage();
 });
