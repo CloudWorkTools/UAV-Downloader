@@ -16,7 +16,7 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def tree_sitter_hashes(data: bytes, language: str, path: str):
+def tree_sitter_hashes(data: bytes, language: str, path: str, *, module=False):
     """Return context and independently tracked definitions; never execute source.
 
     Overloads and duplicate qualified names deliberately require whole-file tracking.
@@ -176,6 +176,8 @@ def tree_sitter_hashes(data: bytes, language: str, path: str):
             visit(child, scope)
 
     try:
+        if module:
+            return _digest(normalized(root)), {}
         visit(root)
         context = _digest(normalized(root, masks))
     except UnicodeDecodeError as exc:

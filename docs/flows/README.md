@@ -13,7 +13,7 @@
 | `queue.enqueue` | [批次任務建立、去重與持久化](queue.enqueue.mmd) | [task_manager.py](../../src/uav_downloader/daemon/task_manager.py) `TaskManager.add_task`、`_duplicate_reason`、`_save_tasks`、`start_dispatcher`、`DownloadTask.to_dict`；[download_files.py](../../src/uav_downloader/daemon/download_files.py) `video_key`、`DownloadFiles.snapshot`；[video_identity.py](../../src/uav_downloader/core/video_identity.py) `video_code` | `storage.destination` |
 | `download.execute` | [下載、重試、發布、取消與暫停](download.execute.mmd) | [task_manager.py](../../src/uav_downloader/daemon/task_manager.py) `TaskManager._run_task_with_retries`、`_run_task`、`_retry_publication`；[download_files.py](../../src/uav_downloader/daemon/download_files.py) `DownloadFiles.publish`；[nas.py](../../src/uav_downloader/daemon/nas.py) `upload_video` | `queue.enqueue`、`storage.destination` |
 
-每個圖節點的檔案與符號映射以 manifest 為準。`download_batch.py` 使用原生 Python AST 模式，所有頂層函式均有映射，內部 `same_destination` 屬於 `destination`。混合職責模組、Rust、JavaScript、HTML 及行為設定採明示 `file` 模式：整份檔案異動會保守觸發審查，不表示該檔案所有功能都已有流程圖。
+每個圖節點的檔案與符號映射以 manifest 為準。`download_batch.py` 使用原生 Python AST 模式，所有頂層函式均有映射，內部 `same_destination` 屬於 `destination`。混合職責 Python 模組採 `python-module`，Rust 與 JavaScript 採 `tree-sitter-module`，以整模組 AST 排除格式與一般註解差異。符號模式保留函式層級影響判定。HTML、CSS 及未支援的行為設定仍採明示 `file` 模式，保守按位元組比較；任何模式都不表示該檔案所有功能已納入流程。
 
 ## 來源與文件責任
 
@@ -41,12 +41,14 @@ manifest 的 include 清單界定本次盤點。它涵蓋現有批次前端、HT
 
 ## 交付與驗證入口
 
-預設邊界為 PR 交付審查前，實際設定及完整操作依[同步政策](../agents/flow-docs-sync.md)。政策預設位置 `AGENTS.md` 因明示的本機專用規則覆寫為 `docs/agents/flow-docs-sync.md`；其餘採技能預設路徑。未配置自動 runner、GitHub workflow 或 strict pre-commit hook；Maintain 由準備端代理在交付時執行，不能將本機通過視為合併已受保護。
+預設邊界為 PR 交付審查前，實際設定及完整操作依[同步政策](../agents/flow-docs-sync.md)。政策預設位置 `AGENTS.md` 因明示的本機專用規則覆寫為 `docs/agents/flow-docs-sync.md`；其餘採技能預設路徑。CI 由 `.github/workflows/web-check.yml` 驗證，文件維護與獨立審查由準備端代理依 [審查效率規則](../agents/review-efficiency.md)執行；未安裝 strict pre-commit hook。遠端是否將此檢查列為必要合併條件須另行核對。
 
 專案檢查器為 `tools/flow-docs/flow_checker.py`，獨立隔離回歸入口為：
 
 ```bash
+python3 -m pip install -r tools/flow-docs/requirements-ast.txt
 python3 -m unittest discover -s tests -p test_flow_docs.py
+python3 tools/flow-docs/flow_checker.py impact --root . --base <BASE>
 python3 tools/flow-docs/flow_checker.py check --root . --base <BASE>
 ```
 

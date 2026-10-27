@@ -61,6 +61,8 @@ SMB 測試使用獨立的測試帳號與共享目錄，勿使用正式影片目�
 
 部署與回滾前，依[部署版本保護](docs/agents/deployment-safety.md)核對線上版本、Git 歷史與部署鎖內狀態。
 
+流程檢查另由 `Flow docs consistency` 執行；先依 `docs/agents/review-efficiency.md` 計算 AST 影響，再安排必要審查。格式或一般註解變更的 AST 相同時重用證據。執行前在測試環境安裝 `tools/flow-docs/requirements-ast.txt`。
+
 ## CI 與生產環境驗證
 
 Linux 工作指定 `shared-runners` 群組及 `self-hosted`、`Linux`、`X64`、`shared` 標籤。Web 回歸測試由 `Dockerfile.web-tests` 在正式映像上加入測試依賴，使用獨立容器與唯讀原始碼；共用主機須提供 Docker。公開 fork 的 PR 不自動執行此自架工作，維護者審查後可手動派送。Windows 建置保留 Windows runner。

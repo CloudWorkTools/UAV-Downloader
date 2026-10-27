@@ -29,14 +29,19 @@
 3. Delegation/resume: each executing agent reads its own affected documents.
    Recheck the read set after scope/input changes or a handoff.
    Missing required checks or unresolved coverage prevent completion claims.
+4. Review scope and token use: follow review-efficiency.md. Compute AST impact before
+   dispatch; reuse valid evidence, batch shared inputs once, and re-review only
+   invalidated scope. Record unavailable token metrics honestly.
 
 ## 實際交付設定
 
 - 邊界：PR 交付審查前。Draft、WIP 只保留待同步範圍；本次未安裝每次提交的 hook，既有 hook 保留。
 - 概覽：`docs/flows/README.md`；映射：`docs/flow-manifest.json`；共用契約：`docs/flows/contracts.md`；證據：`docs/flow-evidence/`。
 - 檢查器：`python3 tools/flow-docs/flow_checker.py check --root . --base <BASE>`。`<BASE>` 必須是此次變更的實際比較基準，不是已提交候選版本本身。
-- 準備端代理先以 `snapshot --root .` 更新已登記來源，再用 `fingerprint --root . --base <BASE> --feature <ID>` 取得審查指紋，保存獨立審查 JSON 並更新 manifest，最後執行 `check`。三者皆為同一個 `flow_checker.py` 的子命令。
+- 準備端代理先用 `impact --root . --base <BASE>` 計算實際 AST 影響；語意改變時以 `snapshot --root .` 更新已登記來源，再用 `fingerprint --root . --base <BASE> --feature <ID>` 取得審查指紋，保存獨立審查 JSON 並更新 manifest，最後執行 `check`。三者皆為同一個 `flow_checker.py` 的子命令。
 - 本機 worktree 檢查不代表 index；若檢查待提交內容，使用 `check --staged`。`snapshot` 只讀寫 worktree，應在隔離候選內容後執行。
-- 自動 runner 命令及 GitHub workflow：未配置。由準備端代理自動執行 Maintain；無人處理的 GitHub ready 事件不會產生文件。允許輸出為 `docs/flows/`、`docs/flow-manifest.json`、`docs/flow-evidence/`；擴充範圍或政策須另行審查。
+- CI 驗證：`.github/workflows/web-check.yml` 的前置 job `Flow docs consistency` 執行檢查器回歸與 `scripts/check_flow_docs.sh <BASE_SHA>`。PR 使用事件的 base SHA，push 使用 before SHA；候選不得與自己比較。草稿 PR 不執行語意交付門檻，轉正或同步提交後檢查；外部 fork 不執行自架 runner。
+- 文件維護與獨立審查仍由準備端代理完成，CI 不自動產生審查，也不證明 reviewer 身分。允許輸出為 `docs/flows/`、`docs/flow-manifest.json`、`docs/flow-evidence/`；擴充範圍或政策須另行審查。
+- 審查派工、AST 略過條件、共用內容重用、輪次升級及 token 紀錄依 [review-efficiency.md](review-efficiency.md)。
 - 必要 CI 與遠端保護設定：未驗證。合併前仍須完成候選版本 CI、所需人類核准及遠端必要檢查設定；本機檢查器無法強制合併限制。
 - 覆蓋僅限索引列出的功能。發現新入口或相依來源時，先擴充盤點及閱讀範圍，再開始依賴該來源的編輯；不得以重新計算摘要代替映射與審查。

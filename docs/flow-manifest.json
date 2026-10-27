@@ -54,28 +54,33 @@
     },
     {
       "path": "src/uav_downloader/core/config.py",
-      "kind": "file",
-      "md5": "a59ae08443eed2a77648ec76963dd279"
+      "kind": "python-module",
+      "md5": "a59ae08443eed2a77648ec76963dd279",
+      "semantic_hash": "544b60f9c8355640c1c685f414c7ee682a364453e78b6263509bb1fc61fa29dc"
     },
     {
       "path": "src/uav_downloader/core/paths.py",
-      "kind": "file",
-      "md5": "084590cc5d1f2a1ea7a40321d783b653"
+      "kind": "python-module",
+      "md5": "084590cc5d1f2a1ea7a40321d783b653",
+      "semantic_hash": "f1a990dcc4d19998a59dc47dbfd371d61af2e3c77c49769c94dc1f46f53a116a"
     },
     {
       "path": "src/uav_downloader/core/smb_storage.py",
-      "kind": "file",
-      "md5": "23fdcfe0312fd6d3cd40dd1455e7090a"
+      "kind": "python-module",
+      "md5": "23fdcfe0312fd6d3cd40dd1455e7090a",
+      "semantic_hash": "64a5c6ff729b4b17403ab38335b045409519b398bbf4c27e91bdd30cd0d57828"
     },
     {
       "path": "src/uav_downloader/core/storage.py",
-      "kind": "file",
-      "md5": "610418dde70293d8c7cccf08cddc3202"
+      "kind": "python-module",
+      "md5": "610418dde70293d8c7cccf08cddc3202",
+      "semantic_hash": "1821bed3d15edde4b7b6f1da1db2383e5effac2a40023409d0363d5c5b48d710"
     },
     {
       "path": "src/uav_downloader/core/video_identity.py",
-      "kind": "file",
-      "md5": "3c34e49b3a04f7f7b64bbec92ad37451"
+      "kind": "python-module",
+      "md5": "3c34e49b3a04f7f7b64bbec92ad37451",
+      "semantic_hash": "2b91ab05055414b19718eec80e3cc7f05986cb91d9216239febe1852a34871db"
     },
     {
       "path": "src/uav_downloader/daemon/download_batch.py",
@@ -90,28 +95,33 @@
     },
     {
       "path": "src/uav_downloader/daemon/download_files.py",
-      "kind": "file",
-      "md5": "b40ee32fd37728dfec6564ef84ac24e3"
+      "kind": "python-module",
+      "md5": "b40ee32fd37728dfec6564ef84ac24e3",
+      "semantic_hash": "b36e8ff1bb21ecfb6844b1b526c8fba24dff36de71b695cf45137b3d84c73c62"
     },
     {
       "path": "src/uav_downloader/daemon/nas.py",
-      "kind": "file",
-      "md5": "997b6f312d7e5a7895889029b9216835"
+      "kind": "python-module",
+      "md5": "997b6f312d7e5a7895889029b9216835",
+      "semantic_hash": "bf55110a0a1be3e1b0cfea5c8b37148ab171d1f440a9342a954f3f0da7f23b98"
     },
     {
       "path": "src/uav_downloader/daemon/server.py",
-      "kind": "file",
-      "md5": "026e6eb93eba427c439eaab0bc0677d6"
+      "kind": "python-module",
+      "md5": "026e6eb93eba427c439eaab0bc0677d6",
+      "semantic_hash": "b9cb95a1b93e6ec41f648c129fe05941c3ca2b13fcbfbe5780b4fc340019f942"
     },
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
-      "kind": "file",
-      "md5": "87d78db288beccd89a0bf71d69105673"
+      "kind": "python-module",
+      "md5": "87d78db288beccd89a0bf71d69105673",
+      "semantic_hash": "b5439ffcff6ed7b4e8590a18a586af6dd980499a33b5146e0add5b768f73c5d7"
     },
     {
       "path": "src/uav_downloader/metadata.py",
-      "kind": "file",
-      "md5": "05a57959bb56b2c4dbf44b4937341131"
+      "kind": "python-module",
+      "md5": "05a57959bb56b2c4dbf44b4937341131",
+      "semantic_hash": "a8496ff307c8ed60d0093999cac92ed5d822f80797922888f0108efe81ac7ae5"
     },
     {
       "path": "uav-web/Cargo.lock",
@@ -125,8 +135,10 @@
     },
     {
       "path": "uav-web/frontend/download-batch.js",
-      "kind": "file",
-      "md5": "8a4152c17a5f81bfbeae87c4516219bb"
+      "kind": "tree-sitter-module",
+      "language": "javascript",
+      "md5": "8a4152c17a5f81bfbeae87c4516219bb",
+      "semantic_hash": "4b14d22e4b736c297a73cc8bd1875d297c273e86d761b7a3f7187c39c47818c0"
     },
     {
       "path": "uav-web/frontend/index.html",
@@ -135,23 +147,31 @@
     },
     {
       "path": "uav-web/frontend/video-selection.js",
-      "kind": "file",
-      "md5": "e329cc8d8c9c688a0345d8f600165d69"
+      "kind": "tree-sitter-module",
+      "language": "javascript",
+      "md5": "e329cc8d8c9c688a0345d8f600165d69",
+      "semantic_hash": "7eb95b0874e524379ec9cf721fba54274389dbeaedad93b92adbc61ed9229041"
     },
     {
       "path": "uav-web/src/client.rs",
-      "kind": "file",
-      "md5": "fb4698e8e95a53f5f31fa70d8184d00f"
+      "kind": "tree-sitter-module",
+      "language": "rust",
+      "md5": "fb4698e8e95a53f5f31fa70d8184d00f",
+      "semantic_hash": "a956078734d920452384ab178a551d8308b25a1475a8f7e54d2c7c29b319673f"
     },
     {
       "path": "uav-web/src/routes.rs",
-      "kind": "file",
-      "md5": "9b79b083b14b8d2d373c27f140a7074b"
+      "kind": "tree-sitter-module",
+      "language": "rust",
+      "md5": "9b79b083b14b8d2d373c27f140a7074b",
+      "semantic_hash": "417f608ef395d37090fadaaa83171564661e8462116323f62c6d2f9bc401462f"
     },
     {
       "path": "uav-web/frontend/mobile-actions.js",
-      "kind": "file",
-      "md5": "36e2e4c62e28b336a1cdb0d824ab0fd9"
+      "kind": "tree-sitter-module",
+      "language": "javascript",
+      "md5": "36e2e4c62e28b336a1cdb0d824ab0fd9",
+      "semantic_hash": "0d794e69d16ed46bf4ed457bd7b5399b01bc510fd4a4cc9e6fe061ce4599e086"
     },
     {
       "path": "uav-web/frontend/mobile-actions.css",
@@ -160,33 +180,40 @@
     },
     {
       "path": "uav-web/frontend/subtitle-settings.js",
-      "kind": "file",
-      "md5": "330768ed0d07a417a259277a59184df8"
+      "kind": "tree-sitter-module",
+      "language": "javascript",
+      "md5": "330768ed0d07a417a259277a59184df8",
+      "semantic_hash": "e81fea814b530acfc08160cbc3ea4e15c2ed2c86cd027e87274f424836ead1f4"
     },
     {
       "path": "src/uav_downloader/daemon/subtitle_http.py",
-      "kind": "file",
-      "md5": "813b6ae082c224a1b794b30539950cd1"
+      "kind": "python-module",
+      "md5": "813b6ae082c224a1b794b30539950cd1",
+      "semantic_hash": "51fe07f643ff62afc147840fc72276deb250415fc15680e52d5aecf94fda6347"
     },
     {
       "path": "src/uav_downloader/subtitles/profiles.py",
-      "kind": "file",
-      "md5": "10f33a1440b3ff4cd4d251ba291783fd"
+      "kind": "python-module",
+      "md5": "10f33a1440b3ff4cd4d251ba291783fd",
+      "semantic_hash": "6d7514e5db567c61f95db40dea3f29c4f11e3b94e25022cba8ee645ddae7b0ea"
     },
     {
       "path": "src/uav_downloader/subtitles/settings.py",
-      "kind": "file",
-      "md5": "2881e3376a7cd0de27dbeecfe96a66f2"
+      "kind": "python-module",
+      "md5": "2881e3376a7cd0de27dbeecfe96a66f2",
+      "semantic_hash": "03f8bd1186c00f48019170a1256f47564b48cc50b0d1cde5b10ee3c7a6dadf11"
     },
     {
       "path": "src/uav_downloader/subtitles/asr.py",
-      "kind": "file",
-      "md5": "d946338ef095124a7b7a7716124d43bb"
+      "kind": "python-module",
+      "md5": "d946338ef095124a7b7a7716124d43bb",
+      "semantic_hash": "bf4d53d9911e2c99f1e5770a24a4e634b19db9863e308ff385b73482ed76d137"
     },
     {
       "path": "src/uav_downloader/core/media_errors.py",
-      "kind": "file",
-      "md5": "53f5cf60b4921b9af5a93638b108a506"
+      "kind": "python-module",
+      "md5": "53f5cf60b4921b9af5a93638b108a506",
+      "semantic_hash": "6e92047c220bc3e310b911206cfafdde50b565e08303b44f67e324b2a3bdef76"
     }
   ],
   "features": [
@@ -865,7 +892,11 @@
     "tests/test_web_download_settings.py",
     "tests/download_batch.cjs",
     "tests/mobile_actions.cjs",
-    "tools/web-ci/check_mobile_actions.cjs"
+    "tools/web-ci/check_mobile_actions.cjs",
+    "docs/agents/review-efficiency.md",
+    "scripts/check_flow_docs.sh",
+    ".github/workflows/web-check.yml",
+    "tools/flow-docs/runtime_smoke.py"
   ],
   "limits": {
     "nodes": 25,
