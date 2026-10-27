@@ -1,0 +1,40 @@
+{
+  "observed_date": "2026-10-23",
+  "results": [
+    {
+      "command": [
+        "gh",
+        "api",
+        "repos/CloudWorkTools/UAV-Downloader",
+        "--jq",
+        "{default_branch: .default_branch}"
+      ],
+      "exit_code": 0,
+      "stdout": "{\"default_branch\":\"master\"}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "gh",
+        "api",
+        "repos/CloudWorkTools/UAV-Downloader/rulesets",
+        "--jq",
+        "[.[] | {name,enforcement,target}]"
+      ],
+      "exit_code": 0,
+      "stdout": "[]\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "gh",
+        "api",
+        "repos/CloudWorkTools/UAV-Downloader/branches/master/protection"
+      ],
+      "exit_code": 1,
+      "stdout": "{\"message\":\"Branch not protected\",\"documentation_url\":\"https://docs.github.com/rest/branches/branch-protection#get-branch-protection\",\"status\":\"404\"}",
+      "stderr": "gh: Branch not protected (HTTP 404)\n"
+    }
+  ],
+  "changes_made": false
+}

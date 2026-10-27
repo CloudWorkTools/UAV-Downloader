@@ -1,0 +1,36 @@
+{
+  "feature": "queue.enqueue",
+  "fingerprint": "b4386133c84f74e91ccd3d7a04128853517d0012c0c527dfedffc8db2a78ca8b",
+  "reviewer": "/root/review_queue_final",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "AGENTS.md",
+    "docs/agents/flow-docs-sync.md",
+    "docs/flows/README.md",
+    "docs/flow-manifest.json",
+    "docs/flows/queue.enqueue.mmd",
+    "docs/flows/contracts.md",
+    "docs/flows/storage.destination.mmd",
+    "docs/flows/download.batch.mmd",
+    "src/uav_downloader/daemon/task_manager.py:65-98,159-194,207-300,528-544",
+    "src/uav_downloader/daemon/download_batch.py:103-139",
+    "src/uav_downloader/daemon/download_files.py:12-13,46-47",
+    "src/uav_downloader/core/video_identity.py",
+    "src/uav_downloader/core/config.py",
+    "src/uav_downloader/daemon/nas.py:79-88,363-372",
+    "tests/test_daemon_downloads.py:755-787",
+    "tests/test_web_download_settings.py:478-557",
+    "tools/flow-docs/flow_checker.py",
+    "tests/test_flow_docs.py",
+    "docs/flow-evidence/runtime/queue.enqueue/offline-regression.md",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/python-tests.log",
+    "docs/flow-evidence/runtime/download.batch/offline-regression/checker-tests.log",
+    "docs/flow-evidence/candidate-inputs.json: independently verified all pinned SHA-256 values and confirmed every registered application source equals comparison base"
+  ],
+  "limitations": [
+    "Read-only semantic review; application and checker tests were not rerun. Existing logs record 27 batch cases and 10 checker cases passing.",
+    "Scope covers batch enqueue, persistence and dispatcher-start boundaries on an existing service; nonbatch enqueue and subsequent execution lifecycle remain outside adoption.",
+    "Real NAS faults, power loss, cross-process transactions, diagram rendering, production validation, CI and human approvals remain separate gates."
+  ]
+}

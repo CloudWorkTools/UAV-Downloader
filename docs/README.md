@@ -8,6 +8,7 @@ CloudWorkTools 版本以繁體中文 Web 操作與 NAS 擴充為主：
 - [上游更新維護](upstream-sync.md)
 - [架構與模組邊界](architecture.md)
 - [私有 Docker 隔離驗證紀錄](docker-evidence.md)
+- [系統流程與程式導航](flows/README.md)
 - [四站精準搜尋與套件評估](search-optimization-research.md)
 - [貢獻指南](../CONTRIBUTING.md)
 - [代理任務追蹤](agents/issue-tracker.md)
