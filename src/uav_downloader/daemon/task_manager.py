@@ -24,6 +24,9 @@ from uav_downloader.core.storage import SMB_PATH_ROOT, StorageWriteError, storag
 from uav_downloader.core.video_identity import site_from_url
 from uav_downloader.sites.base import MirrorsBlockedError
 
+_DOWNLOAD_RETRY_LIMIT = 5
+_DOWNLOAD_RETRY_DELAY = 2.0
+
 
 @dataclass
 class DownloadTask:
@@ -505,7 +508,7 @@ class TaskManager:
             # Reserve under the dispatcher lock so concurrent requests cannot start it twice.
             self._active[task_id] = task
             try:
-                task.thread = threading.Thread(target=self._run_task, args=(task,), daemon=True,
+                task.thread = threading.Thread(target=self._run_task_with_retries, args=(task,), daemon=True,
                                                name=f'worker-{task_id}')
                 task.thread.start()
             except Exception:
@@ -740,7 +743,7 @@ class TaskManager:
 
             if task_to_run:
                 t = threading.Thread(
-                    target=self._run_task,
+                    target=self._run_task_with_retries,
                     args=(task_to_run,),
                     daemon=True,
                     name=f"worker-{task_to_run.task_id}",
@@ -750,7 +753,65 @@ class TaskManager:
             else:
                 time.sleep(0.5)
 
-    def _run_task(self, task: DownloadTask) -> None:
+    def _wait_for_download_retry(self, task, seconds):
+        deadline = time.monotonic() + seconds
+        while not task.cancelled_event.is_set() and not task.paused_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            task.cancelled_event.wait(min(remaining, 0.2))
+        return True
+
+    def _run_task_with_retries(self, task: DownloadTask) -> None:
+        with self._lock:
+            self._active[task.task_id] = task
+        try:
+            for attempt in range(_DOWNLOAD_RETRY_LIMIT + 1):
+                task._retry_attempt = attempt
+                task._attempt_failed = False
+                task._publication_retries_exhausted = False
+                task._retry_blocked = False
+                self._run_task(task, retain_active=True)
+                if (not task._attempt_failed or task.subtitles_only or task._publication_retries_exhausted
+                        or task._retry_blocked or attempt == _DOWNLOAD_RETRY_LIMIT):
+                    break
+                with self._lock:
+                    if task.cancelled_event.is_set() or task.paused_event.is_set():
+                        break
+                    task.job = None
+                    task.status = 'preparing'
+                    task.set_phase(f'下載失敗，等待重試 {attempt + 1}/{_DOWNLOAD_RETRY_LIMIT}')
+                    self._save_tasks()
+                if self._wait_for_download_retry(task, _DOWNLOAD_RETRY_DELAY):
+                    break
+                task.error = None
+        finally:
+            task._retry_attempt = None
+            with self._lock:
+                self._active.pop(task.task_id, None)
+                if task.paused_event.is_set() and not task.cancelled_event.is_set():
+                    task.status = 'paused'
+                    task.error = None
+            if task.cancelled_event.is_set() and task.status not in ('cancelled', 'failed'):
+                self.cancel_task(task.task_id)
+            self._remove_requested_record(task)
+            self._save_tasks()
+
+    def _retry_publication(self, task, action):
+        for attempt in range(_DOWNLOAD_RETRY_LIMIT + 1):
+            try:
+                return action()
+            except Exception:
+                if (attempt == _DOWNLOAD_RETRY_LIMIT or task.cancelled_event.is_set()
+                        or task.paused_event.is_set()):
+                    task._publication_retries_exhausted = True
+                    raise
+                task.set_phase(f'儲存失敗，等待重試 {attempt + 1}/{_DOWNLOAD_RETRY_LIMIT}')
+                if self._wait_for_download_retry(task, _DOWNLOAD_RETRY_DELAY):
+                    task._publication_retries_exhausted = True
+                    raise
+
+    def _run_task(self, task: DownloadTask, *, retain_active=False) -> None:
         with self._lock:
             self._active[task.task_id] = task
         task.status = 'pausing' if task.paused_event.is_set() else "preparing"
@@ -758,14 +819,16 @@ class TaskManager:
 
         if task.cancelled_event.is_set():
             self._cleanup_cancelled(task)
-            with self._lock:
-                self._active.pop(task.task_id, None)
-            self._remove_requested_record(task)
+            if not retain_active:
+                with self._lock:
+                    self._active.pop(task.task_id, None)
+                self._remove_requested_record(task)
             self._save_tasks()
             return
         if task.paused_event.is_set():
             with self._lock:
-                self._active.pop(task.task_id, None)
+                if not retain_active:
+                    self._active.pop(task.task_id, None)
                 task.status = 'paused'
             self._save_tasks()
             return
@@ -931,7 +994,8 @@ class TaskManager:
             if not storage_fs(video_file).isfile(video_file):
                 raise OSError("下載器未產生完成的影片，已保留暫存檔")
             task.set_phase('移動完成檔案至存放位置' if task.staging_dir else '發布完成檔案至下載目的地')
-            task.files.publish(task.cancelled_event, overwrite=task.folder_policy == "overwrite")
+            self._retry_publication(task, lambda: task.files.publish(
+                task.cancelled_event, overwrite=task.folder_policy == "overwrite"))
             if task.cancelled_event.is_set():
                 self._finish_task(task, "cancelled")
                 return
@@ -939,9 +1003,9 @@ class TaskManager:
                 task.status = "uploading"
                 task.set_phase('傳送影片至 NAS')
                 task.updated_at = datetime.now(timezone.utc).isoformat()
-                nas.upload_video(task.nas_settings,
-                                 os.path.join(task.dest, f"{task.name}.mp4"),
-                                 task.cancelled_event, task.remote_files)
+                self._retry_publication(task, lambda: nas.upload_video(
+                    task.nas_settings, os.path.join(task.dest, f"{task.name}.mp4"),
+                    task.cancelled_event, task.remote_files))
                 if task.cancelled_event.is_set():
                     self._finish_task(task, "cancelled")
                     return
@@ -1002,19 +1066,22 @@ class TaskManager:
             except OSError as exc:
                 warning = f"NAS 連線或下載鎖釋放失敗：{exc}；請確認連線後重試"
                 task.error = f"{task.error}；{warning}" if task.error else warning
-                if task.cancelled_event.is_set():
+                task._retry_blocked = True
+                if task.cancelled_event.is_set() or getattr(task, '_attempt_failed', False):
                     task.status = "failed"
                 if task.paused_event.is_set():
                     task.paused_event.clear()
                     task.status = 'failed'
             with self._lock:
-                self._active.pop(task.task_id, None)
+                if not retain_active:
+                    self._active.pop(task.task_id, None)
                 task.speed_bps = 0
                 if task.paused_event.is_set() and not task.cancelled_event.is_set():
                     task.status = 'paused'
                     task.error = None
                     task.updated_at = datetime.now(timezone.utc).isoformat()
-            self._remove_requested_record(task)
+            if not retain_active:
+                self._remove_requested_record(task)
             self._save_tasks()
 
     def _run_subtitles(self, task: DownloadTask, job: Any) -> None:
@@ -1127,6 +1194,11 @@ class TaskManager:
 
     def _finish_task(self, task: DownloadTask, status: str) -> None:
         with self._lock:
+            if status == 'failed' and getattr(task, '_retry_attempt', None) is not None:
+                task._attempt_failed = True
+                if (task._retry_attempt < _DOWNLOAD_RETRY_LIMIT and not task.subtitles_only
+                        and not task._publication_retries_exhausted):
+                    status = 'preparing'
             task.status = ('cancelling' if task.cancelled_event.is_set() else
                            'pausing' if task.paused_event.is_set() else status)
             if task.status == 'completed':

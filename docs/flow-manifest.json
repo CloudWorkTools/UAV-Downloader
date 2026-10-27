@@ -96,7 +96,7 @@
     {
       "path": "src/uav_downloader/daemon/nas.py",
       "kind": "file",
-      "md5": "f17b748974350df23f383feb0e789652"
+      "md5": "997b6f312d7e5a7895889029b9216835"
     },
     {
       "path": "src/uav_downloader/daemon/server.py",
@@ -106,7 +106,7 @@
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
       "kind": "file",
-      "md5": "2e653af829f3582f2ec21852be09efb8"
+      "md5": "87d78db288beccd89a0bf71d69105673"
     },
     {
       "path": "src/uav_downloader/metadata.py",
@@ -610,6 +610,112 @@
           "path": "src/uav_downloader/subtitles/profiles.py"
         }
       ]
+    },
+    {
+      "id": "download.execute",
+      "flow": "docs/flows/download.execute.mmd",
+      "depends_on": [
+        "queue.enqueue",
+        "storage.destination"
+      ],
+      "mappings": [
+        {
+          "node": "START",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "ATTEMPT",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "ATTEMPT",
+          "path": "src/uav_downloader/daemon/download_files.py"
+        },
+        {
+          "node": "RESULT",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "WAIT",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "STOP",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "FINISHFAIL",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "PUBLISH",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "PUBLISH",
+          "path": "src/uav_downloader/daemon/download_files.py"
+        },
+        {
+          "node": "PUBLISH",
+          "path": "src/uav_downloader/daemon/nas.py"
+        },
+        {
+          "node": "STORE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "STOREWAIT",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "DONE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "SKIP",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "CANCEL",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "PAUSE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "CANCELCHECK",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "CANCELLED",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "PAUSECHECK",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "PAUSED",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "RELEASEFAIL",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "DONEWARN",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "SKIPWARN",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "NEXT",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        }
+      ]
     }
   ],
   "reviews": [
@@ -696,6 +802,55 @@
       "reviewer": "/root/flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/queue.enqueue/e9f496adb111bd3861aa80daaa829e663e8e4e955f2c9eeb2de2b4bc87cefcb9.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "39b2f5e8924477793ecbcfee0f2d32386cb6f16b1f176783b8b03b48e57cc2b5",
+      "reviewer": "/root/flow_queue",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/39b2f5e8924477793ecbcfee0f2d32386cb6f16b1f176783b8b03b48e57cc2b5.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "fc92a82c980f4acdf815816510ab487aec76b54e865806647f71bafce406c42d",
+      "reviewer": "/root/flow_storage",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/fc92a82c980f4acdf815816510ab487aec76b54e865806647f71bafce406c42d.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "342c47c701aaa0d945e89e7bedc465c96a2c1ef59207b431c2d14a0441dda51c",
+      "reviewer": "/root/flow_batch",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/342c47c701aaa0d945e89e7bedc465c96a2c1ef59207b431c2d14a0441dda51c.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "6bcc58fcea369d1c653224b0283a40bf936eccf9e01253ea7ee774f8f4f68ecf",
+      "reviewer": "/root/review_final_queue",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/6bcc58fcea369d1c653224b0283a40bf936eccf9e01253ea7ee774f8f4f68ecf.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "707013570e785e11ba7d3adf1d9fcce3aa9d394fc361ba3daffb31a583b5d353",
+      "reviewer": "/root/review_final_storage",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/707013570e785e11ba7d3adf1d9fcce3aa9d394fc361ba3daffb31a583b5d353.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "cb56dc26b26d4b7d5f7aaa5257fa71ce9eb6e405f375c8065eae122384aa99f8",
+      "reviewer": "/root/review_final_batch",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/cb56dc26b26d4b7d5f7aaa5257fa71ce9eb6e405f375c8065eae122384aa99f8.json"
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "d22f906979eea412273e342c9fde5bf3538fa99aadb54583fd4322ab871cf822",
+      "reviewer": "/root/flow_review_new2",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.execute/d22f906979eea412273e342c9fde5bf3538fa99aadb54583fd4322ab871cf822.json"
     }
   ],
   "policy_inputs": [

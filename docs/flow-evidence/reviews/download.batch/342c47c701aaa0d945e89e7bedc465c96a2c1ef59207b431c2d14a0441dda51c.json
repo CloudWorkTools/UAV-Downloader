@@ -1,0 +1,17 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "342c47c701aaa0d945e89e7bedc465c96a2c1ef59207b431c2d14a0441dda51c",
+  "reviewer": "/root/flow_batch",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "docs/flows/download.batch.mmd and docs/flows/contracts.md describe the submission, replay, rollback, and browser retry boundaries implemented in src/uav_downloader/daemon/download_batch.py and uav-web/frontend/download-batch.js.",
+    "The base-to-candidate diff changes task execution and publication retry behavior in src/uav_downloader/daemon/task_manager.py and src/uav_downloader/daemon/nas.py; it does not change batch submission, the frontend request, or its HTTP forwarding.",
+    "src/uav_downloader/daemon/download_batch.py determines destination occupancy from nonterminal task statuses. The new retry wrapper retains the preparing status between attempts, consistent with the documented unfinished-task occupancy rule.",
+    "tests/test_daemon_downloads.py contains batch replay, destination occupancy, rollback, retry, cancellation, and pause scenarios; tests/download_batch.cjs covers the frontend batch flow."
+  ],
+  "limitations": [
+    "This was a read-only semantic review; application code and tests were not executed, and test execution results were not supplied.",
+    "Visual rendering of the flow diagram and remote service behavior were not verified."
+  ]
+}

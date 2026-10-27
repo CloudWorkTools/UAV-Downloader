@@ -1,0 +1,9 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "8c05e70c483c98ef0dd835ab7f3daa645619224d4e6c5aa2da3fd0cda229f838",
+  "reviewer": "/root/flow_execute3",
+  "verdict": "fail",
+  "findings": [{"location": "docs/flows/download.execute.mmd:33-39", "consequence": "The flow routes successful publication only to completion. If service shutdown sets the pause event while publication or NAS upload succeeds, _finish_task changes the result to pausing and the worker ultimately leaves the task paused; published files may already exist. The diagram omits this outcome.", "correction": "Add a publication-success-to-pause branch for service shutdown and describe that already published files can remain."}],
+  "evidence": ["src/uav_downloader/daemon/task_manager.py:214-221 sets the pause event for active tasks during dispatcher shutdown.", "src/uav_downloader/daemon/task_manager.py:993-1020 publishes and uploads before calling _finish_task; lines 1193-1202 give the pause event precedence over completed status.", "src/uav_downloader/daemon/task_manager.py:1060-1080 and 777-795 finalize paused status and retain the task's files.", "tests/test_daemon_downloads.py:1249-1377 covers download retries, publication retries, cancellation and pause during retry waits; tests/test_nas.py:570-591 covers partial upload retry.", "Compared the candidate worktree with base 81de7ca83b25537cf69f692404590f929a0421a6 and read the flow, contracts, mapped source and changed tests."],
+  "limitations": ["Read-only review; application and tests were not executed, and execution logs were not supplied.", "The graph index corresponds to the original workspace, so candidate behavior was verified from worktree source directly.", "The flow diagram was not visually rendered."]
+}

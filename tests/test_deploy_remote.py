@@ -135,6 +135,7 @@ def test_deployment_bundles_private_firecrawl_by_default(monkeypatch, tmp_path, 
 
     monkeypatch.setattr(deploy.subprocess, 'run', run)
     monkeypatch.setattr(deploy, 'check_ci', lambda *a: None)
+    monkeypatch.setattr(deploy, 'remote_deployed_image', lambda ssh: '-')
     deploy.main()
     assert any('uav-firecrawl-api:2.11.162' in args for args in calls) is expected
     save = next(args for args in calls if args[:2] == ['docker', 'save'])
@@ -175,6 +176,7 @@ def test_image_check_failure_blocks_remote_deployment(monkeypatch, failed_stage)
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(deploy.subprocess, 'run', run)
     monkeypatch.setattr(deploy, 'check_ci', lambda *a: None)
+    monkeypatch.setattr(deploy, 'remote_deployed_image', lambda ssh: '-')
     with pytest.raises(subprocess.CalledProcessError):
         deploy.main()
     assert not any(args[0] == 'ssh' or args[:2] == ['docker', 'save'] for args in calls)
@@ -661,3 +663,39 @@ def test_ci_requires_successful_checked_out_revision_proof(monkeypatch, jobs):
 def successful_ci_jobs():
     return json.dumps({'jobs': [{'name': 'Web / UI compatibility', 'conclusion': 'success',
         'steps': [{'name': '驗證部署提交', 'conclusion': 'success'}]}]})
+
+
+def test_revision_guard_accepts_descendant_and_rejects_older_or_unknown(deployment_worktree):
+    main, linked = deployment_worktree
+    old = subprocess.check_output(['git', '-C', str(linked), 'rev-parse', 'HEAD'], text=True).strip()
+    (linked / 'new').write_text('new')
+    subprocess.run(['git', '-C', str(linked), 'add', 'new'], check=True)
+    subprocess.run(['git', '-C', str(linked), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '-m', 'new'], check=True, capture_output=True)
+    new = subprocess.check_output(['git', '-C', str(linked), 'rev-parse', 'HEAD'], text=True).strip()
+    deploy.check_deployment_revision('uav-downloader:' + old, new)
+    with pytest.raises(RuntimeError, match='ancestor'):
+        deploy.check_deployment_revision('uav-downloader:' + new, old)
+    with pytest.raises(RuntimeError, match='unknown'):
+        deploy.check_deployment_revision('unknown:latest', new)
+    deploy.check_deployment_revision('uav-downloader:' + new, old, allow_rollback=True)
+
+
+def test_locked_installer_refuses_changed_running_image(monkeypatch, tmp_path):
+    import sys
+    calls = []
+    def output(args, **kw):
+        if args[:3] == ['docker', 'ps', '-a']:
+            return 'uav-downloader\n'
+        if args[:2] == ['docker', 'inspect']:
+            return 'uav-downloader:' + 'b' * 40
+        raise AssertionError(args)
+    monkeypatch.setattr(deploy.subprocess, 'check_output', output)
+    monkeypatch.setattr(deploy.subprocess, 'run', lambda args, **kw: calls.append(args))
+    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), 'uav-downloader:' + 'c' * 40,
+                                     '192.0.2.10', '8080', '', '0', '', '{}',
+                                     'uav-downloader:' + 'a' * 40])
+    with pytest.raises(RuntimeError, match='changed'):
+        exec(deploy.REMOTE_INSTALL, {})
+    assert not calls
+    assert not (tmp_path / '.deployment-queue.json').exists()

@@ -1,0 +1,25 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "46f33655741a51a7cf0eddda5e39018d3e867fa67f94effa4b801b94003d38e1",
+  "reviewer": "/root/review_final_execute",
+  "verdict": "fail",
+  "findings": [
+    {
+      "location": "docs/flows/download.execute.mmd: DONE and SKIP",
+      "consequence": "The flow omits storage-connection or download-lock release failures after successful completion or a skip. The implementation retains the completed or skipped status and records a release warning, so readers cannot infer that a terminal success or skip may carry this warning.",
+      "correction": "Document that connection or lock release can fail after completion or skip, retaining the terminal status and recording a warning."
+    }
+  ],
+  "evidence": [
+    "src/uav_downloader/daemon/task_manager.py:765-812 implements download and publication retry limits, interruption, and worker cleanup.",
+    "src/uav_downloader/daemon/task_manager.py:861-864, 930-940 and 1013-1016 set skipped or completed status; lines 1056-1085 clean temporary files and close storage. An OSError from storage.close appends a warning but preserves completed or skipped status unless cancellation, a failed attempt, or pause applies.",
+    "src/uav_downloader/daemon/task_manager.py:990-1016 and 1193-1204 allow a shutdown pause to take precedence after publication succeeds.",
+    "src/uav_downloader/daemon/download_files.py:62-115 and src/uav_downloader/daemon/nas.py:252-313 implement publication, ownership tracking, upload retries, and cancellation cleanup.",
+    "tests/test_daemon_downloads.py:318-416 and 1350-1478 cover close failures, download and publication retries, cancellation, and pause; tests/test_nas.py covers upload retry.",
+    "Reviewed the candidate flow, shared contracts, manifest mappings and source changes against base 81de7ca83b25537cf69f692404590f929a0421a6."
+  ],
+  "limitations": [
+    "Read-only review: application code and tests were not executed, and test execution evidence was not supplied.",
+    "The diagram was not visually rendered and remote NAS behavior was not verified."
+  ]
+}

@@ -59,6 +59,8 @@ SMB 檢查另以隔離 Samba 驗證同批多任務的並行儲存。實際 NAS�
 
 SMB 測試使用獨立的測試帳號與共享目錄，勿使用正式影片目錄作為測試資料。保留本機檔案、未經使用者明確選擇不覆寫遠端既有檔案、錯誤不包含密碼，均為 NAS 擴充的必要行為。
 
+部署與回滾前，依[部署版本保護](docs/agents/deployment-safety.md)核對線上版本、Git 歷史與部署鎖內狀態。
+
 ## CI 與生產環境驗證
 
 Linux 工作指定 `shared-runners` 群組及 `self-hosted`、`Linux`、`X64`、`shared` 標籤。Web 回歸測試由 `Dockerfile.web-tests` 在正式映像上加入測試依賴，使用獨立容器與唯讀原始碼；共用主機須提供 Docker。公開 fork 的 PR 不自動執行此自架工作，維護者審查後可手動派送。Windows 建置保留 Windows runner。

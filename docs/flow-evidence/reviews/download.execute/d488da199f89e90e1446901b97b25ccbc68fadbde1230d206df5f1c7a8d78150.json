@@ -1,0 +1,9 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "d488da199f89e90e1446901b97b25ccbc68fadbde1230d206df5f1c7a8d78150",
+  "reviewer": "/root/flow_review_new",
+  "verdict": "fail",
+  "findings": [{"location":"docs/flows/download.execute.mmd:8,35-44","consequence":"The STOREWAIT → PUBLISH loop depicts a retry of both local publication and NAS upload. The implementation retries only the failed action: an upload failure retries nas.upload_video without calling DownloadFiles.publish again.","smallest_correction":"Separate local publication and NAS upload in the flow, or label the retry loop so it unambiguously returns to the failed action alone."}],
+  "evidence": ["src/uav_downloader/daemon/task_manager.py:800-812 retries the supplied publication action.","src/uav_downloader/daemon/task_manager.py:997-1009 invokes the retry helper separately for local publication and NAS upload.","src/uav_downloader/daemon/download_files.py:58-94 and src/uav_downloader/daemon/nas.py:252-301 implement the distinct publication actions.","tests/test_daemon_downloads.py:1348-1470 describes download and publication retry behavior; tests/test_nas.py:571-593 describes recovery after a partial NAS upload.","The comparison base has no download.execute flow; this candidate introduces its baseline."],
+  "limitations": ["This was a read-only review; application code and tests were not executed, and no test execution evidence was supplied.","The flow intentionally excludes subtitle-only tasks, site extraction internals, and restart recovery."]
+}

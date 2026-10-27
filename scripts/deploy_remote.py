@@ -203,6 +203,12 @@ queue.lock()
 if queue.path.exists():
     raise RuntimeError('Queue recovery required: run --recover-queue before deploying')
 existing = subprocess.check_output(['docker', 'ps', '-a', '--format', '{{.Names}}'], text=True).splitlines()
+if len(sys.argv) > 9:
+    expected = sys.argv[9]
+    current = (subprocess.check_output(['docker', 'inspect', 'uav-downloader', '--format', '{{.Config.Image}}'], text=True).strip()
+               if 'uav-downloader' in existing else '-')
+    if current != expected:
+        raise RuntimeError('Running deployment changed after revision check; retry deployment')
 try:
     if 'uav-downloader' in existing:
         queue.pause()
@@ -233,6 +239,30 @@ def check_ci(commit, run_id=None):
     print('Exact-revision GitHub CI: OK', flush=True)
 
 
+def remote_deployed_image(ssh):
+    code = """import subprocess
+names = subprocess.check_output(['docker', 'ps', '-a', '--format', '{{.Names}}'], text=True).splitlines()
+print(subprocess.check_output(['docker', 'inspect', 'uav-downloader', '--format', '{{.Config.Image}}'], text=True).strip() if 'uav-downloader' in names else '-')
+"""
+    return subprocess.check_output([*ssh, 'python3 -'], input=code, text=True).strip()
+
+
+def check_deployment_revision(image, commit, *, allow_rollback=False):
+    if image == '-':
+        return
+    match = re.fullmatch(r'uav-downloader:([0-9a-f]{40})', image)
+    if not match:
+        raise RuntimeError('Running deployment revision is unknown; inspect it before deploying')
+    revision = match.group(1)
+    known = subprocess.run(['git', 'cat-file', '-e', revision + '^{commit}'], cwd=ROOT,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    if not known:
+        raise RuntimeError('Running deployment revision is unknown locally; fetch it before deploying')
+    ancestor = subprocess.run(['git', 'merge-base', '--is-ancestor', revision, commit], cwd=ROOT).returncode == 0
+    if not ancestor and not allow_rollback:
+        raise RuntimeError('Running deployment is not an ancestor of the candidate; use --allow-rollback only for an intentional rollback')
+
+
 def asset_manifest():
     frontend = ROOT / 'uav-web/frontend'
     return {'/' if path.relative_to(frontend).as_posix() == 'index.html' else '/' + path.relative_to(frontend).as_posix():
@@ -261,6 +291,7 @@ def main():
     parser.add_argument('--without-firecrawl', action='store_false', dest='with_firecrawl', help='Skip installing Firecrawl; disable it in settings when no stack is running')
     parser.add_argument('--ci-run', help='Successful web-check.yml run ID (default: newest run for HEAD)')
     parser.add_argument('--recover-queue', action='store_true', help='Resume only deployment-paused tasks from the remote journal')
+    parser.add_argument('--allow-rollback', action='store_true', help='Allow an intentional deployment that does not contain the running revision')
     options = parser.parse_args()
     config = load_config()
     if options.recover_queue:
@@ -275,6 +306,12 @@ def main():
     ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', target]
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     check_ci(commit, options.ci_run)
+    deployed_image = remote_deployed_image(ssh)
+    check_deployment_revision(deployed_image, commit, allow_rollback=options.allow_rollback)
+    if deployed_image != '-':
+        subprocess.run(['git', 'fetch', 'origin', 'master'], cwd=ROOT, check=True)
+        if subprocess.run(['git', 'merge-base', '--is-ancestor', deployed_image.split(':', 1)[1], 'FETCH_HEAD'], cwd=ROOT).returncode:
+            print('Warning: deployed revision is not included in origin/master; retain and merge its PR', flush=True)
     image = 'uav-downloader:' + commit
     images = [image, SPEACHES_IMAGE]
     bundle = base64.b64encode(json.dumps({
@@ -301,7 +338,7 @@ def main():
         with archive.open('rb') as source:
             subprocess.run([*ssh, 'docker load'], stdin=source, check=True)
     args = [config['remote_dir'], image, config['host'], str(config['port']), bundle, '1' if options.with_firecrawl else '0']
-    args.extend([config.get('staging_host_dir', ''), json.dumps(asset_manifest())])
+    args.extend([config.get('staging_host_dir', ''), json.dumps(asset_manifest()), deployed_image])
     subprocess.run([*ssh, 'python3 - ' + ' '.join(map(shlex.quote, args))], input=REMOTE_INSTALL, text=True, check=True)
 
 

@@ -1,0 +1,29 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "dffe9600b69a7cce8e9c99751bf38c77f6aaa560b956fb445a66a4a6f384c70b",
+  "reviewer": "/root/review_final_execute2",
+  "verdict": "fail",
+  "findings": [
+    {
+      "location": "docs/flows/download.execute.mmd:12-13, 46",
+      "consequence": "The skipped path documents a warning only for connection release failure. If a task has a workspace and is then skipped, workspace cleanup can also fail; the task remains skipped and receives a cleanup warning.",
+      "correction": "Include cleanup failure in the skipped terminal warning path."
+    },
+    {
+      "location": "docs/flows/download.execute.mmd:20, 43-45",
+      "consequence": "RELEASEFAIL says files are preserved, but cancellation cleanup removes owned remote and local files sequentially. A later cleanup failure can leave some files already deleted, so the diagram promises more preservation than the implementation provides.",
+      "correction": "Describe cleanup as potentially partial, with remaining files retained and automatic retries stopped."
+    }
+  ],
+  "evidence": [
+    "src/uav_downloader/daemon/task_manager.py:930-933, 1057-1074",
+    "src/uav_downloader/daemon/task_manager.py:703-720",
+    "src/uav_downloader/daemon/download_files.py:106-115",
+    "src/uav_downloader/daemon/nas.py:_remove_uploaded",
+    "tests/test_daemon_downloads.py:303-417, 1350-1456"
+  ],
+  "limitations": [
+    "Read-only review; application code and tests were not executed, and no test execution results were supplied.",
+    "No remote NAS behavior or rendered diagram was verified."
+  ]
+}

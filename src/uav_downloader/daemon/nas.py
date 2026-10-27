@@ -265,6 +265,11 @@ def upload_video(settings, video_file, cancelled, published=None, *, subtitles_o
                     if cancelled.is_set():
                         return
                     target = ntpath.join(root, source.name)
+                    if target in published:
+                        if (not smb.path.islink(target, **options)
+                                and smb.stat(target, **options).st_size == source.stat().st_size):
+                            continue
+                        raise NasError('已傳送的任務檔案遭到變更，請檢查 NAS 後重試')
                     temporary = ntpath.join(root, '.uav-' + uuid.uuid4().hex + '.part')
                     try:
                         with source.open('rb') as local, smb.open_file(temporary, mode='xb', **options) as remote:
