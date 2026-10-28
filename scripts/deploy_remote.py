@@ -3,12 +3,13 @@ import ipaddress
 import argparse
 import base64
 import json
-import hashlib
 from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
 import tempfile
+
+from deploy_artifact import load_ci_image
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEACHES_IMAGE = 'ghcr.io/speaches-ai/speaches@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8'
@@ -169,7 +170,8 @@ try:
     if assets:
         import hashlib
         info = json.loads(subprocess.check_output(['docker', 'inspect', name], text=True))[0]
-        if not info['State']['Running'] or info['Config']['Image'] != image:
+        if (not info['State']['Running'] or info['Config']['Image'] != image
+                or (len(sys.argv) > 10 and info['Image'] != sys.argv[10])):
             raise RuntimeError('Deployed revision mismatch')
         for path, digest in assets.items():
             with opener.open(f'http://{host}:{port}' + path, timeout=20) as response:
@@ -209,6 +211,10 @@ if len(sys.argv) > 9:
                if 'uav-downloader' in existing else '-')
     if current != expected:
         raise RuntimeError('Running deployment changed after revision check; retry deployment')
+if len(sys.argv) > 10:
+    loaded = subprocess.check_output(['docker', 'image', 'inspect', sys.argv[2], '--format', '{{.Id}}'], text=True).strip()
+    if loaded != sys.argv[10]:
+        raise RuntimeError('Loaded CI image ID mismatch; service remains unchanged')
 try:
     if 'uav-downloader' in existing:
         queue.pause()
@@ -221,9 +227,11 @@ finally:
 def check_ci(commit, run_id=None):
     if run_id is None:
         runs = json.loads(subprocess.check_output(['gh', 'run', 'list', '--workflow', 'web-check.yml',
-            '--commit', commit, '--limit', '1', '--json', 'databaseId'], cwd=ROOT, text=True))
+            '--commit', commit, '--limit', '20', '--json', 'databaseId,event,status,conclusion'], cwd=ROOT, text=True))
+        runs = [run for run in runs if run.get('event') in ('push', 'workflow_dispatch')
+                and run.get('status') == 'completed' and run.get('conclusion') == 'success']
         if not runs:
-            raise RuntimeError('No web-check.yml CI run for deployment revision')
+            raise RuntimeError('No successful exact-head deployment CI; dispatch web-check.yml for this branch')
         run_id = str(runs[0]['databaseId'])
     if not str(run_id).isdecimal():
         raise ValueError('Invalid CI run ID')
@@ -237,6 +245,7 @@ def check_ci(commit, run_id=None):
                        for step in job.get('steps', [])) for job in jobs.get('jobs', [])):
         raise RuntimeError('CI lacks successful checked-out deployment revision proof')
     print('Exact-revision GitHub CI: OK', flush=True)
+    return str(run_id)
 
 
 def remote_deployed_image(ssh):
@@ -263,32 +272,11 @@ def check_deployment_revision(image, commit, *, allow_rollback=False):
         raise RuntimeError('Running deployment is not an ancestor of the candidate; use --allow-rollback only for an intentional rollback')
 
 
-def asset_manifest():
-    frontend = ROOT / 'uav-web/frontend'
-    return {'/' if path.relative_to(frontend).as_posix() == 'index.html' else '/' + path.relative_to(frontend).as_posix():
-            hashlib.sha256(path.read_bytes()).hexdigest() for path in frontend.rglob('*') if path.is_file()}
-
-
-def check_image(image):
-    test_image = image + '-tests'
-    try:
-        subprocess.run(['docker', 'build', '-f', 'Dockerfile.web-tests',
-                        '--build-arg', 'APP_IMAGE=' + image, '-t', test_image, '.'], cwd=ROOT, check=True)
-        subprocess.run(['docker', 'run', '--rm', '--user', '1000:1000',
-                        '--mount', f'type=bind,source={ROOT},target=/workspace,readonly',
-                        '--workdir', '/workspace', test_image], cwd=ROOT, check=True)
-        subprocess.run(['bash', 'scripts/check_web_container.sh', image, test_image], cwd=ROOT, check=True)
-        subprocess.run(['bash', 'scripts/check_smb_batch_container.sh', image], cwd=ROOT, check=True)
-    finally:
-        subprocess.run(['docker', 'image', 'rm', test_image], stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, check=False)
-    print('Candidate image checks: OK', flush=True)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--with-firecrawl', action='store_true', default=True, help='Build and deploy the private Firecrawl stack (default)')
-    parser.add_argument('--without-firecrawl', action='store_false', dest='with_firecrawl', help='Skip installing Firecrawl; disable it in settings when no stack is running')
+    parser.add_argument('--update-services', action='store_true', help='Explicitly update Speaches and the private Firecrawl stack')
+    parser.add_argument('--with-firecrawl', action='store_true', dest='update_services', help='Alias for --update-services')
+    parser.add_argument('--without-firecrawl', action='store_false', dest='with_firecrawl', default=True, help='Explicitly update Speaches without installing Firecrawl')
     parser.add_argument('--ci-run', help='Successful web-check.yml run ID (default: newest run for HEAD)')
     parser.add_argument('--recover-queue', action='store_true', help='Resume only deployment-paused tasks from the remote journal')
     parser.add_argument('--allow-rollback', action='store_true', help='Allow an intentional deployment that does not contain the running revision')
@@ -305,41 +293,44 @@ def main():
     target = config['user'] + '@' + config['host']
     ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', target]
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    check_ci(commit, options.ci_run)
-    deployed_image = remote_deployed_image(ssh)
-    check_deployment_revision(deployed_image, commit, allow_rollback=options.allow_rollback)
-    if deployed_image != '-':
-        subprocess.run(['git', 'fetch', 'origin', 'master'], cwd=ROOT, check=True)
-        if subprocess.run(['git', 'merge-base', '--is-ancestor', deployed_image.split(':', 1)[1], 'FETCH_HEAD'], cwd=ROOT).returncode:
-            print('Warning: deployed revision is not included in origin/master; retain and merge its PR', flush=True)
-    image = 'uav-downloader:' + commit
-    images = [image, SPEACHES_IMAGE]
-    bundle = base64.b64encode(json.dumps({
-        'docker-compose.yml': (ROOT / 'docker-compose.yml').read_text(),
-    }).encode()).decode()
-    if options.with_firecrawl:
-        subprocess.run(['docker', 'buildx', 'version'], check=True)
-    subprocess.run(['docker', 'build', '-f', 'Dockerfile.web', '-t', image, '.'], cwd=ROOT, check=True)
-    check_image(image)
-    subprocess.run([*ssh, 'docker info >/dev/null'], check=True)
-    subprocess.run(['docker', 'pull', SPEACHES_IMAGE], check=True)
+    run_id = check_ci(commit, options.ci_run)
     with tempfile.TemporaryDirectory(prefix='uav-deploy-') as temporary:
-        if options.with_firecrawl:
-            for component, folder in [('api', 'api'), ('browser', 'playwright-service-ts'), ('postgres', 'nuq-postgres')]:
-                builder = ['docker', 'buildx', 'build', '--load'] if component == 'api' else ['docker', 'build']
-                subprocess.run([*builder, '-t', f'uav-firecrawl-{component}:2.11.162',
-                                f'https://github.com/firecrawl/firecrawl.git#v2.11.162:apps/{folder}'], check=True)
-            for dependency in ('redis:7.4-alpine', 'rabbitmq:3.13-management'):
-                subprocess.run(['docker', 'pull', dependency], check=True)
-            images += ['uav-firecrawl-api:2.11.162', 'uav-firecrawl-browser:2.11.162',
-                       'uav-firecrawl-postgres:2.11.162', 'redis:7.4-alpine', 'rabbitmq:3.13-management']
-        archive = Path(temporary) / 'image.tar'
-        subprocess.run(['docker', 'save', '-o', str(archive), *images], check=True)
-        with archive.open('rb') as source:
+        artifact = load_ci_image(commit, run_id, Path(temporary) / 'artifact')
+        image = artifact['image']
+        deployed_image = remote_deployed_image(ssh)
+        check_deployment_revision(deployed_image, commit, allow_rollback=options.allow_rollback)
+        if deployed_image != '-':
+            subprocess.run(['git', 'fetch', 'origin', 'master'], cwd=ROOT, check=True)
+            if subprocess.run(['git', 'merge-base', '--is-ancestor', deployed_image.split(':', 1)[1], 'FETCH_HEAD'], cwd=ROOT).returncode:
+                print('Warning: deployed revision is not included in origin/master; retain and merge its PR', flush=True)
+        subprocess.run([*ssh, 'docker info >/dev/null'], check=True)
+        bundle = ''
+        if options.update_services or not options.with_firecrawl:
+            bundle = base64.b64encode(json.dumps({
+                'docker-compose.yml': (ROOT / 'docker-compose.yml').read_text(),
+            }).encode()).decode()
+            images = [SPEACHES_IMAGE]
+            subprocess.run(['docker', 'pull', SPEACHES_IMAGE], check=True)
+            if options.with_firecrawl:
+                subprocess.run(['docker', 'buildx', 'version'], check=True)
+                for component, folder in [('api', 'api'), ('browser', 'playwright-service-ts'), ('postgres', 'nuq-postgres')]:
+                    builder = ['docker', 'buildx', 'build', '--load'] if component == 'api' else ['docker', 'build']
+                    subprocess.run([*builder, '-t', f'uav-firecrawl-{component}:2.11.162',
+                                    f'https://github.com/firecrawl/firecrawl.git#v2.11.162:apps/{folder}'], check=True)
+                for dependency in ('redis:7.4-alpine', 'rabbitmq:3.13-management'):
+                    subprocess.run(['docker', 'pull', dependency], check=True)
+                images += ['uav-firecrawl-api:2.11.162', 'uav-firecrawl-browser:2.11.162',
+                           'uav-firecrawl-postgres:2.11.162', 'redis:7.4-alpine', 'rabbitmq:3.13-management']
+            dependencies = Path(temporary) / 'services.tar'
+            subprocess.run(['docker', 'save', '-o', str(dependencies), *images], check=True)
+            with dependencies.open('rb') as source:
+                subprocess.run([*ssh, 'docker load'], stdin=source, check=True)
+        with artifact['archive'].open('rb') as source:
             subprocess.run([*ssh, 'docker load'], stdin=source, check=True)
-    args = [config['remote_dir'], image, config['host'], str(config['port']), bundle, '1' if options.with_firecrawl else '0']
-    args.extend([config.get('staging_host_dir', ''), json.dumps(asset_manifest()), deployed_image])
-    subprocess.run([*ssh, 'python3 - ' + ' '.join(map(shlex.quote, args))], input=REMOTE_INSTALL, text=True, check=True)
+        args = [config['remote_dir'], image, config['host'], str(config['port']), bundle, '1' if options.with_firecrawl else '0']
+        args.extend([config.get('staging_host_dir', ''), json.dumps(artifact['assets']), deployed_image, artifact['image_id']])
+        subprocess.run([*ssh, 'python3 - ' + ' '.join(map(shlex.quote, args))], input=REMOTE_INSTALL, text=True, check=True)
+
 
 
 if __name__ == '__main__':

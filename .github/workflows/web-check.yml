@@ -130,6 +130,26 @@ jobs:
         run: bash scripts/check_web_container.sh "$CI_IMAGE" "$CI_TEST_IMAGE"
       - name: 正式映像驗證 SMB 批次追加、並行寫入與清理
         run: bash scripts/check_smb_batch_container.sh "$CI_IMAGE"
+      - name: 匯出並驗證部署映像
+        if: inputs.candidate_sha == '' && github.event_name != 'pull_request'
+        run: |
+          python3 scripts/deploy_artifact.py export --image "$CI_IMAGE" \
+            --commit "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --directory "$RUNNER_TEMP/deployment-image-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: 保存已測試的部署映像
+        if: inputs.candidate_sha == '' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deployment-image-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deployment-image-${{ github.run_id }}-${{ github.run_attempt }}/
+          retention-days: 3
+          compression-level: 1
+          if-no-files-found: error
+      - name: 清理本次部署成品
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/deployment-image-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker image rm "uav-downloader:$GITHUB_SHA" || true
       - name: 清理本次測試映像
         if: always()
         run: docker image rm "$CI_TEST_IMAGE" "$CI_IMAGE" || true

@@ -343,8 +343,15 @@ def load(tree, manifest_path, verify=True, refresh=False):
             require(source['symbols'], 'AST source has no mappable symbols; use kind:file: ' + path)
         else:
             require(covered[path], 'unmapped source: ' + path)
-    for path in manifest.get('policy_inputs', []):
-        tree.read(path)
+    for owner in [manifest, *features.values()]:
+        paths = owner.get('policy_inputs', [])
+        require(isinstance(paths, list), 'policy_inputs must be a list')
+        seen = set()
+        for path in paths:
+            safe_path(path)
+            require(path not in seen, 'duplicate policy input: ' + path)
+            seen.add(path)
+            tree.read(path)
     closure(features)
     return manifest, sources, features
 
@@ -367,7 +374,7 @@ def closure(features):
     return result
 
 
-def policy(manifest, tree):
+def policy_input_hashes(tree, paths):
     def input_hash(path):
         language = {'.js': 'javascript', '.cjs': 'javascript', '.rs': 'rust'}.get(Path(path).suffix)
         if Path(path).suffix == '.py' or language:
@@ -376,8 +383,12 @@ def policy(manifest, tree):
                 record['language'] = language
             return source_record(tree, record)['semantic_hash']
         return hashlib.sha256(tree.read(path)).hexdigest()
+    return {path: input_hash(path) for path in paths}
+
+
+def policy(manifest, tree):
     return {'scope': manifest['scope'], 'limits': manifest.get('limits', {}), 'hash_adapters': ADAPTER_IDS,
-            'policy_inputs': {path: input_hash(path) for path in manifest.get('policy_inputs', [])}}
+            'policy_inputs': policy_input_hashes(tree, manifest.get('policy_inputs', []))}
 
 
 def feature_content(identity, tree, sources, features):
@@ -395,7 +406,10 @@ def feature_content(identity, tree, sources, features):
         if source['kind'] in ('tree-sitter', 'tree-sitter-module'):
             adapter['language'] = source['language']
         relevant.append({'mapping': mapping, 'adapter': adapter, 'source': value})
-    return {'feature': feature, 'flow_sha256': hashlib.sha256(tree.read(feature['flow'])).hexdigest(), 'inputs': relevant}
+    content = {'feature': feature, 'flow_sha256': hashlib.sha256(tree.read(feature['flow'])).hexdigest(), 'inputs': relevant}
+    if feature.get('policy_inputs'):
+        content['policy_inputs'] = policy_input_hashes(tree, feature['policy_inputs'])
+    return content
 
 
 def fingerprints(tree, loaded, base_oid):
@@ -486,6 +500,10 @@ def run(args):
                 changed_modes.append(path)
         old_policy = policy(previous[0], base_tree)['policy_inputs'] if previous else {}
         current_policy = policy(loaded[0], tree)['policy_inputs']
+        for baseline, input_tree, hashes in ((previous, base_tree, old_policy), (loaded, tree, current_policy)):
+            if baseline:
+                for feature in baseline[2].values():
+                    hashes.update(policy_input_hashes(input_tree, feature.get('policy_inputs', [])))
         print(json.dumps({'base': oid, 'candidate': 'index' if args.staged else 'worktree',
                           'affected': [{'feature': identity, 'fingerprint': current[identity]} for identity in sorted(affected)],
                           'review_required': sorted(affected - reused), 'review_reused': sorted(reused),

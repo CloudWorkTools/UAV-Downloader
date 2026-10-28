@@ -381,6 +381,11 @@
           "node": "VALID",
           "path": "src/uav_downloader/subtitles/asr.py"
         }
+      ],
+      "policy_inputs": [
+        "tests/download_batch.cjs",
+        "tests/mobile_actions.cjs",
+        "tools/web-ci/check_mobile_actions.cjs"
       ]
     },
     {
@@ -1002,13 +1007,15 @@
     "tests/test_flow_docs.py",
     "tests/test_daemon_downloads.py",
     "tests/test_web_download_settings.py",
-    "tests/download_batch.cjs",
-    "tests/mobile_actions.cjs",
-    "tools/web-ci/check_mobile_actions.cjs",
     "docs/agents/review-efficiency.md",
     "scripts/check_flow_docs.sh",
     ".github/workflows/web-check.yml",
-    "tools/flow-docs/runtime_smoke.py"
+    "tools/flow-docs/runtime_smoke.py",
+    "scripts/deploy_artifact.py",
+    "scripts/deploy_remote.py",
+    "tests/test_deploy_artifact.py",
+    "tests/test_deploy_remote.py",
+    "docs/agents/deployment-safety.md"
   ],
   "limits": {
     "nodes": 25,

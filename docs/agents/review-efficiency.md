@@ -8,6 +8,8 @@
 
 `python`、`tree-sitter` 是符號模式；`python-module`、`tree-sitter-module` 是整模組 AST 模式。字串、裝飾器、工具指令等輸入保留於語意比較。解析失敗必須修正或明示改用保守模式，不能當作沒有變更。`file` 僅供尚未支援的格式，按位元組比較並在 impact 的 `raw_fallbacks` 揭露。
 
+manifest 頂層 `policy_inputs` 是所有功能的共用審查輸入；僅供單一功能使用的測試與設定，登記於該 feature 的選用 `policy_inputs` 路徑清單。功能輸入變更只使該功能及依賴它的功能失效；共用輸入變更仍使全部功能失效。路徑須存在且在各清單內唯一，程式輸入沿用 AST 比較。
+
 區分 `changed_source_content`、`changed_source_modes` 與 `changed_policy_inputs`。來源內容未變而只有模式或政策改動時，核對遷移與政策，引用原內容的有效審查；不為此重新閱讀整份應用程式。必要的上下文由 reviewer 依疑點增讀並說明原因。
 
 ## 凍結候選與集中審查

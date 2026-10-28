@@ -306,6 +306,58 @@ class ModuleAstTests(FlowCheckerFixture):
         self.write('src/shared.py', 'const helper = ( => ;\n')
         self.assertIn('parse error', self.cli('snapshot', ok=False))
 
+    def scoped_policy_baseline(self):
+        self.load()
+        self.write('local.py', 'VALUE = 3\n')
+        self.write('global.py', 'VALUE = 3\n')
+        self.manifest['features'][2]['policy_inputs'] = ['local.py']
+        self.manifest['policy_inputs'] = ['global.py']
+        self.save()
+        self.git('add', '.')
+        self.git('commit', '-qm', 'Scoped policy baseline')
+        self.base = self.git('rev-parse', 'HEAD').stdout.strip()
+
+    def test_scoped_policy_change_reaches_only_dependents(self):
+        self.scoped_policy_baseline()
+        self.write('local.py', 'VALUE = 4\n')
+        impact = json.loads(self.cli('impact', '--base', self.base))
+        self.assertEqual(impact['review_required'], ['job.run', 'shared'])
+        self.assertEqual(impact['changed_policy_inputs'], ['local.py'])
+        self.write('local.py', '# prose\nVALUE = (3)\n')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+
+    def test_global_policy_change_still_reaches_all_features(self):
+        self.scoped_policy_baseline()
+        self.write('global.py', 'VALUE = 4\n')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'],
+                         ['job.other', 'job.run', 'shared'])
+
+    def test_scoped_policy_declaration_change_reaches_only_dependents(self):
+        self.scoped_policy_baseline()
+        self.manifest['features'][2]['policy_inputs'] = []
+        self.save()
+        impact = json.loads(self.cli('impact', '--base', self.base))
+        self.assertEqual(impact['review_required'], ['job.run', 'shared'])
+        self.assertEqual(impact['changed_policy_inputs'], ['local.py'])
+
+    def test_scoped_policy_rejects_missing_unsafe_duplicate_and_nonlist_paths(self):
+        self.load()
+        for paths in (['missing.py'], ['../outside'], ['src/jobs.py', 'src/jobs.py'], 'src/jobs.py'):
+            with self.subTest(paths=paths):
+                self.manifest['features'][2]['policy_inputs'] = paths
+                self.save()
+                self.cli('impact', '--base', self.base, ok=False)
+
+    def test_scoped_policy_staged_uses_index_content(self):
+        self.scoped_policy_baseline()
+        self.write('local.py', 'VALUE = 4\n')
+        self.git('add', 'local.py')
+        self.write('local.py', 'VALUE = 3\n')
+        impact = json.loads(self.cli('impact', '--base', self.base, '--staged'))
+        self.assertEqual(impact['review_required'], ['job.run', 'shared'])
+        self.assertEqual(impact['candidate'], 'index')
+        self.assertEqual(json.loads(self.cli('impact', '--base', self.base))['review_required'], [])
+
     def test_policy_code_uses_ast_and_preserves_python_tool_directives(self):
         self.load()
         self.write('policy.py', 'VALUE = 3\n')
