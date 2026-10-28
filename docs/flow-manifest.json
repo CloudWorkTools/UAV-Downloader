@@ -170,13 +170,13 @@
       "path": "uav-web/frontend/mobile-actions.js",
       "kind": "tree-sitter-module",
       "language": "javascript",
-      "md5": "d4929c5b50a17d9e5b3760271413d020",
-      "semantic_hash": "5dad30b99bdf052b294cbfc1a8aceba5207ec0aa5ad61d7fd93b6f731e07c3fb"
+      "md5": "bf40255dd58abde2be538b2985a499be",
+      "semantic_hash": "b828c65b276c9d7bb40ff1874fc7d2e84f7a1f488ce2cafd99ecb4f52c3850bb"
     },
     {
       "path": "uav-web/frontend/mobile-actions.css",
       "kind": "file",
-      "md5": "8b1099882e82d0d4f8d4bb19ea5d92e0"
+      "md5": "3595b280c15dea097e8a92186fd18b33"
     },
     {
       "path": "uav-web/frontend/subtitle-settings.js",

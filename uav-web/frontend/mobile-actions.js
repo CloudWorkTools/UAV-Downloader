@@ -15,8 +15,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const dialog = document.createElement('dialog');
   dialog.id = 'mobile-action-dialog';
   dialog.hidden = true;
-  dialog.setAttribute('aria-labelledby', 'mobile-action-title');
-  dialog.innerHTML = '<header><button type="button" id="mobile-action-back" aria-label="返回上一層">‹ 返回</button><strong id="mobile-action-title"></strong><button type="button" id="mobile-action-close" aria-label="關閉功能選單">✕</button></header><div id="mobile-action-items"></div>';
+  dialog.innerHTML = '<svg id="mobile-action-links" viewBox="-256 -256 256 256" aria-hidden="true"></svg><nav id="mobile-action-trail" aria-label="選單路徑"></nav><div id="mobile-action-items"></div>';
   document.body.append(fab, dialog);
   const groups = {
     browse: ['瀏覽功能', [['影片選取', 'selection'], ['新增網址', 'queue-add-mobile']]],
@@ -43,12 +42,16 @@ window.addEventListener('DOMContentLoaded', () => {
       button.hidden = source.disabled || source.hidden || (source.id === 'browse-clear-mobile' && byId('selected-count').textContent === '0');
     });
     const count = Number(byId('selected-count').textContent) || 0;
-    dialog.querySelectorAll('[data-mobile-group]').forEach(button => {
-      const entries = groups[button.dataset.mobileGroup][1];
-      button.hidden = !entries.some(id => {
+    function hasActions(group) {
+      return groups[group][1].some(entry => {
+        const id = Array.isArray(entry) ? entry[1] : entry;
+        if (id in groups) return hasActions(id);
         const source = byId(id);
         return source && !source.disabled && !source.hidden && (id !== 'browse-clear-mobile' || count > 0);
       });
+    }
+    dialog.querySelectorAll('[data-mobile-group]').forEach(button => {
+      button.hidden = !hasActions(button.dataset.mobileGroup);
     });
     const visible = [...dialog.querySelectorAll('#mobile-action-items button:not([hidden])')];
     dialog.style.setProperty('--menu-height', visible.length > 4 ? '330px' : '270px');
@@ -60,15 +63,41 @@ window.addEventListener('DOMContentLoaded', () => {
       button.style.setProperty('--radius', `${visible.length > 4 ? (outer ? 192 : 104) : 140}px`);
       button.style.setProperty('--delay', `${index * 25}ms`);
     });
+    const ancestors = [...dialog.querySelectorAll('[data-mobile-ancestor]')];
+    const radius = visible.length > 4 ? 252 : 212;
+    const links = ancestors.map((button, index) => {
+      const angle = (ancestors.length === 1 ? 45 : 30 + index * 30 / (ancestors.length - 1)) * Math.PI / 180;
+      const x = -Math.cos(angle) * radius;
+      const y = -Math.sin(angle) * radius;
+      button.style.setProperty('--trail-x', `${x}px`);
+      button.style.setProperty('--trail-y', `${y}px`);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', x);
+      line.setAttribute('y1', y);
+      line.setAttribute('x2', '0');
+      line.setAttribute('y2', '0');
+      return line;
+    });
+    byId('mobile-action-links').replaceChildren(...links);
     badge.textContent = count;
     badge.hidden = !count || page !== 'browse';
     const label = dialog.hidden ? '開啟功能選單' : '關閉功能選單';
     fab.setAttribute('aria-label', count && page === 'browse' ? `${label}，已選 ${count} 部` : label);
   }
-  function render() {
+  function render(focusGroup) {
     const [title, entries] = groups[stack.at(-1)];
-    byId('mobile-action-title').textContent = title;
-    byId('mobile-action-back').hidden = stack.length === 1;
+    dialog.setAttribute('aria-label', title);
+    byId('mobile-action-trail').replaceChildren(...stack.slice(1).map((group, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.mobileAncestor = group;
+      const label = document.createElement('span');
+      label.textContent = groups[group][0];
+      button.append(label);
+      button.setAttribute('aria-label', `${groups[group][0]}，返回${groups[stack[index]][0]}`);
+      button.onclick = () => {stack.length = index + 1;render(group);};
+      return button;
+    }));
     byId('mobile-action-items').replaceChildren(...entries.map(entry => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -84,7 +113,7 @@ window.addEventListener('DOMContentLoaded', () => {
       return button;
     }));
     syncRows();
-    (dialog.querySelector('#mobile-action-items button:not([hidden])') || byId('mobile-action-close')).focus();
+    (dialog.querySelector(`[data-mobile-group="${focusGroup}"]:not([hidden])`) || dialog.querySelector('#mobile-action-items button:not([hidden])') || fab).focus();
   }
   fab.onclick = () => {
     if (!dialog.hidden) {close();return;}
@@ -96,8 +125,6 @@ window.addEventListener('DOMContentLoaded', () => {
     fab.setAttribute('aria-label', '關閉功能選單');
     render();
   };
-  byId('mobile-action-close').onclick = close;
-  byId('mobile-action-back').onclick = () => {stack.pop();render();};
   dialog.addEventListener('cancel', event => {event.preventDefault();close();});
   dialog.addEventListener('click', event => {if (event.target === dialog) {const r = dialog.getBoundingClientRect();if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) close();}});
   function syncPage() {

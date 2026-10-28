@@ -1,10 +1,15 @@
 #mobile-action-fab { display: none; }
 #mobile-action-dialog { color: #f8eed8; background: transparent; border: 0; padding: 0; }
 #mobile-action-dialog::backdrop { background: #17131980; backdrop-filter: blur(3px); }
-#mobile-action-dialog header { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid #b58791; border-radius: 24px; background: #302730; box-shadow: 0 8px 24px #0004; }
-#mobile-action-title { flex: 1; font-size: 14px; text-align: center; }
 #mobile-action-dialog button { min-height: 44px; padding: 10px 12px; border: 0; color: inherit; background: transparent; border-radius: 20px; cursor: pointer; }
 #mobile-action-dialog button:focus-visible, #mobile-action-fab:focus-visible { outline: 3px solid #f8eed8; outline-offset: 3px; }
+#mobile-action-links { position: absolute; right: 32px; bottom: 32px; width: 256px; height: 256px; overflow: visible; pointer-events: none; }
+#mobile-action-links line { stroke: #f8eed8; stroke-width: 1; stroke-opacity: .28; }
+#mobile-action-trail { position: absolute; right: 0; bottom: 0; width: 64px; height: 64px; }
+#mobile-action-trail button { position: absolute; right: 10px; bottom: 10px; width: 44px; height: 44px; padding: 3px; border: 1px solid #eac6c4; border-radius: 50%; background: #45323e; color: #f8eed8; font-size: 10px; line-height: 1.3; transform: translate(var(--trail-x), var(--trail-y)); animation: mobile-trail-shrink .2s ease-out; }
+#mobile-action-trail button span { display: block; width: 2em; margin: auto; }
+#mobile-action-trail button:hover { background: #604454; }
+@keyframes mobile-trail-shrink { from { transform: translate(var(--trail-x), var(--trail-y)) scale(1.45); } }
 #mobile-action-items { position: absolute; right: 0; bottom: 0; width: 64px; height: 64px; }
 #mobile-action-items button { position: absolute; inset: 0; width: 64px; height: 64px; padding: 6px; border-radius: 50%; background: linear-gradient(145deg, #f8eed8, #eac6c4); color: #4b2937; font-size: 12px; font-weight: 600; line-height: 1.35; border: 1px solid #fff5e6; box-shadow: 0 6px 18px #0005, inset 0 1px #fff9; transform: translate(calc(-1 * cos(var(--angle)) * var(--radius)), calc(-1 * sin(var(--angle)) * var(--radius))); animation: mobile-action-bloom .28s cubic-bezier(.2,.8,.3,1.1) var(--delay) both; }
 #mobile-action-items button:hover { background: #fff3df; }
@@ -21,4 +26,4 @@
   #select-page-button, #download-selected-button, #selection-bar, #queue-selection-mode, #queue-add-mobile, #queue-more-mobile, #queue-batch-actions { display: none !important; }
   #tab-browse, #tab-queue { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
 }
-@media (prefers-reduced-motion: reduce) { #mobile-action-fab { transition: none; } #mobile-action-items button { animation: none; } }
+@media (prefers-reduced-motion: reduce) { #mobile-action-fab { transition: none; } #mobile-action-items button, #mobile-action-trail button { animation: none; } }
