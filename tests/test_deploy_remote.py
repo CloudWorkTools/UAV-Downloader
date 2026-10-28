@@ -1,8 +1,11 @@
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 import pytest
+
+sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
 
 spec = importlib.util.spec_from_file_location('deploy_remote', Path(__file__).parents[1] / 'scripts/deploy_remote.py')
 deploy = importlib.util.module_from_spec(spec)
@@ -118,69 +121,65 @@ def test_invalid_staging_mount_is_rejected(tmp_path, value):
         deploy.load_config(path)
 
 
-@pytest.mark.parametrize('arguments,expected', [([], True), (['--without-firecrawl'], False)])
-def test_deployment_bundles_private_firecrawl_by_default(monkeypatch, tmp_path, arguments, expected):
-    import sys
+@pytest.mark.parametrize('arguments,update,firecrawl', [([], False, True), (['--update-services'], True, True),
+    (['--with-firecrawl'], True, True), (['--without-firecrawl'], True, False)])
+def test_deployment_promotes_tested_app_and_only_updates_services_explicitly(monkeypatch, tmp_path, arguments, update, firecrawl):
+    from types import SimpleNamespace
     calls = []
     monkeypatch.setattr(sys, 'argv', ['deploy_remote.py', *arguments])
     monkeypatch.setattr(deploy, 'load_config', lambda: dict(host='192.0.2.10', user='operator',
                                                           port=8080, remote_dir='/home/operator/service'))
-    monkeypatch.setattr(deploy.subprocess, 'check_output',
-                        lambda args, **kw: '' if 'status' in args else 'abc123')
-
+    monkeypatch.setattr(deploy.subprocess, 'check_output', lambda args, **kw: '' if 'status' in args else 'abc123')
+    def load(commit, run_id, directory):
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        archive = Path(directory) / 'image.tar'
+        archive.write_bytes(b'tested image')
+        return dict(image='uav-downloader:abc123', image_id='sha256:'+'a'*64, archive=archive, assets={'/':'b'*64})
+    monkeypatch.setattr(deploy, 'load_ci_image', load, raising=False)
     def run(args, **kwargs):
         calls.append(args)
         if args[:2] == ['docker', 'save']:
-            Path(args[3]).write_bytes(b'fake image archive')
-
-    monkeypatch.setattr(deploy.subprocess, 'run', run)
-    monkeypatch.setattr(deploy, 'check_ci', lambda *a: None)
-    monkeypatch.setattr(deploy, 'remote_deployed_image', lambda ssh: '-')
-    deploy.main()
-    assert any('uav-firecrawl-api:2.11.162' in args for args in calls) is expected
-    save = next(args for args in calls if args[:2] == ['docker', 'save'])
-    assert deploy.SPEACHES_IMAGE in save
-    assert deploy.SPEACHES_IMAGE in (deploy.ROOT / 'docker-compose.yml').read_text()
-    remote = calls[-1][-1]
-    assert (' 1 ' if expected else ' 0 ') in remote
-    assert ' 192.0.2.10 8080 ' in f' {remote} '
-    ssh_calls = [args for args in calls if args and args[0] == 'ssh']
-    assert ssh_calls
-    assert all('-p' not in args for args in ssh_calls)
-    assert all(args[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8'] for args in ssh_calls)
-    assert "http://{host}:{port}/api/status" in deploy.REMOTE_INSTALL
-    checked_image = next(args[2] for args in calls if args[:2] == ['bash', 'scripts/check_web_container.sh'])
-    assert checked_image == 'uav-downloader:abc123'
-    assert checked_image in save
-    assert calls.index(next(args for args in calls if args[:2] == ['bash', 'scripts/check_smb_batch_container.sh'])) < calls.index(save)
-
-
-@pytest.mark.parametrize('failed_stage', ['test-build', 'web-tests', 'web-smoke', 'smb-smoke'])
-def test_image_check_failure_blocks_remote_deployment(monkeypatch, failed_stage):
-    import sys
-    from types import SimpleNamespace
-    calls = []
-    monkeypatch.setattr(sys, 'argv', ['deploy_remote.py', '--without-firecrawl'])
-    monkeypatch.setattr(deploy, 'load_config', lambda: dict(host='192.0.2.10', user='operator',
-                                                          port=8080, remote_dir='/home/operator/service'))
-    monkeypatch.setattr(deploy.subprocess, 'check_output',
-                        lambda args, **kw: '' if 'status' in args else 'abc123')
-    def run(args, **kwargs):
-        calls.append(args)
-        stage = ('test-build' if 'Dockerfile.web-tests' in args else
-                 'web-tests' if args[:2] == ['docker', 'run'] else
-                 'web-smoke' if args[:2] == ['bash', 'scripts/check_web_container.sh'] else
-                 'smb-smoke' if args[:2] == ['bash', 'scripts/check_smb_batch_container.sh'] else '')
-        if stage == failed_stage:
-            raise subprocess.CalledProcessError(7, args)
+            Path(args[3]).write_bytes(b'dependency archive')
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(deploy.subprocess, 'run', run)
-    monkeypatch.setattr(deploy, 'check_ci', lambda *a: None)
+    monkeypatch.setattr(deploy, 'check_ci', lambda *a: '123')
     monkeypatch.setattr(deploy, 'remote_deployed_image', lambda ssh: '-')
-    with pytest.raises(subprocess.CalledProcessError):
+    deploy.main()
+    assert not any('Dockerfile.web' in args or 'Dockerfile.web-tests' in args for args in calls)
+    assert not any(args[:2] == ['bash', 'scripts/check_web_container.sh'] for args in calls)
+    assert any('uav-firecrawl-api:2.11.162' in args for args in calls) is (update and firecrawl)
+    saves = [args for args in calls if args[:2] == ['docker', 'save']]
+    assert bool(saves) is update
+    assert all('uav-downloader:abc123' not in args for args in saves)
+    assert any(deploy.SPEACHES_IMAGE in args for args in saves) is update
+    remote = calls[-1][-1]
+    import base64, shlex
+    encoded = shlex.split(remote)[6]
+    assert bool(encoded) is update
+    if update:
+        assert set(json.loads(base64.b64decode(encoded))) == {'docker-compose.yml'}
+    assert 'sha256:'+'a'*64 in remote
+    assert '"/": "'+'b'*64+'"' in remote
+    ssh_calls = [args for args in calls if args and args[0] == 'ssh']
+    assert all(args[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8'] for args in ssh_calls)
+    assert all('-p' not in args for args in ssh_calls)
+
+
+def test_invalid_ci_image_blocks_all_remote_operations(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(sys, 'argv', ['deploy_remote.py', '--ci-run', '123'])
+    monkeypatch.setattr(deploy, 'load_config', lambda: dict(host='192.0.2.10', user='operator', port=8080, remote_dir='/service'))
+    monkeypatch.setattr(deploy.subprocess, 'check_output', lambda args, **kw: '' if 'status' in args else 'abc123')
+    monkeypatch.setattr(deploy, 'check_ci', lambda *a: '123')
+    def invalid(*args):
+        raise RuntimeError('image archive checksum mismatch')
+    monkeypatch.setattr(deploy, 'load_ci_image', invalid, raising=False)
+    monkeypatch.setattr(deploy, 'remote_deployed_image', lambda ssh: calls.append('remote-read'))
+    monkeypatch.setattr(deploy.subprocess, 'run', lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=0))
+    with pytest.raises(RuntimeError, match='checksum'):
         deploy.main()
-    assert not any(args[0] == 'ssh' or args[:2] == ['docker', 'save'] for args in calls)
-    assert ['docker', 'image', 'rm', 'uav-downloader:abc123-tests'] in calls
+    assert not calls
 
 
 def test_container_storage_probe_uses_effective_settings_and_cleans_files(monkeypatch, tmp_path, capsys):
@@ -564,7 +563,7 @@ def test_auto_ci_discovery_selects_exact_head_web_workflow(monkeypatch):
         calls.append(args)
         if '/jobs?' in args[-1]:
             return successful_ci_jobs()
-        return json.dumps([{'databaseId': 123}]) if args[1:3] == ['run', 'list'] else json.dumps(dict(
+        return json.dumps([{'databaseId': 123, 'event': 'workflow_dispatch', 'status': 'completed', 'conclusion': 'success'}]) if args[1:3] == ['run', 'list'] else json.dumps(dict(
             head_sha='abc123', status='completed', conclusion='success', path='.github/workflows/web-check.yml'))
     monkeypatch.setattr(deploy.subprocess, 'check_output', output)
     deploy.check_ci('abc123')
@@ -598,14 +597,6 @@ def test_ci_rejection_precedes_all_remote_or_build_operations(monkeypatch):
     with pytest.raises(RuntimeError, match='same-HEAD'):
         deploy.main()
     assert calls == []
-
-
-def test_asset_manifest_includes_index_and_all_static_assets():
-    manifest = deploy.asset_manifest()
-    assert '/' in manifest
-    for name in ('mobile-actions.js', 'mobile-actions.css', 'brand-icon.svg', 'mascot-fab.svg'):
-        assert '/' + name in manifest
-    assert all(len(digest) == 64 for digest in manifest.values())
 
 
 @pytest.mark.parametrize('stage', ['stop', 'rename'])
@@ -699,3 +690,49 @@ def test_locked_installer_refuses_changed_running_image(monkeypatch, tmp_path):
         exec(deploy.REMOTE_INSTALL, {})
     assert not calls
     assert not (tmp_path / '.deployment-queue.json').exists()
+
+
+def test_locked_installer_checks_ci_image_before_queue_pause(monkeypatch, tmp_path):
+    calls = []
+    old = 'uav-downloader:' + 'a' * 40
+    def output(args, **kw):
+        if args[:3] == ['docker', 'ps', '-a']:
+            return 'uav-downloader\n'
+        if args[:3] == ['docker', 'image', 'inspect']:
+            return 'sha256:' + 'c' * 64
+        if args[:2] == ['docker', 'inspect']:
+            return old
+        raise AssertionError(args)
+    monkeypatch.setattr(deploy.subprocess, 'check_output', output)
+    monkeypatch.setattr(deploy.subprocess, 'run', lambda args, **kw: calls.append(args))
+    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), 'uav-downloader:'+'b'*40,
+        '192.0.2.10', '8080', '', '1', '', '{}', old, 'sha256:'+'d'*64])
+    with pytest.raises(RuntimeError, match='image ID mismatch'):
+        exec(deploy.REMOTE_INSTALL, {})
+    assert not calls
+    assert not (tmp_path / '.deployment-queue.json').exists()
+
+
+def test_running_container_image_identity_mismatch_rolls_back(monkeypatch, tmp_path):
+    import io
+    import urllib.request
+    from types import SimpleNamespace
+    calls = []
+    expected = 'sha256:' + 'a' * 64
+    def output(args, **kw):
+        if args[:3] == ['docker', 'ps', '-a']:
+            return 'uav-downloader\n'
+        if args[:3] == ['docker', 'image', 'inspect']:
+            return expected
+        if '--format' in args:
+            return 'app:old'
+        return json.dumps([{'State': {'Running': True}, 'Config': {'Image': 'app:new'}, 'Image': 'sha256:'+'b'*64}])
+    monkeypatch.setattr(deploy.subprocess, 'check_output', output)
+    monkeypatch.setattr(deploy.subprocess, 'run', lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(urllib.request, 'build_opener', lambda *a: SimpleNamespace(open=lambda *a, **kw: io.BytesIO(b'{"status":"ok"}')))
+    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), 'app:new', '192.0.2.10', '8080', '', '1', '', '{"/":"expected"}', 'app:old', expected])
+    with pytest.raises(RuntimeError, match='revision mismatch'):
+        exec(deploy.REMOTE_INSTALL.replace('        queue.pause()', '        pass'), {})
+    assert calls[-3:] == [['docker', 'rm', '-f', 'uav-downloader'],
+                          ['docker', 'rename', 'uav-downloader-previous', 'uav-downloader'],
+                          ['docker', 'start', 'uav-downloader']]

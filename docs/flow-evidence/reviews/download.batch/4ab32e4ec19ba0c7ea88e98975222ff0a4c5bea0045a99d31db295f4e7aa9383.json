@@ -1,0 +1,30 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "4ab32e4ec19ba0c7ea88e98975222ff0a4c5bea0045a99d31db295f4e7aa9383",
+  "reviewer": "/root/mobile_review",
+  "verdict": "pass",
+  "findings": [],
+  "base": "79397bbf6aefc26647113db67c35b29dd5b9dcde",
+  "candidate": "4d3f66071e338dacf7feb348ebca302059635560",
+  "evidence": [
+    "Base-only rebinding: verified local origin/master equals trusted comparison base and is an ancestor of candidate. git diff --name-only 5cce653 HEAD is empty: candidate tree equals previously reviewed implementation plus its evidence.",
+    "Recomputed impact against new comparison base; all four supplied fingerprints match. No changed source content. Existing delivery policy changes remain the reviewed invalidation inputs.",
+    "Reuse complete prior independent security, deployment failure/retry/recovery, scoped-policy, animation and runtime-test conclusions without modification. No newly changed behavior requires further source review."
+  ],
+  "newly_read_paths": [
+    "/tmp/delivery-impact-current.json",
+    "docs/flow-manifest.json"
+  ],
+  "reused_evidence": [
+    "docs/flow-evidence/reviews/download.batch/81e0aa94352a8b018cba738cd9ef1ce8915600fa5b8f888a634a1e020dc599a1.json"
+  ],
+  "additional_reads": [],
+  "token_usage": {
+    "status": "unavailable",
+    "reason": "Runtime does not expose measured per-review token usage."
+  },
+  "limitations": [
+    "This record binds unchanged reviewed content to the new Git comparison base; tests were not rerun and application sources were not reread.",
+    "Actual exact-head CI artifact promotion and production verification remain parent delivery responsibilities; previous review limitations continue to apply."
+  ]
+}

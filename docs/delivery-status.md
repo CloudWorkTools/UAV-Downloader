@@ -41,3 +41,23 @@
 | --- | --- | --- | --- | --- |
 | 保存可追查的 remux 底層錯誤 | 不適用 | 已驗證：`core/media_errors.py` 以執行緒分開保留最近 8 則 FFmpeg 錯誤，每則最多 512 字元，合併細節最多 2048 字元；URL、路徑及帳密欄位遮蔽後才保存。任務錯誤持久化，容器日誌附任務 ID 與失敗階段 | 已接入 `scripts/check_web.sh`；本機專項與完整 Python 測試通過，GitHub CI 尚未執行 | 尚未部署；只擷取 SMB PyAV 封裝錯誤，原始 libav 日誌不直接向上傳遞，避免輸出敏感資訊 |
 | 核對既有失敗測試並接入共同入口 | 不適用 | 已驗證：命名與 Hanime 測試隔離使用者偏好；README 測試分別檢查 Web 首頁、上游桌面文件、相對連結及安全說明；三個模組及診斷、命名模式測試均接入共用入口 | 本機 `PYTHON=.venv/bin/python bash scripts/check_web.sh`、`.venv/bin/python -m pytest -q` 及 Docker 測試映像的共用回歸通過；GitHub CI 尚未執行 | 隔離 Samba 與正式 Web 映像的瀏覽器檢查通過；尚未部署，不操作生產任務 |
+
+## 交付管線改善（2026-10-28）
+
+| 已接受項目 | 原型 | 正式實作 | CI | 部署與限制 |
+| --- | --- | --- | --- | --- |
+| 1. 部署直接使用 CI 已測過的同一映像 | 不適用 | 已驗證：archive 雜湊、提交／run／attempt、映像 ID、拒絕及標籤競爭回歸 | [已驗證：`ded3e7d`](https://github.com/CloudWorkTools/UAV-Downloader/actions/runs/40613417649)；匯出、載入與 image ID 核對通過 | 已驗證：同一 CI archive 完成真實部署，未重建或重跑整套映像測試；約 96 秒 |
+| 2. 主服務與附屬服務分開更新 | 不適用 | 已驗證：預設 app-only；--update-services 明確更新附屬服務；離線回歸通過 | [已驗證](https://github.com/CloudWorkTools/UAV-Downloader/actions/runs/40613417649) | 已驗證：6 個附屬容器的 ID、image ID 與啟動時間均未變；明確附屬更新的生產路徑本輪未執行，失敗不自動回滾附屬容器 |
+| 3. 功能測試輸入只使相關審查失效 | 不適用 | 已驗證：27 項 flow checker 測試；含相依傳播、全域失效、格式重用及 staged 內容 | [已驗證：27 項檢查器測試及實際基準一致性](https://github.com/CloudWorkTools/UAV-Downloader/actions/runs/40613417649) | 不適用：部署不會執行流程審查工具；以 CI 與離線隔離倉庫驗證 |
+| 4. 手機選單動畫中途檢查 | 不適用 | 已驗證：0／50／100% 時間軸、320／390px、1～7 個操作及三層跳返；舊 scale 錯誤會失敗 | [已驗證](https://github.com/CloudWorkTools/UAV-Downloader/actions/runs/40613417649) | 已驗證：完整頁面及 320px 動畫 0／50／100% 邊界與縮圖／頭像點擊；未測實機 Safari 或橫向畫面 |
+
+### 已測映像的生產驗證
+
+受測及部署提交為 `ded3e7d794d5f1ce92834fd6b130c2c84ebf63b3`，CI run `40613417649`、attempt `1`；後續文件提交只補記結果，不改變這次受測程式碼。CI 通過 1,178 個 Python 測試（3 個略過、21 個子測試通過）、前端回歸、正式容器與 SMB 檢查，再匯出與載入同一份映像。
+
+- GitHub artifact：`12784322807`，353,164,683 bytes，保留三天。
+- Archive SHA-256：`041a644471b0a752b989ef6538de41b6736af4ac1c2c081c988cc099e9d9d563`。
+- 部署前驗證及遠端實際容器 image ID：`sha256:3b5d201ec17ac8d0b6c0db1c847c6aecc8c6e415672f421185b17460b75d40ff`。
+- 實際命令：`python3 scripts/deploy_remote.py --ci-run 40613417649`，返回 0，總耗時 95.92 秒；此值包含下載與傳送，不是效能基準保證。
+- 部署後健康、前端檔案雜湊、NAS 並行寫入／清理與中文 MP4 封裝／跳轉檢查通過。
+- 使用既有正式頁面手機驗收入口，並對線上頁面取樣動畫時間軸；只建立瀏覽器記憶體內的影片 fixture，不提交下載。
