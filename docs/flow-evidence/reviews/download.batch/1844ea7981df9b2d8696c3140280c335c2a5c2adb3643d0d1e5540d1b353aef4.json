@@ -1,0 +1,36 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "1844ea7981df9b2d8696c3140280c335c2a5c2adb3643d0d1e5540d1b353aef4",
+  "reviewer": "/root/mobile_review",
+  "verdict": "pass",
+  "findings": [],
+  "base": "5177b44dc3e27f5b9c32ba30e9b701736c3f2990",
+  "candidate": "20315480be9a6e0137467a392fd1fd797196d12c",
+  "evidence": [
+    "Independent delta review from a280fe8: removed header; selected parent nodes retain labels in 44px circles with pale SVG links; ancestor handlers truncate stack and restore focus to selected group. Dialog accessible name updates with current title; FAB, Escape and backdrop close remain available.",
+    "Availability recurses through actual nested groups; unchanged action delegation, mascot reference, desktop media boundary and backend behavior retain previous conclusions. Test-only third group does not enter shipped source.",
+    "Independently reran node tests/mobile_actions.cjs: PASS. Checks include 1..7 visible buttons at 320/390px, three-level ancestor jumps and focus, links reset, reduced motion, existing selection/delegated actions and desktop isolation.",
+    "Recomputed impact against 5177b44 and confirmed all four requested fingerprints. Four code/test paths have no recorded graph coverage issue (best-effort signal).",
+    "Inspected /tmp/mobile-breadcrumb.png and /tmp/mobile-breadcrumb.png.deep.png: circular path nodes and lines are visible; no horizontal bar; mascot retained. Flow UI label and web UI paragraph match behavior."
+  ],
+  "newly_read_paths": [
+    "uav-web/frontend/mobile-actions.js",
+    "uav-web/frontend/mobile-actions.css",
+    "tests/mobile_actions.cjs",
+    "tools/web-ci/check_mobile_actions.cjs",
+    "docs/flows/download.batch.mmd",
+    "docs/web-ui.md"
+  ],
+  "reused_evidence": [
+    "docs/flow-evidence/reviews/download.batch/22c3698f2bf64168e11ae07cc1a5237afed3b85a6bd06da326af17950b6c2de4.json"
+  ],
+  "additional_reads": [],
+  "token_usage": {
+    "status": "unavailable",
+    "reason": "Runtime does not expose measured per-review token usage."
+  },
+  "limitations": [
+    "Bounded delta review; unchanged backend sources and baseline contracts reuse previous review evidence.",
+    "No real-device Safari, landscape, production or shipped full-application execution by this reviewer; browser fixture tests and supplied screenshot artifacts checked."
+  ]
+}

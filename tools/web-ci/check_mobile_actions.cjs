@@ -42,7 +42,7 @@ async function checkMobileActions(url) {
     await click('[data-mobile-source=select-page-button]');
     await openSelection();
     await c.until('document.querySelector("[data-mobile-source=download-selected-button]").hidden');
-    await click('#mobile-action-close');
+    await click('#mobile-action-fab');
     assert.equal(await c.evaluate('document.activeElement.id'), 'mobile-action-fab');
     await click('#mobile-action-fab');
     await c.command('Input.dispatchKeyEvent', {type:'keyDown', key:'Escape', code:'Escape', windowsVirtualKeyCode:27});
