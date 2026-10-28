@@ -995,6 +995,34 @@
       "reviewer": "/root/mobile_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/storage.destination/3ed93400f1136e85d991ef2c07e4738d10879a96f0531e84f4f0d09786ecca08.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "81e0aa94352a8b018cba738cd9ef1ce8915600fa5b8f888a634a1e020dc599a1",
+      "reviewer": "/root/mobile_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/81e0aa94352a8b018cba738cd9ef1ce8915600fa5b8f888a634a1e020dc599a1.json"
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "8a3ecf06571e49e050333838cef4a4af14c403ec1e6ffa84a2dd0d0b6ed4b10c",
+      "reviewer": "/root/mobile_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.execute/8a3ecf06571e49e050333838cef4a4af14c403ec1e6ffa84a2dd0d0b6ed4b10c.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "f7a2791e26ec68ff8cf848db18799a94cf7e4667cb42ec4a376ee440cacaeab8",
+      "reviewer": "/root/mobile_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/f7a2791e26ec68ff8cf848db18799a94cf7e4667cb42ec4a376ee440cacaeab8.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "e21dc31c772136a8613feec0e79bf97e5f497be4803b4de140e656a7291b0e47",
+      "reviewer": "/root/mobile_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/e21dc31c772136a8613feec0e79bf97e5f497be4803b4de140e656a7291b0e47.json"
     }
   ],
   "policy_inputs": [

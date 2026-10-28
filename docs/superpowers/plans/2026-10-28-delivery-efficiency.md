@@ -1,6 +1,6 @@
 # 交付管線改善 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 實作使用者選定的 retro 1、2、3、4，減少重建與過度失效，保留部署保護。
 
@@ -29,26 +29,26 @@
 
 **Files:** tools/flow-docs/flow_checker.py、tests/test_flow_docs.py、docs/flow-manifest.json、docs/agents/review-efficiency.md。
 
-- [ ] 先測 scoped/global 輸入變更、依賴傳播、無效路徑與 staged 行為。
-- [ ] 新增 features[].policy_inputs，保留舊 manifest 相容性。
-- [ ] 將手機與批次 UI 測試從全域輸入移至 download.batch。
-- [ ] 執行 flow checker 回歸並保存獨立審查。
+- [x] 先測 scoped/global 輸入變更、依賴傳播、無效路徑與 staged 行為。
+- [x] 新增 features[].policy_inputs，保留舊 manifest 相容性。
+- [x] 將手機與批次 UI 測試從全域輸入移至 download.batch。
+- [x] 執行 flow checker 回歸並保存獨立審查。
 
 ### Task 2: 動畫時間軸
 
 **Files:** tests/mobile_actions.cjs。
 
-- [ ] 取樣 paused Web Animations 時間軸 0%、50%、100%，保留 delay。
-- [ ] 檢查畫面界線、路徑／頭像點擊與最終按鈕分離。
-- [ ] 用舊 scale 錯誤證明測試失敗，再恢復並通過。
+- [x] 取樣 paused Web Animations 時間軸 0%、50%、100%，保留 delay。
+- [x] 檢查畫面界線、路徑／頭像點擊與最終按鈕分離。
+- [x] 用舊 scale 錯誤證明測試失敗，再恢復並通過。
 
 ### Task 3: CI artifact 與部署
 
 **Files:** scripts/deploy_artifact.py、tests/test_deploy_artifact.py、scripts/deploy_remote.py、tests/test_deploy_remote.py、.github/workflows/web-check.yml、scripts/check_web.sh。
 
-- [ ] 先測 archive、run、commit、attempt、tag 與 image ID 拒絕分支。
-- [ ] CI 測試後封裝並驗證 archive；成功才上傳固定版本 action 的 artifact。
-- [ ] 部署僅載入通過驗證的 archive，遠端在鎖內核對 ID。
-- [ ] 預設只部署 app；--update-services 明確更新附屬服務，保留舊參數的明確更新意義。
-- [ ] 更新現有部署安全與貢獻文件，讓證據重用規則符合程式。
+- [x] 先測 archive、run、commit、attempt、tag 與 image ID 拒絕分支。
+- [x] CI 測試後封裝並驗證 archive；成功才上傳固定版本 action 的 artifact。
+- [x] 部署僅載入通過驗證的 archive，遠端在鎖內核對 ID。
+- [x] 預設只部署 app；--update-services 明確更新附屬服務，保留舊參數的明確更新意義。
+- [x] 更新現有部署安全與貢獻文件，讓證據重用規則符合程式。
 - [ ] 離線、正式映像、exact-head CI、真實遠端部署逐項驗證；不合併 PR。

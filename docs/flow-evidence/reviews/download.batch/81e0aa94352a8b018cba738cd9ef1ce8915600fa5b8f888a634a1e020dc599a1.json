@@ -1,0 +1,56 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "81e0aa94352a8b018cba738cd9ef1ce8915600fa5b8f888a634a1e020dc599a1",
+  "reviewer": "/root/mobile_review",
+  "verdict": "pass",
+  "findings": [],
+  "base": "5177b44dc3e27f5b9c32ba30e9b701736c3f2990",
+  "candidate": "69752c7f7cf0cdc5168cccb4b81bd235bbcff9ff",
+  "evidence": [
+    "Independent whole delivery delta review versus 3272dc98, reusing earlier UI/backend conclusions. Checked artifact validation, export/load failures, unavailable/expired artifacts, exact-checkout refusal, commit-tag races, app-only and explicit-services paths, remote ID check before pause, startup/asset/NAS rollback and queue recovery boundaries.",
+    "GitHub Actions hardening: no Critical/High/Medium/Low findings in this delta. Build job contents:read, credentials not persisted, external forks excluded from shared runners; exact-head push/dispatch only exports after image/Web/SMB checks; candidate-merge and PR runs cannot export. New shell values use runner environment, and upload-artifact is official fixed SHA. Always cleanup removes temporary outputs and tags; failed/cancelled runs cannot satisfy successful-run provenance.",
+    "Artifact consumer checks trusted repository/workflow/event/head/run attempt and successful exact-head proof/export step before download; verifies archive SHA-256, expected tag and Docker config image ID. Unique tested image ID is captured before shared commit tagging; archive roundtrip refuses a raced tag. Embedded UI asset hashes are checked during export and remote startup. Missing/expired/invalid artifacts stop without fallback app builds.",
+    "Default deployment transfers verified app archive only. Explicit update-services and legacy options control dependency refresh; dependency updates may persist after app failure as documented. Lock rechecks current revision and expected loaded image ID before queue pause; running ID mismatch enters existing rollback. Queue journal/resume and interruption recovery remain intact.",
+    "Feature policy inputs remain optional for old manifests, validate paths/list/duplicates, hash code semantically, use index in staged mode and enter dependency closures; global policy still invalidates all features. Scoped tests cover content/declaration/global changes, invalid paths and staged behavior.",
+    "Animation tests pause shared timeline with stagger delays intact at 0/50/100 percent, check bounds and usable breadcrumb/FAB throughout, and final action separation/hits. Existing reduced-motion and hierarchy checks remain.",
+    "Independent verification: .venv/bin/python -m pytest -q tests/test_deploy_artifact.py tests/test_deploy_remote.py tests/test_flow_docs.py => 112 passed, 7 subtests passed. node tests/mobile_actions.cjs => PASS. Recomputed impact against actual base; requested fingerprints match. Coverage checked for relied-on code/test paths; no recorded issues, best effort."
+  ],
+  "newly_read_paths": [
+    ".github/workflows/web-check.yml",
+    "CONTRIBUTING.md",
+    "docs/agents/deployment-safety.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/superpowers/plans/2026-10-28-delivery-efficiency.md",
+    "scripts/check_web.sh",
+    "scripts/deploy_artifact.py",
+    "scripts/deploy_remote.py",
+    "tests/mobile_actions.cjs",
+    "tests/test_deploy_artifact.py",
+    "tests/test_deploy_remote.py",
+    "tests/test_flow_docs.py",
+    "tools/flow-docs/flow_checker.py"
+  ],
+  "reused_evidence": [
+    "docs/flow-evidence/reviews/download.batch/1844ea7981df9b2d8696c3140280c335c2a5c2adb3643d0d1e5540d1b353aef4.json"
+  ],
+  "additional_reads": [
+    {
+      "path": "scripts/deploy_queue.py",
+      "reason": "Verify unchanged journal/lock recovery boundary used by installer."
+    },
+    {
+      "path": "scripts/check_web_container.sh",
+      "reason": "Verify image integration test precedes artifact export and uses shipped acceptance checker."
+    }
+  ],
+  "token_usage": {
+    "status": "unavailable",
+    "reason": "Runtime does not expose measured per-review token usage."
+  },
+  "limitations": [
+    "No actual GitHub CI artifact export/download, formal image execution or production deployment performed by this reviewer; parent must complete required integration/production evidence.",
+    "No independent old-scale red experiment repeated; parent supplied that result.",
+    "Image ID is Docker config content identity; trusted GitHub artifact/run evidence supplies provenance. Unchanged backend application behavior reused rather than reread."
+  ]
+}
