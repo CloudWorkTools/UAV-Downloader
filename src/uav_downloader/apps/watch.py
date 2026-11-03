@@ -2,7 +2,7 @@
 # coding: utf-8
 """UAV Watcher — unattended downloader with site/category/date selection.
 
-Supports JableTV, MissAV, SupJav, and Hanime1. The user picks sites and categories
+Supports JableTV, MissAV, SupJav, Hanime1, and Huangguo. The user picks sites and categories
 (multi-select), and a baseline date. The worker scans selected categories
 daily and downloads any new video it hasn't seen before.
 
@@ -1212,6 +1212,24 @@ class SmallToolWorker:
             return (None, f'ERR:{type(exc).__name__}')
 
     @staticmethod
+    def _parse_huangguo_listing_date(value: str) -> Optional[datetime]:
+        if not isinstance(value, str):
+            return None
+        try:
+            return datetime.strptime((value or '').strip(), '%Y-%m-%d').replace(
+                tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    def _fetch_huangguo_video_date(self, vurl: str) -> tuple[Optional[datetime], str]:
+        """Never infer a series/episode date from its title or numeric URL."""
+        try:
+            date_text = SITES['Huangguo']['browser'].fetch_video_date(vurl)
+            return self._parse_huangguo_listing_date(date_text), date_text
+        except Exception as exc:
+            return None, f'ERR:{type(exc).__name__}'
+
+    @staticmethod
     def _parse_supjav_listing_date(value: str) -> Optional[datetime]:
         try:
             return datetime.strptime((value or '').strip(), '%Y/%m/%d').replace(
@@ -1222,13 +1240,9 @@ class SmallToolWorker:
     def _fetch_page_for_site(self, site_name: str, url: str) -> list:
         """Fetch a listing page using the appropriate browser for the site."""
         browser = SITES[site_name]['browser']
-        try:
-            return browser.fetch_page(url)
-        except MirrorsBlockedError:
-            raise
-        except Exception as e:
-            self._log(f'  [ERR] fetch failed: {e}')
-            return []
+        # The scan loop distinguishes a real empty page from a failed request.
+        # Converting failures to [] would incorrectly complete the first scan.
+        return browser.fetch_page(url)
 
     def _category_fetch_url(self, site_name: str, cat_name: str, cat_url: str) -> str:
         if site_name == 'MissAV':
@@ -1316,6 +1330,7 @@ class SmallToolWorker:
 
         all_new_videos = []
         scan_blocked = False
+        scan_failed = False
         scan_had_success = False
 
         for target in _targets_for_scan(targets, version_preference):
@@ -1373,6 +1388,12 @@ class SmallToolWorker:
                 except MirrorsBlockedError:
                     scan_blocked = True
                     self._log(f'  [BLOCKED] Cloudflare blocked all mirrors: {page_url}')
+                    break
+                except StorageWriteError:
+                    raise
+                except Exception as exc:
+                    scan_failed = True
+                    self._log(f'  [ERR] {site_name} listing fetch failed: {exc}')
                     break
                 scan_had_success = True
                 if not videos:
@@ -1496,14 +1517,23 @@ class SmallToolWorker:
                         # SupJav exposes an absolute listing date.  Most
                         # Hanime1 cards expose a relative date, while the
                         # compact 裏番/泡麵番 grids require detail confirmation.
+                        # Huangguo uses ISO dates; missing dates need the same
+                        # conservative confirmation, never a guessed "today".
                         rel_text = v.get('date', '')
                         video_dt = (
                             self._parse_relative_date(rel_text)
                             if site_name == 'Hanime1'
+                            else self._parse_huangguo_listing_date(rel_text)
+                            if site_name == 'Huangguo'
                             else self._parse_supjav_listing_date(rel_text))
                         if site_name == 'Hanime1' and video_dt is None:
                             video_dt, rel_text = self._fetch_hanime1_video_date(
                                 vurl)
+                            time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
+                        if site_name == 'Huangguo' and video_dt is None:
+                            video_dt, rel_text = self._fetch_huangguo_video_date(vurl)
+                            if rel_text.startswith('ERR:'):
+                                scan_failed = True
                             time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
                         if video_dt is None:
                             self._log(f'    [SKIP] no confirmed date ({rel_text!r}): {vurl}')
@@ -1540,7 +1570,7 @@ class SmallToolWorker:
 
         if not all_new_videos:
             self._log(f'No new videos found.')
-            if scan_blocked or not scan_had_success:
+            if scan_blocked or scan_failed or not scan_had_success:
                 self._log('[WARN] Scan incomplete — will retry before marking first run done.')
                 return False
             cfg['first_run_done'] = True
@@ -1573,7 +1603,7 @@ class SmallToolWorker:
 
         if not all_new_videos:
             self._log('No new videos remain after cross-site deduplication.')
-            if scan_blocked or not scan_had_success:
+            if scan_blocked or scan_failed or not scan_had_success:
                 self._log('[WARN] Scan incomplete — will retry before marking first run done.')
                 return False
             cfg['first_run_done'] = True
@@ -1636,7 +1666,7 @@ class SmallToolWorker:
         if subtitle_incomplete:
             self._log(f'[WARN] {T("subtitle_retry_pending")}')
             return False
-        if scan_blocked or not scan_had_success:
+        if scan_blocked or scan_failed or not scan_had_success:
             self._log('[WARN] Scan incomplete — first run flag not updated.')
             return False
         cfg['first_run_done'] = True

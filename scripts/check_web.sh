@@ -7,6 +7,11 @@ export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
   tests/test_nas.py tests/test_daemon.py tests/test_daemon_downloads.py \
   tests/test_proxy.py tests/test_storage_failures.py tests/test_resolution_pref.py tests/test_crawler_naming.py \
   tests/test_media_errors.py tests/test_hanime1.py tests/test_pathlen.py tests/test_filename_mode.py tests/test_ui_theme.py \
+  tests/test_supjav_browser_errors.py tests/test_supjav_fst.py tests/test_watcher_listing_errors.py \
+  tests/test_huangguo.py tests/test_huangguo_apps.py tests/test_huangguo_integration.py \
+  tests/test_missav_parsing.py tests/test_jable_canonical_urls.py tests/test_cf_override.py \
+  tests/test_hls_url_resolution.py tests/test_media_request_hook.py \
+  tests/test_browser_selection.py tests/test_download_workflow.py tests/test_web_queue.py tests/test_web_ui_state.py \
   tests/test_compare_upstream.py tests/test_category_catalog.py tests/test_smb_storage.py \
   tests/test_web_download_settings.py tests/test_search_intersection.py \
   tests/test_asr_api.py tests/test_vad_api.py tests/test_subtitle_capabilities.py \
