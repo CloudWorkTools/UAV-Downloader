@@ -91,11 +91,12 @@ def test_scrape_rejects_unsupported_targets(url):
         firecrawl.scrape(url)
 
 
-def test_mirror_transport_uses_firecrawl_after_direct_failure(monkeypatch):
+@pytest.mark.parametrize('status,content', [(403, b'Just a moment'), (500, b'Upstream unavailable'), (502, b'Bad gateway')])
+def test_mirror_transport_uses_firecrawl_after_direct_failure(monkeypatch, status, content):
     from uav_downloader.sites import base
     firecrawl.save_settings({'enabled': True})
     monkeypatch.setattr(base.config, 'MIRRORS', {'jable': ['jable.tv']})
-    direct = SimpleNamespace(status_code=403, content=b'Just a moment', headers={}, url='https://jable.tv/')
+    direct = SimpleNamespace(status_code=status, content=content, headers={}, url='https://jable.tv/')
     monkeypatch.setattr(firecrawl.requests, 'post', lambda *a, **kw: response(success()))
     session = SimpleNamespace(get=lambda *a, **kw: direct)
     result, host, reason = base.fetch_with_mirrors(session, 'https://jable.tv/', 'jable', lambda r: b'video-img-box' in r.content)

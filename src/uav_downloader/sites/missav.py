@@ -4,6 +4,7 @@
 import re
 import threading
 import cloudscraper
+from urllib.parse import urlsplit, unquote
 try:
     from curl_cffi import requests as cffi_requests
     _use_cffi = True
@@ -42,6 +43,50 @@ def _unpack_js_eval(script_text):
     return re.sub(r'\b(\w+)\b', lambda m: lookup.get(m.group(0), m.group(0)), packed)
 
 
+_MISSAV_SUFFIX_TAGS = (
+    ('-uncensored-leak', '-UNCENSORED-LEAK'),
+    ('-chinese-subtitle', '-CHINESE-SUBTITLE'),
+    ('-chinese-subtitles', '-CHINESE-SUBTITLE'),
+    ('-english-subtitle', '-ENGLISH-SUBTITLE'),
+    ('-english-subtitles', '-ENGLISH-SUBTITLE'),
+    ('-reducing-mosaic', '-REDUCING-MOSAIC'),
+    ('-reduced-mosaic', '-REDUCING-MOSAIC'),
+)
+
+
+def enrich_missav_title(title: str, url_or_slug: str) -> str:
+    """Ensure MissAV titles reflect variant suffixes (e.g. -uncensored-leak) to avoid file collisions."""
+    title = str(title or '').strip()
+    if not title:
+        return title
+    raw = str(url_or_slug or '').strip()
+    if '/' in raw or ':' in raw:
+        path = unquote(urlsplit(raw).path).rstrip('/')
+        slug = path.rsplit('/', 1)[-1].casefold() if path else ''
+    else:
+        slug = raw.casefold()
+
+    for suffix, tag in _MISSAV_SUFFIX_TAGS:
+        if slug.endswith(suffix):
+            tag_clean = tag.strip('-_').upper()
+            # The identity must survive code-only naming. A translated marker
+            # elsewhere in the full title is not enough to distinguish files.
+            if tag_clean in title.split(maxsplit=1)[0].upper():
+                return title
+
+            base_code = slug[:-len(suffix)].rstrip('-_')
+            pat = r'^(' + re.escape(base_code).replace(r'\-', r'[-_]').replace(r'\_', r'[-_]') + r')(?=\b|[\s_-]|$)'
+            m = re.match(pat, title, re.IGNORECASE)
+            if m:
+                return m.group(1).upper() + tag + title[m.end():]
+            parts = title.split(maxsplit=1)
+            if parts and re.search(r'\d', parts[0]):
+                rest = (' ' + parts[1]) if len(parts) > 1 else ''
+                return f'{parts[0].upper()}{tag}{rest}'
+            return f'{base_code.upper()}{tag} {title}'.strip()
+    return title
+
+
 class SiteMissAV(M3U8Crawler):
     """Downloader for missav.ai"""
     # MissAV's surrit.com CDN becomes unreliable under the previous worst case
@@ -53,15 +98,38 @@ class SiteMissAV(M3U8Crawler):
     segment_retry_base_delay = 1.5
     segment_retry_max_delay = 8.0
     _segment_request_gate = threading.BoundedSemaphore(8)
-    # Matches video pages ONLY (no dm\d+ routing prefix — those are category pages):
+    # Matches video pages, including optional dm routing and language prefixes:
     #   https://missav.ai/cn/sone-543-chinese-subtitle
     #   https://missav.ai/sone-543
     #   https://missav.ai/dm1151/092014_887
     #   https://missav.ai/dm464/081012-097
     # Does NOT match:
     #   https://missav.ai/dm278/chinese-subtitle  (category listing)
-    website_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-_]+)|https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/([a-zA-Z0-9][a-zA-Z0-9\-_]*[-_]\d[a-zA-Z0-9\-_]*)'
-    website_dirname_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-zA-Z0-9][a-zA-Z0-9\-_]*[-_]\d[a-zA-Z0-9\-_]*)'
+    # MissAV video codes are not uniformly separated from their numeric part.
+    # Besides codes such as ``sone-543`` and ``092014_887``, current search
+    # results contain compact codes such as ``mdhg0020`` and ``mcy0244``.
+    # Require at least one digit in the final slug instead of requiring a
+    # ``-``/``_`` immediately before it.  Category slugs such as ``new`` and
+    # ``chinese-subtitle`` remain excluded because they contain no digit.
+    website_pattern = (
+        r'https://(?:www\.)?'
+        r'(?:missav\.(?:ai|ws|live)|missav123\.com)/'
+        r'(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?'
+        r'([a-zA-Z0-9][a-zA-Z0-9_-]*)/?$'
+    )
+    website_dirname_pattern = website_pattern
+
+    @classmethod
+    def validate_url(cls, url):
+        # Bound work before regex and avoid overlapping quantifiers around a
+        # required digit (quadratic backtracking on invalid pasted input).
+        if not isinstance(url, str) or len(url) > 2048:
+            return None
+        slug = super().validate_url(url)
+        if (not slug or not any('0' <= char <= '9' for char in slug) or
+                re.fullmatch(r'dm\d+', slug, flags=re.I)):
+            return None
+        return slug
 
     _shared_scraper = None
     _scraper_lock = threading.Lock()
@@ -102,6 +170,7 @@ class SiteMissAV(M3U8Crawler):
             soup = BeautifulSoup(htmlfile.content, 'html.parser')
             meta = soup.find('meta', property='og:title')
             self._targetName = meta.get('content', '') if meta else ''
+        self._targetName = enrich_missav_title(self._targetName, self._url)
 
         # Thumbnail from og:image
         og_image = re.search(r'og:image"\s+content="([^"]+)"', htmlfile.text)
@@ -212,6 +281,7 @@ class MissAVBrowser:
                 title_a = card.select_one('div.my-2 a, div.truncate a')
                 if title_a:
                     title_text = title_a.get_text(strip=True) or title_text
+                title_text = enrich_missav_title(title_text, video_url)
                 duration_span = card.select_one('span.absolute.bottom-1.right-1')
                 duration = duration_span.get_text(strip=True) if duration_span else ''
                 videos.append({'url': video_url, 'title': title_text, 'thumbnail': thumbnail, 'duration': duration})

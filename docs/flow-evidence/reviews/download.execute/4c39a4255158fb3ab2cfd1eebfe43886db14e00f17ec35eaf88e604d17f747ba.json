@@ -1,0 +1,136 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "4c39a4255158fb3ab2cfd1eebfe43886db14e00f17ec35eaf88e604d17f747ba",
+  "reviewer": "/root/upstream_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "base": "a609850c4a7f10f636c4eb451afc08bea6ca9460",
+  "upstream": "9c09ab5838276939c3782beab2c180becbb66ecb",
+  "candidate": "worktree mapped inputs frozen for review",
+  "evidence": [
+    "New StorageWriteError constructor is backward compatible with unchanged task handlers and publication/retry boundary; I/O exception types and remote generic conversion remain intact.",
+    "Actual Huangguo target names prepend episode identity; same-title episodes remain distinct at the second existing-file check and publication.",
+    "Mapped changes do not alter cancel/pause, owned-file cleanup, publication retry or completion warning branches documented by the flow.",
+    "Reviewed initial diff against base and requested conflict resolution delta against upstream. HTTP5xx suppression of Firecrawl was found in the initial merged helper; author restored the server-error branch. Direct extracted-function mock confirms 502 invokes fallback; author reports red/green regressions with 43 tests passing for Firecrawl, SupJav errors and CF overrides.",
+    "Read /tmp/uav-upstream-focused-tests.log: 230 passed, 3 skipped; read /tmp/uav-upstream-web-tests.log Python stage: 1504 passed, 3 skipped, 21 subtests; build log confirms successful formal image build. These are supplementary execution evidence, not semantic proof."
+  ],
+  "limitations": [
+    "Review is bounded to the changed mapped inputs and requested merge resolutions; no full application certification.",
+    "Graph generation 2026-10-28T11:23:37Z belongs to the main workspace, not this candidate; used only for navigation. Candidate source reads and direct checks supply behavioral evidence. Coverage checked for every relied source; new Huangguo files/tests and Docker requirements were verified directly.",
+    "No live provider model request or live remote deployment performed by this reviewer. Full Web frontend gate was still being rerun after a CDN ERR_NETWORK_CHANGED when review was prepared.",
+    "Generic canonical_code cannot reconstruct a full Huangguo episode identity from an existing filename. Normal exact target-title detection is correct; recognition of a renamed title or changed filename template remains limited. This does not cause distinct normal episodes with the same display title to skip each other."
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/agents/domain.md",
+    "GLOSSARY.md",
+    "docs/adr/0002-external-api-for-every-subtitle-stage.md",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "docs/flow-manifest.json",
+    "src/uav_downloader/core/config.py",
+    "src/uav_downloader/core/storage.py",
+    "src/uav_downloader/core/video_identity.py",
+    "src/uav_downloader/metadata.py",
+    "src/uav_downloader/subtitles/settings.py",
+    "pyproject.toml",
+    "requirements-docker.txt",
+    "docs/flows/download.batch.mmd",
+    "docs/flows/download.execute.mmd",
+    "docs/flows/queue.enqueue.mmd",
+    "docs/flows/storage.destination.mmd",
+    "src/uav_downloader/sites/base.py",
+    "src/uav_downloader/apps/browse.py",
+    "src/uav_downloader/sites/huangguo.py",
+    "src/uav_downloader/daemon/download_files.py",
+    "src/uav_downloader/daemon/task_manager.py",
+    "src/uav_downloader/daemon/download_batch.py",
+    "src/uav_downloader/core/smb_storage.py",
+    "src/uav_downloader/subtitles/profiles.py",
+    "src/uav_downloader/core/history.py",
+    "src/uav_downloader/core/media_errors.py",
+    "src/uav_downloader/sites/missav.py",
+    "src/uav_downloader/sites/supjav.py",
+    "tests/test_huangguo_integration.py",
+    "tests/test_supjav_browser_errors.py",
+    "Dockerfile.web"
+  ],
+  "reused_evidence": [
+    {
+      "path": "/tmp/uav-upstream-focused-tests.log",
+      "kind": "author-run test output read by reviewer"
+    },
+    {
+      "path": "/tmp/uav-upstream-web-tests.log",
+      "kind": "author-run Python test stage output read by reviewer"
+    },
+    {
+      "path": "/tmp/uav-upstream-build.log",
+      "kind": "author-run image build output read by reviewer"
+    }
+  ],
+  "additional_reads": [
+    {
+      "path": "src/uav_downloader/sites/base.py",
+      "reason": "Compare merged helper and filename rendering against both parents; verify retry, validation, HTTP failure and fallback interaction."
+    },
+    {
+      "path": "src/uav_downloader/apps/browse.py",
+      "reason": "Review delta against upstream for retained history, badges and duplicate identity conflict resolutions."
+    },
+    {
+      "path": "src/uav_downloader/sites/huangguo.py",
+      "reason": "Check identity validator alignment and actual episode target filename, beyond mapped flow baseline."
+    },
+    {
+      "path": "src/uav_downloader/daemon/download_files.py",
+      "reason": "Verify new episode identity through shared queue keys and existing-file detection; inspect publication ownership boundary."
+    },
+    {
+      "path": "src/uav_downloader/daemon/task_manager.py",
+      "reason": "Check duplicate, second existing-output check and unchanged storage failure/retry/cancel/publication callers."
+    },
+    {
+      "path": "src/uav_downloader/daemon/download_batch.py",
+      "reason": "Verify unchanged destination settings key, preview/commit, rollback and replay contracts."
+    },
+    {
+      "path": "src/uav_downloader/core/smb_storage.py",
+      "reason": "Verify remote open exceptions are still sanitized before updated StorageWriteError diagnostics."
+    },
+    {
+      "path": "src/uav_downloader/subtitles/profiles.py",
+      "reason": "Confirm existing API snapshot boundary remains separate from legacy translation default."
+    },
+    {
+      "path": "src/uav_downloader/core/history.py",
+      "reason": "Check episode identities prevent fuzzy same-title history collisions when both valid codes exist."
+    },
+    {
+      "path": "src/uav_downloader/core/media_errors.py",
+      "reason": "Check shared persistence-safe diagnostic contract near storage error consumers."
+    },
+    {
+      "path": "src/uav_downloader/sites/missav.py",
+      "reason": "Inspect mirror-validator boundary and retained override/plain behavior."
+    },
+    {
+      "path": "src/uav_downloader/sites/supjav.py",
+      "reason": "Verify helper HTTP failure classification and site parser error semantics."
+    },
+    {
+      "path": "tests/test_huangguo_integration.py",
+      "reason": "Read identity, stored-code override, URL rejection, same-title episode and queue recovery cases."
+    },
+    {
+      "path": "tests/test_supjav_browser_errors.py",
+      "reason": "Read HTTP500 and override/plain validation regressions relevant to merged helper."
+    },
+    {
+      "path": "Dockerfile.web",
+      "reason": "Confirm actual formal Web runtime aligns with raised Python requirement."
+    }
+  ],
+  "token_usage": "unavailable"
+}

@@ -1,11 +1,11 @@
 <p align="center">
-  <a href="./README.md">繁體中文</a> · <a href="./README.zh-CN.md">简体中文</a> · <strong>English</strong> · <a href="./README.ja.md">日本語</a>
+  <a href="./README.md">繁體中文</a> · <a href="./README.zh-CN.md">简体中文</a> · <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./MANUAL.th.md">คู่มือภาษาไทย</a>
 </p>
 
 <h1 align="center">UAV Downloader</h1>
 
 <p align="center">
-  Desktop downloading and category monitoring for JableTV, MissAV, SupJav, and Hanime1, with <strong>built-in AI subtitles</strong>.<br />
+  Desktop downloading and category monitoring for JableTV, MissAV, SupJav, Hanime1, and Huangguo, with <strong>built-in AI subtitles</strong>.<br />
   <strong>Download the video, then automatically add AI subtitles:</strong> local Japanese speech transcription can create Japanese, English, and Traditional Chinese SRT files.<br />
   Use <strong>UAV Browser</strong> to browse and pick videos, or <strong>UAV Watcher</strong> to keep watching selected feeds.<br />
   <strong>The real differentiator is unattended automation:</strong> schedule a category once, then discover, deduplicate, download, and subtitle new releases automatically.
@@ -38,7 +38,29 @@
 
 ## Three workflows, one download core
 
-### New in v3.2.1
+### New in v3.4.0: Huangguo short dramas
+
+- Public Huangguo episode URLs work in Browser, Watcher, CLI, and the Web download queue.
+- Browser/Watcher offer AI short-drama and AI cartoon categories. Listings expand the actual episode links; missing episode numbers are not invented. A direct episode URL downloads that episode only; the root video URL means episode 1.
+- Site-prefixed episode identifiers prevent title/episode collisions. Watcher supports shared or separate destination/date settings.
+- Huangguo date filtering uses the site's **series update date**, not each episode's release date; episodes of a series may share that date. Unknown dates are skipped, never assumed to be today.
+- Support currently covers HLS with MPEG-TS segments, not fMP4, DASH, or private player protocols. Encrypted site thumbnails are not decrypted; the interface shows a placeholder.
+- No login, paywall, or access-control bypass. The subtitle engine remains Japanese-focused; this does not add a Chinese speech-recognition model.
+
+### Fixed in v3.3.1
+
+- SupJav FST follows the player's source priority, including relative URLs and explicitly HLS-typed non-`.m3u8` URLs. Actual quality still depends on the provider.
+- Invalid pages no longer appear as empty search results; an invalid saved-settings response allows the normal request fallback to continue. Genuine Cloudflare blocks remain visible errors, not guaranteed bypasses.
+- Watcher marks listing failures as incomplete for retry instead of incorrectly completing the first scan; healthy sites continue processing.
+
+### New in v3.3.0
+
+- Thai interface and [Thai manual](MANUAL.th.md), plus richer persistent queue controls: import/export, filters, pause/resume, scheduling and bounded retries.
+- [Optional Docker Web UI](docs/docker-cli.md#nas-web-queue-opt-in): authenticated persistent URL queue, progress, cancel/retry and storage-error halt; CLI remains the default.
+- **Preview ↗** beside Select opens the source's full player in your system browser without downloading. Embedded playback remains an open proposal.
+- Hardened filename templates, MissAV variant identity, URL/path validation, CSV export and storage diagnostics. Full-result scans no longer silently stop at 50 pages.
+
+### Previous: v3.2.1
 
 Browser now closes safely during startup; background UI updates run on the main thread.
 
@@ -77,7 +99,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 
 ## UAV Browser: browse, pick, download
 
-1. Open Browse, choose JableTV, MissAV, SupJav, or Hanime1, then select a category or search. Hanime1 also has a full filter that combines genre, sort, date, duration, and 240 tags.
+1. Open Browse, choose JableTV, MissAV, SupJav, Hanime1, or Huangguo, then select a category or search. Hanime1 also has a full filter that combines genre, sort, date, duration, and 240 tags.
 2. Select multiple cards and add them to the queue, or download the selection immediately.
 3. You can also paste URLs on the Download tab or import a `.txt` / `.csv` list.
 4. Use Settings for the destination, quality, filename format, concurrent videos, per-video workers, speed limit, AI subtitles, and proxy.
@@ -102,7 +124,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 
 1. Choose a destination. If left unset, UAV Watcher creates `tmp` beside the executable.
 2. Select Show settings to change the shared baseline date and folder, or assign a separate date and destination to each site. Quality, filename format, per-video workers, version priority, AI subtitles, and proxy remain configurable there too.
-3. Search and select categories on any of the four site tabs; group-wide selection is available.
+3. Search and select categories on any of the five site tabs; group-wide selection is available.
 4. Select Schedule to check every 1–168 hours or once a day at a specified computer-local time.
 5. Press Start Monitoring. Categories remain visible; progress appears only while work is active, and Show activity opens the log area when needed.
 
@@ -112,6 +134,7 @@ SmartScreen reputation warnings and Defender Antivirus quarantine are different 
 | MissAV | 102 | Feeds/rankings, categories/tags, and makers |
 | SupJav | 10 | Feeds/rankings and primary categories |
 | Hanime1 | 272 | Release/upload/ranking feeds, 9 genres including Ura and short anime, 6 date ranges, 8 durations, and all 240 tags |
+| Huangguo | 2 | AI short dramas and AI cartoons; filter by series update date and expand actual episode links |
 
 UAV Watcher can check every 1–168 hours or once a day at a specified time using this computer's local time; existing settings continue to default to every 24 hours. Check Now runs one immediate check without creating another recurring schedule. When the same recognized title code appears across categories or sites, the candidate matching your selected version priority is kept. If a code cannot be identified reliably, only an identical URL is deduplicated—UAV Watcher does not guess. If a MissAV download temporarily ends with only a few segments missing, validated chunks are retained and resumed on the next check.
 
@@ -140,6 +163,7 @@ State is stored in `.uav-watcher` beside the executable when writable, otherwise
 | MissAV | ✓ | ✓ | ✓ |
 | SupJav | ✓ | ✓ | ✓ |
 | Hanime1 | ✓ | ✓ | ✓ |
+| Huangguo | ✓ | ✓ | ✓ |
 
 Sites and CDNs can change without notice. If one stops working, update first, then open an Issue with reproducible details.
 
@@ -147,12 +171,11 @@ Hanime1 support covers official `watch?v=` URLs, search, pagination, and combina
 
 ## Run from source
 
-The current code requires **Python 3.10+** and Tk. The former Python 3.8+ README claim no longer matches syntax used by the project.
+The current code requires **Python 3.12+** and Tk. This matches the minimum version supported by the pinned NumPy dependency.
 
 ```bash
 git clone https://github.com/Alos21750/UAV-Downloader.git
 cd UAV-Downloader
-python -m pip install -r requirements.txt
 python -m pip install -e .
 
 # Full GUI

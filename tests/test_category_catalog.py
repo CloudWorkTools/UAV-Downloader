@@ -14,7 +14,7 @@ def test_catalog_retains_all_registered_targets_without_mutating_registry(site):
     groups = category_groups(site)
     assert sum(len(group['items']) for group in groups) == sum(len(group['targets']) for group in before)
     assert {item['url'] for group in groups for item in group['items']} == {item['url'] for group in before for item in group['targets']}
-    assert groups[0]['name'] == '動態 / 榜單'
+    assert groups[0]['name'] == ('主分類' if site == 'Huangguo' else '動態 / 榜單')
     assert SITES[site]['groups'] == before
 
 

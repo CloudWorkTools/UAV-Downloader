@@ -96,6 +96,27 @@ def _apply_filename_mode(value, mode):
     return name.split(maxsplit=1)[0]
 
 
+def _apply_filename_template(value, dirname, url, template):
+    """Render the allowlisted filename template without permitting paths."""
+    normalized = config.normalize_filename_template(template)
+    title = _sanitize_filename(value)
+    first = title.split(maxsplit=1)[0] if title else ''
+    code = first if re.search(r'\d', first) else str(dirname or first)
+    host = (urlsplit(str(url or '')).hostname or '').lower()
+    is_huangguo = host in {'huangguoai.com', 'www.huangguoai.com'}
+    if is_huangguo:
+        code = str(dirname or first)
+    site = (
+        'Huangguo' if is_huangguo else
+        'MissAV' if 'missav' in host else
+        'JableTV' if host in {'jable.tv', 'www.jable.tv', 'fs1.app'} else
+        'SupJav' if 'supjav' in host else
+        'Hanime1' if 'hanime1' in host else host
+    )
+    rendered = normalized.format(title=title, code=code, site=site)
+    return _sanitize_filename(re.sub(r'\s+', ' ', rendered).strip())
+
+
 def _utf16_units(value):
     return len(value.encode('utf-16-le')) // 2
 
@@ -156,7 +177,8 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
     Order: original host (if allowlisted) -> sticky active host -> remaining mirrors (dedup, order-preserving).
     Per host: 1 retry on transport error; skip CF interstitials; reject redirects that land off the allowlist.
     HTTP 429 on a site listed in config.RATE_LIMIT_WAITS is waited out and retried on the same host.
-    validate(resp)->bool gates content success. headers_factory(host)->dict gives per-host headers (e.g. Referer).
+    validate(resp)->bool gates each trial (including the override/plain fallback),
+    not just the final response for a host. headers_factory(host)->dict gives per-host headers (e.g. Referer).
     Returns (resp, host, reason): 'ok' (validated) | 'empty' (a real non-interstitial page was seen but none validated)
     | 'blocked' (every attempt was interstitial / transport failure)."""
     mirrors = config.MIRRORS.get(site_key) or [urlsplit(url).netloc]
@@ -170,6 +192,7 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
     if not order:
         order = list(mirrors)
     saw_real = False
+    saw_server_error = False
     for index, host in enumerate(order, 1):
         activity.check_cancelled()
         activity.report(f'連線 {site_key} 站台（鏡像 {index}/{len(order)}）')
@@ -184,7 +207,6 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             ck = {'cf_clearance': ov['cookie']} if ov.get('cookie') else None
             trials.append((h2, ck))
         trials.append((base_hdrs, None))
-        resp = None
         rate_limit_waits = list(config.RATE_LIMIT_WAITS.get(site_key, ()))
         for hdrs, cookies in trials:
             r = None
@@ -209,31 +231,25 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             if r is None:
                 continue
             if _is_cf_interstitial(r):
-                resp = r
                 continue
-            resp = r
-            break
-        if resp is None:
-            continue
-        if _is_cf_interstitial(resp):
-            continue
-        try:
-            final_host = urlsplit(str(resp.url)).netloc
-        except Exception:
-            final_host = host
-        if final_host and final_host not in mirrors:  # redirected off the allowlist -> distrust
-            continue
-        if resp.status_code >= 500:
-            continue
-        saw_real = True
-        try:
-            ok = validate(resp)
-        except Exception:
-            ok = False
-        if ok:
-            with _active_host_lock:
-                _active_host[site_key] = host
-            return resp, host, 'ok'
+            try:
+                final_host = urlsplit(str(r.url)).netloc
+            except Exception:
+                final_host = host
+            if final_host and final_host not in mirrors:  # redirected off the allowlist -> distrust
+                continue
+            if r.status_code >= 500:
+                saw_server_error = True
+                continue
+            saw_real = True
+            try:
+                ok = validate(r)
+            except Exception:
+                ok = False
+            if ok:
+                with _active_host_lock:
+                    _active_host[site_key] = host
+                return r, host, 'ok'
     if saw_real:
         return None, None, 'empty'
     from uav_downloader.core.firecrawl import fallback
@@ -245,7 +261,7 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
         if host in mirrors and not _is_cf_interstitial(response) and validate(response):
             return response, host, 'ok'
         raise RuntimeError('Firecrawl 未取得有效的站台頁面')
-    return None, None, ('empty' if saw_real else 'blocked')
+    return None, None, ('empty' if saw_real or saw_server_error else 'blocked')
 
 # ── Global speed limiter (token bucket) ──────────────────────────
 class _SpeedLimiter:
@@ -528,7 +544,9 @@ class M3U8Crawler:
         if result: return result.group(1)
         return None
 
-    def __init__(self, url, savepath="", silence=False, max_workers=None):
+    def __init__(
+            self, url, savepath="", silence=False, max_workers=None,
+            resolution=None, filename_template=None):
         self.silence = silence
         self._tsList = []
         self._key_content = None   # raw bytes of AES key
@@ -567,6 +585,15 @@ class M3U8Crawler:
             self._segment_retry_base_delay,
             float(getattr(self, 'segment_retry_max_delay', 6.0)))
         self._filename_mode = config.get_filename_mode()
+        self._filename_template = config.normalize_filename_template(
+            filename_template if filename_template is not None
+            else config.get_filename_template())
+        requested_resolution = str(
+            resolution or get_resolution_pref()).strip().lower()
+        self._resolution_pref = (
+            requested_resolution
+            if requested_resolution in _VALID_RESOLUTION_PREFS
+            else 'highest')
         self._progress_callback = None   # (downloaded, total, speed_bps) -> None
         self._speed_lock = threading.Lock()
         self._bytes_downloaded = 0
@@ -588,8 +615,13 @@ class M3U8Crawler:
             if self.is_url_vaildate():
                 if self._targetName:
                     self._targetName = _sanitize_filename(self._targetName)
-                    self._targetName = _apply_filename_mode(
-                        self._targetName, self._filename_mode)
+                    if self._filename_template == config.DEFAULT_FILENAME_TEMPLATE:
+                        self._targetName = _apply_filename_mode(
+                            self._targetName, self._filename_mode)
+                    else:
+                        self._targetName = _apply_filename_template(
+                            self._targetName, self._dirName, self._url,
+                            self._filename_template)
                     if len(self._dirName) > 80:
                         self._dirName = self._dirName[:80]
                         self._temp_folder = os.path.join(self._dest_folder, self._dirName)
@@ -670,8 +702,12 @@ class M3U8Crawler:
         """Merged headers for m3u8 and segment requests."""
         return {**headers, **self._extra_headers}
 
+    def _media_get(self, url, timeout=20):
+        """Transport hook for sites needing per-resource/redirect header scope."""
+        return _http_get(url, self._m3u8_headers(), timeout=timeout)
+
     def _load_m3u8(self, url):
-        resp = _http_get(url, self._m3u8_headers(), timeout=20)
+        resp = self._media_get(url, timeout=20)
         status = getattr(resp, 'status_code', 0)
         if status != 200:
             if _is_cf_block_resp(resp):
@@ -688,30 +724,22 @@ class M3U8Crawler:
             raise Exception(f"m3u8 內容無效（可能被阻擋或改版）: {url}")
         return m3u8.loads(text, uri=str(getattr(resp, 'url', url)))
 
-    def _getm3u8PlayList(self, uri):
-        if uri.startswith(('http://', 'https://', '//')):
-            playListUrl = urljoin(self._m3u8url, uri)
-        else:
-            m3u8urlPath = self._m3u8url.split('/')
-            if uri.startswith('/'): m3u8urlPath = m3u8urlPath[:3]
-            else: m3u8urlPath.pop(-1)
-            baseurl = '/'.join(m3u8urlPath)
-            playListUrl = baseurl + '/' + uri.lstrip('/')
+    def _getm3u8PlayList(self, uri, base_url=None):
+        playListUrl = urljoin(base_url or self._m3u8url, uri)
         m3u8obj = self._load_m3u8(playListUrl)
-        variantBase = playListUrl.rsplit('/', 1)[0] + '/'
+        # _load_m3u8 gives the parser the final response URL, so base_uri
+        # follows CDN redirects instead of the original requested location.
+        variantBase = getattr(m3u8obj, 'base_uri', None) or urljoin(playListUrl, '.')
         return m3u8obj, variantBase
 
     def _create_m3u8(self):
-        m3u8urlList = self._m3u8url.split('/')
-        m3u8urlList.pop(-1)
-        downloadurl = '/'.join(m3u8urlList) + '/'
-
         m3u8obj = self._load_m3u8(self._m3u8url)
+        downloadurl = getattr(m3u8obj, 'base_uri', None) or urljoin(self._m3u8url, '.')
         if len(m3u8obj.playlists) > 0:
             # Pick variant based on resolution preference
-            best = select_variant(m3u8obj.playlists, _resolution_pref)
+            best = select_variant(m3u8obj.playlists, self._resolution_pref)
             if best:
-                m3u8obj, downloadurl = self._getm3u8PlayList(best.uri)
+                m3u8obj, downloadurl = self._getm3u8PlayList(best.uri, downloadurl)
 
         # Extract key info (store bytes + IV, not a cipher - cipher is NOT thread-safe)
         self._key_content = None
@@ -719,10 +747,8 @@ class M3U8Crawler:
         self._key_iv = None
         for key in m3u8obj.keys:
             if key and key.uri:
-                m3u8_key_uri = key.uri
-                if not m3u8_key_uri.startswith('http'):
-                    m3u8_key_uri = downloadurl + m3u8_key_uri
-                resp = _http_get(m3u8_key_uri, self._m3u8_headers(), timeout=15)
+                m3u8_key_uri = urljoin(downloadurl, key.uri)
+                resp = self._media_get(m3u8_key_uri, timeout=15)
                 blocked = _is_cf_block_resp(resp)
                 if resp.status_code != 200 or blocked:
                     if blocked:
@@ -739,12 +765,7 @@ class M3U8Crawler:
         # Build segment URL list
         self._tsList = []
         for seg in m3u8obj.segments:
-            uri = seg.uri
-            if uri.startswith('https://') or uri.startswith('http://'):
-                tsUrl = uri
-            else:
-                tsUrl = downloadurl + uri
-            self._tsList.append(tsUrl)
+            self._tsList.append(urljoin(downloadurl, seg.uri))
         if not self._tsList:
             raise Exception("m3u8 無有效片段（可能被阻擋或改版）")
 
@@ -958,7 +979,7 @@ class M3U8Crawler:
             return True
 
         try:
-            response = _http_get(url, self._m3u8_headers(), timeout=25)
+            response = self._media_get(url, timeout=25)
             if response.status_code != 200:
                 return False
             content_ts = response.content
@@ -1066,7 +1087,7 @@ class M3U8Crawler:
         if not self.is_target_image_exist():
             self._create_dest_folder()
             try:
-                response = _http_get(self._imageUrl, self._m3u8_headers(), timeout=15)
+                response = self._media_get(self._imageUrl, timeout=15)
                 if response.status_code != 200:
                     return None
                 with storage_open(self._get_image_savename(), 'wb') as fs:
