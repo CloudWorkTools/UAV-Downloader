@@ -638,7 +638,6 @@
     let currentCategoryUrl = '';
     let currentSearchQuery = '';
     let displayedSearchQuery = '';
-    let displayedSelectionContext = '';
     let searchSession = null;
     let searchJobId = null;
     let batchController;
@@ -922,9 +921,6 @@
     }
 
     function renderVideos(videos) {
-      const context = JSON.stringify([currentSite, currentSearchQuery, currentCategoryUrl]);
-      if (context !== displayedSelectionContext) selection.clear();
-      displayedSelectionContext = context;
       displayedSearchQuery = currentSearchQuery;
       const grid = document.getElementById('video-grid');
       grid.innerHTML = '';
