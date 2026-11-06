@@ -42,6 +42,14 @@ const selection = vm.runInContext('selection', context);
 vm.runInContext("switchTab = tab => tabChanges.push(tab)", context);
 async function run() {
   context.renderVideos([{url: 'a'}, {url: 'b'}]);
+  selection.toggle('a', true);
+  vm.runInContext("currentSearchQuery = 'new search'", context);
+  context.renderVideos([{url: 'b'}]);
+  assert.equal(selection.has('a'), true, 'New search retains earlier selections');
+  selection.toggle('b', true);
+  assert.equal(element('download-selected-button').textContent, '下載已選 (2)');
+  selection.clear();
+  context.renderVideos([{url: 'a'}, {url: 'b'}]);
   boxes = [{checked: false}, {checked: false}];
   assert.equal(element('download-selected-button').disabled, true);
   selection.togglePage();

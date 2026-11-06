@@ -1,0 +1,32 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "82b0bcfa60e8f578261b52941b03ae210b4b8ce773af0942ec59fffec27c2205",
+  "reviewer": "/root/flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "base": "a609850c4a7f10f636c4eb451afc08bea6ca9460",
+  "candidate": "worktree",
+  "evidence": [
+    "獨立審查確認選取保存、頁面全選、手動清除、成功及失敗提交行為；node tests/web_ui.cjs 與 node tests/web_browse.cjs 通過。"
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flows/download.batch.mmd",
+    "docs/flows/contracts.md",
+    "docs/web-ui.md",
+    "uav-web/frontend/index.html",
+    "uav-web/frontend/video-selection.js",
+    "tests/web_ui.cjs"
+  ],
+  "reused_evidence": [],
+  "additional_reads": [
+    "docs/web-ui.md：核對操作說明"
+  ],
+  "token_usage": {
+    "status": "unavailable"
+  },
+  "limitations": [
+    "未執行真實瀏覽器或正式部署測試。"
+  ]
+}
