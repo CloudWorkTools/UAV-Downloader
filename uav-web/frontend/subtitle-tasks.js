@@ -379,7 +379,10 @@
       if(submitting)return;
       let spec;try{spec=requestBody();if(!spec)throw new Error('請至少選擇一個字幕階段。');}catch(error){status(error.message,true);return;}
       const items=[...state.selected].map(video_id=>({video_id,...spec}));
-      submitting=true;status('正在提交字幕任務…');const button=byId('subtitle-confirm-submit'),wasFocused=root.activeElement===button;let failed=false;if(button)button.disabled=true;
+      submitting=true;status('');
+      const pending=byId('subtitle-confirm-pending');
+      if(pending)pending.textContent='正在提交字幕任務…';
+      const button=byId('subtitle-confirm-submit'),wasFocused=root.activeElement===button;let failed=false;if(button)button.disabled=true;
       try{
         const data=await api('POST','/api/subtitles/tasks',{items});
         const accepted=data.items||[];
@@ -395,7 +398,7 @@
         await refresh();
       }
       catch(error){failed=true;status(error.message,true);}
-      finally{submitting=false;if(button)button.disabled=false;if(failed)restoreFailedDialogActionFocus('subtitle-confirm-dialog',button,wasFocused);}
+      finally{submitting=false;if(pending)pending.textContent='';if(button)button.disabled=false;if(failed)restoreFailedDialogActionFocus('subtitle-confirm-dialog',button,wasFocused);}
     }
     async function refresh({scanVideos=false}={}){
       if(refreshInFlight){await refreshInFlight;if(scanVideos)return refresh({scanVideos:true});return state;}
