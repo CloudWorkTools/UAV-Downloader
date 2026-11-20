@@ -1086,6 +1086,20 @@
       "reviewer": "/root/deploy_flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/storage.destination/980582cba4bcbe27374654f34f7bccff650dff1649eecb831075cf4be3d04ae1.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "e5f047a2630428c211a1be4d31347c238a58588885344a01efb24aa0a573ce32",
+      "reviewer": "/root/planb_flow",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/e5f047a2630428c211a1be4d31347c238a58588885344a01efb24aa0a573ce32.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "1119de5b9bde09edbbb67d919c2dafc526fbd7f8c9f25b6d78aefe7b43c94baa",
+      "reviewer": "/root/planb_flow",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/1119de5b9bde09edbbb67d919c2dafc526fbd7f8c9f25b6d78aefe7b43c94baa.json"
     }
   ],
   "policy_inputs": [
