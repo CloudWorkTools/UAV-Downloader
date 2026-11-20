@@ -216,7 +216,7 @@ class SubtitleTaskManager:
         with self._lock:
             previous = self._publication_heads.get(key)
             self._publication_heads[key] = {
-                'revision': uuid.uuid4().hex, 'operation': operation_id, 'time': time.time(),
+                'revision': uuid.uuid4().hex, 'operation': operation_id,
             }
             try:
                 self._save_locked()
@@ -238,10 +238,14 @@ class SubtitleTaskManager:
         key = self._publication_key(record['video_id'], language)
         head = self._publication_heads.get(key)
         operation_id = record.get('task_id') or record['publication_id']
+        if head and head['operation'] == operation_id:
+            return
         baseline = record.get('_publish_retry_heads', {}).get(language)
         if baseline is not None:
             current = head['revision'] if head else None
-            stale = baseline != [key, current] and (not head or head['operation'] != operation_id)
+            stale = baseline != [key, current]
+        elif head:
+            stale = True
         else:
             # Older records only have status and timestamps to identify a newer publication.
             attempted_at = record['created_at'] if 'publication_id' in record else record['updated_at']
@@ -250,12 +254,13 @@ class SubtitleTaskManager:
                 return (published and other.get('updated_at', 0) > attempted_at
                         and self._publication_key(other['video_id'], language) == key)
 
-            stale = ((head and head['time'] > attempted_at)
-                     or any(newer(other, other.get('publish_status', {}).get(language, {}).get('status') == 'published')
-                            for other in self._tasks.values())
-                     or any(newer(publication, publication['language'] == language
-                                  and publication['publish_status'] == 'published')
-                            for publication in self._publications.values()))
+            stale = (
+                any(newer(other, other.get('publish_status', {}).get(language, {}).get('status') == 'published')
+                    for other in self._tasks.values())
+                or any(newer(publication, publication['language'] == language
+                             and publication['publish_status'] == 'published')
+                       for publication in self._publications.values())
+            )
         if stale:
             raise ValueError('目的地已有較新的字幕，無法重試舊版發布')
 

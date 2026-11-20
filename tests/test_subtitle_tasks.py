@@ -202,6 +202,48 @@ def test_restore_publish_failure_is_persisted_and_retried_after_restart(manager,
     assert 'error' not in persisted['publications'][failed['publication_id']]
 
 
+@pytest.mark.parametrize('different_operation', [False, True])
+def test_legacy_publication_retry_after_storage_failure(manager, monkeypatch, different_operation):
+    from uav_downloader.daemon import subtitle_tasks
+    from uav_downloader.subtitles import results
+
+    video_id = 'video-1'
+    publication_id = 'subtitle_pub_' + 'a' * 32
+    result = SimpleNamespace(result_id='old-result', video_id=video_id, stage='asr', language='ja')
+    record = {
+        'publication_id': publication_id, 'video_id': video_id, 'result_id': result.result_id,
+        'language': 'ja', 'purpose': 'selected', 'restore_status': 'not_requested',
+        'publish_status': 'failed', 'created_at': 100, 'updated_at': 100,
+    }
+    state, sources = manager._state_path, manager._source_manager
+    state.write_text(json.dumps({'schema': 1, 'tasks': [], 'publications': {publication_id: record}}))
+    monkeypatch.setattr(results, 'get', lambda *_: result)
+    writes = []
+    offline = True
+
+    def publish(_video, value, _language, **_options):
+        writes.append(value.result_id)
+        if offline:
+            raise OSError('storage offline')
+        return {'path': 'movie.ja.srt'}
+
+    monkeypatch.setattr(sources, 'publish_result', publish)
+    manager = subtitle_tasks.SubtitleTaskManager(state, source_manager=sources)
+    assert manager.retry_restored_publish(publication_id)['publish_status'] == 'failed'
+    if different_operation:
+        monkeypatch.setattr(subtitle_tasks, 'time', SimpleNamespace(time=lambda: 50))
+        newer = manager.publish_result(video_id, result.result_id, 'ja', replace_existing=True)
+        assert newer['publish_status'] == 'failed'
+    manager = subtitle_tasks.SubtitleTaskManager(state, source_manager=sources)
+    offline = False
+    if different_operation:
+        with pytest.raises(ValueError, match='較新的字幕'):
+            manager.retry_restored_publish(publication_id)
+    else:
+        assert manager.retry_restored_publish(publication_id)['publish_status'] == 'published'
+    assert writes == [result.result_id, result.result_id]
+
+
 @pytest.mark.parametrize('stage', ['vad', 'asr'])
 def test_restore_previous_selects_without_implicit_srt_publication(manager, monkeypatch, stage):
     from uav_downloader.subtitles import engine, results
