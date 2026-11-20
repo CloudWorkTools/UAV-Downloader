@@ -1,0 +1,25 @@
+{
+  "feature": "queue.enqueue",
+  "fingerprint": "01fe6d61573bcfe723b5cad3104c7cf48735c17be94c54be70e0f9d86f6b85e3",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "共用契約這次僅修改影片庫字幕發布一節。既有流程圖與對映沿用前輪核對，與基準一致。"
+  ],
+  "newly_read_paths": [
+    "docs/flow-manifest.json",
+    "docs/flows/contracts.md"
+  ],
+  "reused_evidence": [
+    "前輪 c6017e1 對 queue.enqueue 的流程圖和實際程式路徑核對。",
+    "c579d63 複查共用契約與既有流程對映；本輪差異只涉及字幕發布版本與專屬測試。"
+  ],
+  "additional_reads": [],
+  "limitations": [
+    "以共用文件差異與既有審查證據複查，未重跑下載流程測試。"
+  ],
+  "token_usage": "unavailable",
+  "reviewer": "Codex 獨立審查代理 candidate_review",
+  "base": "e978cf064f929931306fd709b0a8ad73811fe969",
+  "candidate": "d9aa8d81a858c1f277b50845228647a7b10937a3"
+}

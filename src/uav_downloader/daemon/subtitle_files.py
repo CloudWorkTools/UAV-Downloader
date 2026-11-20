@@ -1,11 +1,12 @@
 """Trusted video sources and atomic SRT publication for subtitle tasks."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 import hashlib
 from html import escape
 import json
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -129,7 +130,7 @@ class SubtitleFileManager:
                 os.unlink(temporary)
 
     def publication_lock_key(self, video_id):
-        """Return one lock identity for source IDs that publish to the same file."""
+        """Share one lock for the subtitle stem and its provenance file."""
         with self._lock:
             descriptor = self._sources.get(video_id)
             if not isinstance(descriptor, dict):
@@ -138,10 +139,13 @@ class SubtitleFileManager:
                         else descriptor.get('remote_relative_path')
                         if descriptor.get('output_mode') == 'upload' else None)
             nas_identity = descriptor.get('nas_identity')
-            if relative and isinstance(nas_identity, list):
-                return ('nas-publication', tuple(nas_identity), relative)
+            if relative and isinstance(nas_identity, list) and len(nas_identity) == len(_NAS_IDENTITY_FIELDS):
+                _, host, share, directory, *_ = nas_identity
+                stem = ntpath.normpath(ntpath.join(directory, os.path.splitext(relative)[0]))
+                return ('nas-publication', host.casefold(), share.casefold(), stem)
             if descriptor.get('kind') == 'local' and isinstance(descriptor.get('path'), str):
-                return ('local-publication', os.path.normcase(os.path.abspath(descriptor['path'])))
+                path = os.path.normcase(os.path.abspath(descriptor['path']))
+                return ('local-publication', os.path.splitext(path)[0])
             return video_id
 
     @staticmethod
@@ -398,7 +402,8 @@ class SubtitleFileManager:
                 target.flush()
             return folder, path
         except BaseException:
-            filesystem.rmtree(folder, ignore_errors=True)
+            with suppress(OSError):
+                filesystem.rmtree(folder, ignore_errors=True)
             raise
 
     @staticmethod
@@ -449,8 +454,8 @@ class SubtitleFileManager:
         manifest = engine._load_subtitle_provenance(manifest_path)
         old_manifest = json.loads(json.dumps(manifest))
         old_entry = manifest['tracks'].get(language)
-        exists = filesystem.exists(target)
         linked = filesystem.islink(target)
+        exists = linked or filesystem.exists(target)
         if linked and replace_existing:
             raise ValueError('字幕目標不可使用符號連結')
         old_hash = self._file_hash(target) if exists and not linked else ''
@@ -466,7 +471,7 @@ class SubtitleFileManager:
         if exists and not replace_target:
             target = stem + f'.{language}.uav-{suffix}.srt'
             counter = 2
-            while filesystem.exists(target):
+            while filesystem.islink(target) or filesystem.exists(target):
                 if not filesystem.islink(target) and self._file_hash(target) == expected_hash:
                     return target
                 target = stem + f'.{language}.uav-{suffix}-{counter}.srt'
@@ -488,7 +493,7 @@ class SubtitleFileManager:
             folder, temporary = self._temporary(filesystem, os.path.dirname(target), data)
             if self._media_identity(source_path) != identity:
                 raise ValueError('字幕來源影片已變更，請重新選取')
-            if replace_target and exists and self._file_hash(canonical) != old_hash:
+            if replace_target and (filesystem.islink(canonical) or self._file_hash(canonical) != old_hash):
                 raise FileExistsError('字幕檔在發布期間已變更')
             if replace_target:
                 filesystem.replace(temporary, target)
@@ -503,8 +508,9 @@ class SubtitleFileManager:
                     pass
             raise
         finally:
-            if folder and filesystem.exists(folder):
-                filesystem.rmtree(folder, ignore_errors=True)
+            if folder:
+                with suppress(OSError):
+                    filesystem.rmtree(folder, ignore_errors=True)
 
     def _configured_roots(self):
         prefs = config._load_prefs()

@@ -521,3 +521,230 @@ def test_all_outside_audio_does_not_masquerade_as_no_speech(tmp_path, monkeypatc
     with pytest.raises(engine.SubtitleError, match='尾段重試後仍無有效時間戳'):
         asr.transcribe(settings,str(wav),str(tmp_path/'out'),str(tmp_path/'log'),None,None)
     assert not (tmp_path/'out.srt').exists()
+
+
+def word_payload(*segments):
+    return {'segments': list(segments), 'words': [
+        {'start': cue['start'], 'end': cue['end'], 'word': cue['text']} for cue in segments
+    ]}
+
+
+@pytest.fixture
+def managed_worker(tmp_path, monkeypatch):
+    responses, requests = [], []
+    settings = dict(base_url=asr.DEFAULT_URL, model=asr.DEFAULT_MODEL, api_key='private-test-key')
+
+    def run(command, *args, **kwargs):
+        request, wav, response = map(Path, command[-3:])
+        with wave.open(str(wav), 'rb') as clip:
+            requests.append((json.loads(request.read_text()), clip.getnframes() / clip.getframerate()))
+        payload = responses.pop(0)
+        if isinstance(payload, Exception):
+            raise payload
+        response.write_text(json.dumps({'ok': True, 'payload': payload}), encoding='utf-8')
+
+    def transcribe(seconds, **kwargs):
+        wav = tmp_path / 'library.wav'
+        audio(wav, seconds)
+        return asr.transcribe_library(settings, str(wav), str(tmp_path / 'library'),
+                                      str(tmp_path / 'log'), **kwargs)
+
+    monkeypatch.setattr(engine, '_run_process', run)
+    return transcribe, responses, requests
+
+
+def test_managed_library_http_keeps_words_on_their_side_of_silence(tmp_path, monkeypatch, api_server):
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'DEFAULT_URL', settings['base_url'])
+    responses.extend([
+        (200, [dict(start=1840, end=3120), dict(start=115536, end=117392)]),
+        (200, word_payload(segment(1.84, 2.32, 'はい'))),
+        (200, {
+            'segments': [segment(0, 5.85, '別の言葉')],
+            'words': [{'start': 1.86, 'end': 3.54, 'word': '別の言葉'}],
+        }),
+    ])
+    wav = tmp_path / 'library.wav'
+    audio(wav, 120)
+    path = asr.transcribe_library(settings, str(wav), str(tmp_path / 'out'), str(tmp_path / 'log'))
+    assert [(cue.timing, cue.text) for cue in engine.parse_srt(Path(path).read_text())] == [
+        ('00:00:01,840 --> 00:00:02,320', 'はい'),
+        ('00:01:55,396 --> 00:01:57,076', '別の言葉'),
+    ]
+    assert [path for path, _, _ in requests] == [
+        '/v1/audio/speech/timestamps', '/v1/audio/transcriptions', '/v1/audio/transcriptions']
+    assert all(auth == 'Bearer test-token' for _, auth, _ in requests)
+    assert all(value in requests[0][2] for value in (
+        b'threshold', b'0.5', b'min_silence_duration_ms', b'2000', b'speech_pad_ms', b'400'))
+    assert all(b'timestamp_granularities[]' in body and b'word' in body
+               and b'vad_filter' in body and b'true' in body
+               and len(body) < 32000 * 6 for _, _, body in requests[1:])
+    assert not asr._folder().joinpath('asr-cache').exists()
+
+
+@pytest.mark.parametrize('left,right', [
+    ((119.6, 120.2), (119.8, 120.4)),
+    ((119.8, 120.4), (119.6, 120.2)),
+])
+def test_managed_library_joins_opposite_seam_estimates(managed_worker, left, right, monkeypatch):
+    from uav_downloader.subtitles import asr_library
+
+    transcribe, responses, requests = managed_worker
+    monkeypatch.setattr(asr_library, '_VAD_WINDOW_SECONDS', 130)
+    responses.extend([
+        [dict(start=0, end=123000)],
+        word_payload(segment(*left, '境界')),
+        word_payload(segment(right[0] - 118, right[1] - 118, '境界')),
+    ])
+    path = transcribe(123)
+    assert [cue.text for cue in engine.parse_srt(Path(path).read_text())] == ['境界']
+    assert [duration for _, duration in requests] == [123, 122, 5]
+    assert not responses
+
+
+@pytest.mark.parametrize('conflicting', [
+    word_payload(segment(1.8, 2.4, '不同句子')),
+    word_payload(segment(1.8, 2.05, '境界'), segment(2.1, 2.45, '不同句子')),
+])
+def test_managed_library_conflicting_seam_preserves_existing_file(
+        managed_worker, tmp_path, monkeypatch, conflicting):
+    from uav_downloader.subtitles import asr_library
+
+    transcribe, responses, requests = managed_worker
+    monkeypatch.setattr(asr_library, '_VAD_WINDOW_SECONDS', 130)
+    old = tmp_path / 'library.srt'
+    old.write_text('原字幕', encoding='utf-8')
+    responses.extend([
+        [dict(start=0, end=123000)], word_payload(segment(119.6, 120.2, '境界')),
+        conflicting, conflicting,
+    ])
+    with pytest.raises(asr.LibraryQualityError, match='原片第 120.000 至 123.000 秒無法確認字幕'):
+        transcribe(123)
+    assert old.read_text(encoding='utf-8') == '原字幕'
+    assert len(requests) == 4 and not responses
+
+
+def test_managed_library_retries_seam_when_close_estimates_do_not_overlap(managed_worker, monkeypatch):
+    from uav_downloader.subtitles import asr_library
+
+    transcribe, responses, requests = managed_worker
+    monkeypatch.setattr(asr_library, '_VAD_WINDOW_SECONDS', 130)
+    responses.extend([
+        [dict(start=0, end=123000)],
+        word_payload(segment(119.8, 119.95, 'はい')),
+        word_payload(segment(2.08, 2.25, 'はい')),
+        word_payload(segment(1.85, 2.05, 'はい')),
+    ])
+    path = transcribe(123)
+    assert [cue.text for cue in engine.parse_srt(Path(path).read_text())] == ['はい']
+    assert len(requests) == 4 and not responses
+
+
+def test_managed_library_keeps_two_occurrences_observed_at_seam(managed_worker, monkeypatch):
+    from uav_downloader.subtitles import asr_library
+
+    transcribe, responses, requests = managed_worker
+    monkeypatch.setattr(asr_library, '_VAD_WINDOW_SECONDS', 130)
+    responses.extend([
+        [dict(start=0, end=123000)],
+        word_payload(segment(119.8, 119.95, 'はい'), segment(120.08, 120.24, 'はい')),
+        word_payload(segment(2.09, 2.25, 'はい')),
+    ])
+    path = transcribe(123)
+    assert [cue.text for cue in engine.parse_srt(Path(path).read_text())] == ['はい', 'はい']
+    assert len(requests) == 3 and not responses
+
+
+@pytest.mark.parametrize('invalid', [
+    word_payload(segment(.2, .8, 'もう一度' * 120)),
+    word_payload(segment(.2, .8, 'はい。'), segment(.2, .8, 'はい！')),
+    word_payload(*(segment(.1 + i * .2, .25 + i * .2, ['言葉', 'はい'][i % 2]) for i in range(6))),
+    word_payload(*(segment(.1 + i * .2, .25 + i * .2, 'あ') for i in range(9))),
+    {'segments': [segment(.2, .8, '全文')], 'words': [{'start': .2, 'end': .8, 'word': '全'}]},
+    {'segments': [segment(.2, .8, '全文')], 'words': [{'start': float('nan'), 'end': .8, 'word': '全文'}]},
+    {'segments': [segment(.2, .8, '全文')]},
+    {'segments': [segment(.2, 3.4, '全文')], 'words': [
+        {'start': .2, 'end': .8, 'word': '全'}, {'start': 3, 'end': 3.4, 'word': '文'},
+    ]},
+])
+def test_managed_library_retries_suspect_result_without_accepting_empty(managed_worker, tmp_path, invalid):
+    transcribe, responses, requests = managed_worker
+    responses.extend([[dict(start=100, end=2000)], invalid, word_payload()])
+    progress = []
+    with pytest.raises(asr.LibraryQualityError, match='^原片第 0.100 至 2.000 秒無法確認字幕$'):
+        transcribe(4, progress_callback=lambda *args: progress.append(args))
+    assert not (tmp_path / 'library.srt').exists()
+    assert progress == [('asr_tail_retry', None)]
+    assert len(requests) == 3 and not responses
+    assert requests[-1][0]['_parameters']['temperature'] == '0.2'
+
+
+def test_managed_library_accepts_natural_repetition_after_retry(managed_worker):
+    transcribe, responses, requests = managed_worker
+    responses.extend([[dict(start=100, end=1600)], word_payload(), word_payload(
+        segment(.1, .5, 'はい。'), segment(.55, .95, 'はい！'), segment(1, 1.5, 'はい。'),
+    )])
+    path = transcribe(4)
+    assert [cue.text for cue in engine.parse_srt(Path(path).read_text())] == ['はい。', 'はい！', 'はい。']
+    assert len(requests) == 3 and not responses
+
+
+def test_managed_library_retries_cycle_across_speech_regions(managed_worker):
+    transcribe, responses, requests = managed_worker
+    responses.extend([
+        [dict(start=100, end=1500), dict(start=3500, end=4800)],
+        word_payload(segment(.1, .4, 'まず'), segment(.6, 1, '次に'), segment(1.1, 1.4, 'まず')),
+        word_payload(segment(1, 1.3, '次に'), segment(1.4, 1.7, 'まず'), segment(1.8, 2.2, '次に')),
+        word_payload(segment(1, 1.3, '別の話')),
+    ])
+    path = transcribe(7)
+    assert [cue.text for cue in engine.parse_srt(Path(path).read_text())] == ['まず', '次に', 'まず', '別の話']
+    assert [duration for _, duration in requests] == pytest.approx([7, 2.5, 4.3, 4.3])
+
+
+def test_managed_library_merges_speech_seen_in_overlapping_vad_windows(managed_worker):
+    transcribe, responses, requests = managed_worker
+    responses.extend([
+        [dict(start=119000, end=122000)],
+        [dict(start=1000, end=5500)],
+        word_payload(segment(2, 3.5, 'ひとつの話')),
+    ])
+    path = transcribe(126)
+    assert engine.parse_srt(Path(path).read_text())[0].timing == '00:01:59,000 --> 00:02:00,500'
+    assert [duration for _, duration in requests] == [122, 8, 8.5]
+
+
+def test_managed_library_redacts_service_error_and_keeps_its_type(managed_worker, tmp_path):
+    transcribe, responses, requests = managed_worker
+    responses.extend([[dict(start=100, end=1500)], OSError('private data'), OSError('private data')])
+    with pytest.raises(engine.SubtitleError, match='^原片第 0.100 至 1.500 秒辨識服務失敗$') as failed:
+        transcribe(4)
+    assert type(failed.value) is engine.SubtitleError
+    assert not (tmp_path / 'library.srt').exists()
+    assert len(requests) == 3 and not responses
+
+
+def test_managed_library_keeps_silent_vad_as_no_speech(managed_worker, tmp_path):
+    transcribe, responses, requests = managed_worker
+    responses.append([])
+    assert transcribe(4) is None
+    assert len(requests) == 1
+    assert not (tmp_path / 'library.srt').exists()
+
+
+def test_managed_library_cancellation_skips_publication(managed_worker, tmp_path):
+    transcribe, responses, requests = managed_worker
+    responses.extend([[dict(start=100, end=1500)], word_payload(segment(.2, 1.3, 'ことば'))])
+    with pytest.raises(engine.SubtitleCancelled):
+        transcribe(4, cancel_check=lambda: len(requests) == 2)
+    assert not (tmp_path / 'library.srt').exists()
+
+
+def test_library_leaves_compatible_api_on_legacy_path(tmp_path, api_server):
+    settings, responses, requests, _ = api_server
+    responses.append((200, {'segments': [segment(.2, .8, '旧応答')]}))
+    wav = tmp_path / 'library.wav'
+    audio(wav, 2)
+    path = asr.transcribe_library(settings, str(wav), str(tmp_path / 'out'), str(tmp_path / 'log'))
+    assert [cue.text for cue in engine.parse_srt(Path(path).read_text())] == ['旧応答']
+    assert [path for path, _, _ in requests] == ['/v1/audio/transcriptions']

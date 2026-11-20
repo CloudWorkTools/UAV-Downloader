@@ -907,3 +907,42 @@ def test_model_catalog_keeps_existing_api_version(provider, base_url, monkeypatc
                                     ('translation',), base_url, 'model', '{}')
     assert api._discover_models(profile, api_key='test-key')['available'] is True
     assert seen == [base_url + '/models']
+
+
+def test_library_translation_force_asr_is_a_persisted_boolean(subtitle_http, monkeypatch):
+    from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+
+    request, server, _ = subtitle_http
+    manager = server.subtitle_task_manager
+    video_id = 'source-v1:force-asr-fixture'
+    registered = []
+    monkeypatch.setattr(server.subtitle_file_manager, 'register_history', registered.append)
+    monkeypatch.setattr(manager, 'start_dispatcher', lambda: None)
+    path = '/api/subtitles/tasks'
+    body = {'video_id': video_id, 'library_translation': True}
+
+    for value in ('true', 1, None):
+        status, _ = request(path, 'POST', dict(body, force_asr=value))
+        assert status == 400
+    assert not registered
+
+    def submit(**options):
+        status, response = request(path, 'POST', dict(body, **options))
+        assert status == 202
+        return response['task']
+
+    ordinary = submit()
+    forced = submit(force_asr=True)
+    assert ordinary['force_asr'] is False
+    assert forced['force_asr'] is True
+    assert ordinary['task_id'] != forced['task_id']
+    assert submit(force_asr=False)['task_id'] == ordinary['task_id']
+    assert submit(force_asr=True)['task_id'] == forced['task_id']
+
+    saved = json.loads(manager._state_path.read_text())
+    next(task for task in saved['tasks'] if task['task_id'] == ordinary['task_id']).pop('force_asr')
+    manager._state_path.write_text(json.dumps(saved), encoding='utf-8')
+    restarted = SubtitleTaskManager(manager._state_path, source_manager=server.subtitle_file_manager)
+    assert restarted.get_task(forced['task_id'])['force_asr'] is True
+    assert restarted.submit_library_translation(video_id, force_asr=True)['task_id'] == forced['task_id']
+    assert restarted.submit_library_translation(video_id)['task_id'] == ordinary['task_id']

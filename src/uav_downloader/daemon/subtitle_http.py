@@ -345,13 +345,16 @@ def prepare_download_request(spec):
 
 def _submission(body, files, manager):
     if 'library_translation' in body:
-        _keys(body, {'video_id', 'library_translation', 'trial_seconds'})
+        _keys(body, {'video_id', 'library_translation', 'trial_seconds', 'force_asr'})
         if body['library_translation'] is not True:
             raise ApiError(400, '影片庫翻譯選項格式無效')
+        force_asr = body.get('force_asr', False)
+        if not isinstance(force_asr, bool):
+            raise ApiError(400, '強制語音辨識選項格式無效')
         video_id = _id(body.get('video_id'), label='字幕影片識別碼格式無效')
         try:
             files.register_history(video_id)
-            return manager.submit_library_translation(video_id, body.get('trial_seconds'))
+            return manager.submit_library_translation(video_id, body.get('trial_seconds'), force_asr=force_asr)
         except ValueError as exc:
             raise ApiError(400, str(exc)[:240]) from None
         except OSError:
@@ -397,7 +400,7 @@ def _submission(body, files, manager):
 
 def _task_view(task):
     value = {key: value for key, value in task.items()
-             if key not in ('request_key', 'audio_path', 'video_path')}
+             if key not in ('request_key', 'audio_path', 'video_path', '_publish_retry_heads')}
     if isinstance(value.get('profile_snapshots'), dict):
         value['profile_snapshots'] = {
             key: _snapshot_summary(item) for key, item in value['profile_snapshots'].items()}
