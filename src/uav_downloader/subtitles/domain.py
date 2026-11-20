@@ -1237,6 +1237,25 @@ def normalize_nonlexical(text: object, target_language: object) -> Optional[str]
     return translation[target_index] if translation is not None else None
 
 
+def is_sound_only_cue(text: str) -> bool:
+    """Match whole sound cues while keeping repeated words and mixed dialogue."""
+    normalized = normalize_cue(text)
+    bracketed = '[' + normalized[1:-1] + ']' if normalized.startswith('(') and normalized.endswith(')') else normalized
+    if normalized in _NONLEXICAL_MEMORY or bracketed in _NONLEXICAL_MEMORY:
+        return True
+    if re.fullmatch(r'\[(?:bgm|music|background music|音楽|音樂|背景音樂|breathing|panting|moaning|groaning|laughter|laughing|laughs|scream)\]',
+                    bracketed.casefold()):
+        return True
+    compact = re.sub(r'[\s,.!?…、。！？~〜～ー・♡♥]+', '', normalized)
+    # Fold katakana after removing elongation marks so full/half-width variants match.
+    compact = ''.join(chr(ord(char)-0x60) if 'ァ' <= char <= 'ヶ' else char
+                      for char in compact)
+    return bool(re.fullmatch(
+        r'(?:(?:[あぁ]っ?){2,}|(?:[うぅ]っ?){2,}|(?:[おぉ]っ?){2,}|(?:んっ?){2,}|'
+        r'(?:は[あぁ]+|ふ[うぅ]+|きゃっ?){2,}|きゃ[あぁ]+っ?|(?:わん|にゃん?){2,}|'
+        r'(?:啊{2,}|嗯{2,}|呃{2,}|哈{2,}))', compact))
+
+
 def exact_translation(
     text: object,
     source_language: object,

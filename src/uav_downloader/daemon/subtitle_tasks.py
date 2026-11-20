@@ -610,6 +610,7 @@ class SubtitleTaskManager:
 
     def _run_library_translation(self, task, generation):
         from uav_downloader.daemon.subtitle_files import read_video_subtitle, subtitle_cue_text
+        from uav_downloader.subtitles.domain import is_sound_only_cue
 
         task_id, video_id = task['task_id'], task['video_id']
         limit = task['trial_seconds']
@@ -665,21 +666,22 @@ class SubtitleTaskManager:
                     path, duration = self._library_asr(source.video_path, work, limit, progress, cancel)
                     original_text = engine._read_srt_text(path) if path else ''
                 cues = self._library_cues(original_text, limit)
-                if not cues:
-                    raise LibraryTranslationError('處理範圍中沒有可翻譯的日文字幕')
+                dialogue = [cue for cue in cues if not is_sound_only_cue(cue[2])]
+                if not dialogue:
+                    raise LibraryTranslationError('處理範圍中沒有需要翻譯的對白')
                 translated = []
                 processed = 0
                 progress('translate_zh', 0, processed=0, duration=duration,
-                         count=0, total=len(cues))
+                         count=0, total=len(dialogue))
                 with engine._translation_profile_scope(None):
-                    for offset in range(0, len(cues), 96):
-                        batch = cues[offset:offset + 96]
+                    for offset in range(0, len(dialogue), 96):
+                        batch = dialogue[offset:offset + 96]
                         def report_translation(phase, percent):
                             if phase == 'translation_model':
                                 progress(phase, percent)
                             elif percent is not None:
                                 progress('translate_zh',
-                                         (offset * 100 + len(batch) * percent) // len(cues))
+                                         (offset * 100 + len(batch) * percent) // len(dialogue))
 
                         texts = engine.translate_cues(
                             [cue[2] for cue in batch], 'ja', 'zh-TW', 'translate_zh',
@@ -690,8 +692,8 @@ class SubtitleTaskManager:
                                           if (clean := subtitle_cue_text(text)))
                         processed = max(processed, max(cue[1] for cue in batch) / 1000)
                         finished = offset + len(batch)
-                        progress('translate_zh', finished * 100 // len(cues),
-                                 processed=processed, count=finished, total=len(cues))
+                        progress('translate_zh', finished * 100 // len(dialogue),
+                                 processed=processed, count=finished, total=len(dialogue))
                 if not translated:
                     raise LibraryTranslationError('翻譯模型未產生可顯示的繁中字幕')
             verify(video_id, source)

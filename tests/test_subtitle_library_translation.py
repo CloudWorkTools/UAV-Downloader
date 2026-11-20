@@ -11,7 +11,8 @@ def test_trial_clips_cues_and_full_uses_safe_publication(tmp_path, monkeypatch):
     original = tmp_path / 'movie.ja.srt'
     original.write_text(
         '1\n00:01:59,000 --> 00:02:01,000\n一つ\n\n'
-        '2\n00:02:00,000 --> 00:02:03,000\n二つ\n', encoding='utf-8')
+        '2\n00:02:00,000 --> 00:02:03,000\n二つ\n\n'
+        '3\n00:02:04,000 --> 00:02:05,000\nああああ\n', encoding='utf-8')
     old_translation = tmp_path / 'movie.zh-TW.srt'
     old_translation.write_text('手動字幕', encoding='utf-8')
     files = SubtitleFileManager(tmp_path / 'files.json')
@@ -22,6 +23,7 @@ def test_trial_clips_cues_and_full_uses_safe_publication(tmp_path, monkeypatch):
     def translate(texts, source, target, stage, callback, _cancel):
         assert (source, target) == ('ja', 'zh-TW')
         assert engine._translation_provider_state.profile is None
+        assert 'ああああ' not in texts
         callback(stage, 50)
         return ['繁中字幕\n\n下一行', '  '][:len(texts)]
 
@@ -47,6 +49,7 @@ def test_trial_clips_cues_and_full_uses_safe_publication(tmp_path, monkeypatch):
         assert [cue.timing for cue in engine.parse_srt(exported.read_text())] == [
             '00:01:59,000 --> 00:02:01,000']
         assert engine.parse_srt(exported.read_text())[0].text == '繁中字幕\n下一行'
+        assert engine.parse_srt(manager.library_track(full['task_id'], 'ja'))[-1].text == 'ああああ'
         assert old_translation.read_text() == '手動字幕'
 
 

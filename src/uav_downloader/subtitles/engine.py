@@ -4173,6 +4173,29 @@ def translate_cues(
         cancel_check: Optional[CancelCheck] = None) -> list[str]:
     """Translate independent subtitle cues without changing cue boundaries."""
     _check_cancel(cancel_check)
+    from uav_downloader.subtitles.domain import is_sound_only_cue
+
+    if source_language == 'ja':
+        dialogue = [index for index, text in enumerate(texts) if not is_sound_only_cue(text)]
+        if len(dialogue) != len(texts):
+            output = [''] * len(texts)
+            if dialogue:
+                translations = _translate_dialogue_cues(
+                    [texts[index] for index in dialogue], source_language, target_language,
+                    progress_stage, progress_callback, cancel_check)
+                if len(translations) != len(dialogue):
+                    raise SubtitleError('Local translation model returned the wrong cue count')
+                for index, translated in zip(dialogue, translations):
+                    output[index] = translated
+            else:
+                _notify(progress_callback, progress_stage, 100)
+            return output
+    return _translate_dialogue_cues(texts, source_language, target_language,
+                                  progress_stage, progress_callback, cancel_check)
+
+
+def _translate_dialogue_cues(texts, source_language, target_language,
+                             progress_stage, progress_callback, cancel_check):
     source_language = str(source_language)
     target_language = str(target_language)
     profile = getattr(_translation_provider_state, 'profile', None)
@@ -4255,7 +4278,7 @@ def translate_srt(
             'Local translation model returned the wrong cue count')
     translated_cues = [
         SrtCue(cue.index, cue.timing, translated_texts[index])
-        for index, cue in enumerate(cues)
+        for index, cue in enumerate(cues) if translated_texts[index].strip()
     ]
     _atomic_write_text(destination_path, render_srt(translated_cues))
     return destination_path
@@ -5603,6 +5626,10 @@ def run_stage(video_id: str, audio_path: Optional[str], stage: str, profile_snap
         segments = source.segments
         if segments is None:
             raise SubtitleError('字幕上游片段格式無效')
+        if stage == 'translation':
+            from uav_downloader.subtitles.domain import is_sound_only_cue
+
+            segments = tuple(segment for segment in segments if not is_sound_only_cue(segment.text))
         operation = stage
         batches = llm.plan_transform_batches(segments, profile_snapshot)
         output_segments_list = run_checkpointed(
