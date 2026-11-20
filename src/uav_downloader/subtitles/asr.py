@@ -31,7 +31,7 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _LOCK = threading.RLock()
 
 
-class LibraryQualityError(SubtitleError):
+class RecognitionQualityError(SubtitleError):
     """A safe-to-display failure to validate a specific span of source audio."""
 
     def __init__(self, start_seconds, end_seconds):
@@ -323,6 +323,11 @@ def _recognize(source, start, stop, settings, folder, request_path, log_path,
 
 
 def transcribe(settings, wav_path, output_base, log_path, cancel_check=None, progress_callback=None):
+    if settings['base_url'] == DEFAULT_URL:
+        from uav_downloader.subtitles.asr_library import transcribe_managed
+
+        return transcribe_managed(settings, wav_path, output_base, log_path, cancel_check, progress_callback)
+
     from uav_downloader.subtitles import engine
 
     cache = _folder() / 'asr-cache'
@@ -362,15 +367,6 @@ def transcribe(settings, wav_path, output_base, log_path, cancel_check=None, pro
                 engine._notify(progress_callback, 'transcribe_ja', min(100, int((position + step) * 100 / frames)))
     _prune_cache(cache)
     return _write_transcription(output_base, cues)
-
-
-def transcribe_library(settings, wav_path, output_base, log_path, cancel_check=None, progress_callback=None):
-    """Require VAD and word alignment before emitting managed library subtitles."""
-    if settings['base_url'] != DEFAULT_URL:
-        return transcribe(settings, wav_path, output_base, log_path, cancel_check, progress_callback)
-    from uav_downloader.subtitles.asr_library import transcribe_managed
-
-    return transcribe_managed(settings, wav_path, output_base, log_path, cancel_check, progress_callback)
 
 
 def _write_transcription(output_base, cues):

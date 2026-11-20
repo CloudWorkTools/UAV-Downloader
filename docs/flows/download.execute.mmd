@@ -1,6 +1,7 @@
 flowchart TD
 START["影片下載任務保留工作名額；字幕專用任務不在本圖"]
 ATTEMPT["連接目的地，沿用任務暫存及檔案歸屬，擷取並下載影片"]
+SUBTITLE["受管語音辨識先驗證時間與重複；失敗保留影片並顯示字幕錯誤"]
 RESULT{"下載嘗試結果"}
 WAIT["記錄重試進度，等待後再試；最多重試五次"]
 STOP{"等待期間被取消或暫停？"}
@@ -21,7 +22,9 @@ PAUSECHECK{"連線釋放失敗？"}
 PAUSED["任務已暫停"]
 RELEASEFAIL["本次嘗試清理或釋放失敗；停止自動重試，清理可能已移除部分歸屬檔案"]
 START --> ATTEMPT
-ATTEMPT --> RESULT
+ATTEMPT -->|需要內建語音辨識| SUBTITLE
+ATTEMPT -->|其他結果| RESULT
+SUBTITLE --> RESULT
 RESULT -->|成功| PUBLISH
 RESULT -->|失敗且仍可重試| WAIT
 RESULT -->|重試耗盡| FINISHFAIL

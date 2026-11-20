@@ -95,9 +95,11 @@ API 無法連線、模型下載或翻譯失敗時，任務保留 MP4 並顯示�
 
 字幕版本頁顯示各階段最新與上一版本、設定快照、上游版本、採用與過期狀態。矯正及翻譯預覽會並列上游內容和目前文字；已清理的內容不可再作為重做輸入。文字結果可以下載 SRT；VAD 結果可檢視、下載區間 JSON 與恢復，但不會提供 SRT 發布操作。恢復上一版本不會呼叫模型，只有填入輸出語言才會嘗試發布；遇到同名字幕時，必須另行確認是否替換。儲存失敗時，可只重試字幕保存，不重送模型請求。
 
-影片庫使用受管 Speaches 重新辨識時，會檢查字幕時間與異常重複。重試後仍無法確認時，字幕佇列會顯示原片時間，並保留已發布字幕。若同一字幕目的地已有較新的發布操作，舊任務的「只重試儲存」會被拒絕。
+影片庫與下載後自動字幕使用受管 Speaches 辨識時，會檢查字幕時間與異常重複。重試後仍無法確認時，任務會顯示原片時間。影片庫既有的發布字幕會保留。若同一字幕目的地已有較新的發布操作，舊任務的「只重試儲存」會被拒絕。
 
 ![桌面版字幕佇列顯示辨識無法確認的原片範圍，使用合成資料](assets/web-subtitle-quality-failure-desktop.png)
+
+[下載佇列桌面版](assets/web-download-subtitle-quality-desktop.png)與[手機版](assets/web-download-subtitle-quality-mobile.png)會在完成的影片旁顯示字幕錯誤。
 
 [手機版字幕失敗狀態](assets/web-subtitle-quality-failure-mobile.png) · [拒絕舊版儲存的桌面](assets/web-subtitle-stale-retry-desktop.png)與[手機畫面](assets/web-subtitle-stale-retry-mobile.png)
 

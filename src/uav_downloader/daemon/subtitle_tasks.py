@@ -670,15 +670,13 @@ class SubtitleTaskManager:
                 settings = {'base_url': asr.DEFAULT_URL, 'model': asr.DEFAULT_MODEL}
             service = 'speaches' if urlsplit(settings['base_url']).hostname == 'uav-speaches' else 'loopback'
             progress('transcribe_ja', None, asr_service=service)
-            managed = settings['base_url'] == asr.DEFAULT_URL
-            if force_asr and not managed:
+            if force_asr and settings['base_url'] != asr.DEFAULT_URL:
                 raise LibraryTranslationError('強制語音辨識需要受管 Speaches 服務')
-            transcribe = asr.transcribe_library if managed else asr.transcribe
             try:
-                path = transcribe(settings, wav, output, log, cancel, progress)
+                path = asr.transcribe(settings, wav, output, log, cancel, progress)
             except (engine.SubtitleCancelled, engine.SubtitleStorageError):
                 raise
-            except asr.LibraryQualityError as exc:
+            except asr.RecognitionQualityError as exc:
                 raise LibraryTranslationError(str(exc)) from exc
             except (engine.SubtitleError, OSError, ValueError) as exc:
                 raise LibraryTranslationError('本機語音辨識失敗，請檢查 Speaches 或本機辨識服務及模型') from exc
