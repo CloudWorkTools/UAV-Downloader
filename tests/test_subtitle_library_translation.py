@@ -68,7 +68,7 @@ def test_linux_recognition_uses_local_sidecar_if_configured_endpoint_is_cloud(tm
         assert settings == {'base_url': asr.DEFAULT_URL, 'model': asr.DEFAULT_MODEL}
         return output + '.srt'
 
-    monkeypatch.setattr(asr, 'transcribe', transcribe)
+    monkeypatch.setattr(asr, 'transcribe_library', transcribe)
     steps = []
 
     def progress(phase, percent, **detail):

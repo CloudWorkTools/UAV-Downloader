@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -128,6 +129,7 @@ class SubtitleTaskManager:
         self._active = {}
         self._video_locks = {}
         self._publications = {}
+        self._publication_heads = {}
         self._max_concurrent = max(1, int(max_concurrent))
         if source_manager is None:
             from uav_downloader.daemon.subtitle_files import SubtitleFileManager
@@ -153,6 +155,10 @@ class SubtitleTaskManager:
         publications = records.get('publications', {})
         if isinstance(publications, dict):
             self._publications = publications
+        heads = records.get('publication_heads', {})
+        if not isinstance(heads, dict):
+            raise ValueError('字幕發布版本資料格式錯誤')
+        self._publication_heads = heads
         changed = False
         for publication in self._publications.values():
             if publication.get('publish_status') == 'publishing':
@@ -161,6 +167,8 @@ class SubtitleTaskManager:
                 publication['updated_at'] = time.time()
                 changed = True
         for task in self._tasks.values():
+            if task.get('library_translation'):
+                task.setdefault('force_asr', False)
             if task['status'] in ('queued', 'running', 'cancelling', 'retry_wait'):
                 task['status'] = 'waiting_for_resume'
                 task['generation'] += 1
@@ -172,7 +180,8 @@ class SubtitleTaskManager:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         data = json.dumps({'schema': 1, 'queue': self._queue,
                            'tasks': list(self._tasks.values()),
-                           'publications': self._publications}, ensure_ascii=False,
+                           'publications': self._publications,
+                           'publication_heads': self._publication_heads}, ensure_ascii=False,
                           sort_keys=True, separators=(',', ':'), allow_nan=False)
         fd, temporary = tempfile.mkstemp(prefix=self._state_path.name + '.', suffix='.tmp',
                                          dir=self._state_path.parent)
@@ -193,6 +202,65 @@ class SubtitleTaskManager:
         key = key_resolver(video_id) if key_resolver else video_id
         with self._lock:
             return self._video_locks.setdefault(key, threading.Lock())
+
+    def _publication_key(self, video_id, language):
+        identity = getattr(self._source_manager, 'publication_identity', None)
+        destination = json.dumps([identity(video_id) if identity else video_id, language], ensure_ascii=False)
+        return hashlib.sha256(destination.encode('utf-8')).hexdigest()
+
+    def _publish_locked(self, video_id, result, language, operation_id, **options):
+        """Persist a publication revision while the destination lock is held."""
+        key = self._publication_key(video_id, language)
+        persisted = False
+        try:
+            with self._lock:
+                previous = self._publication_heads.get(key)
+                # Record the revision before writing so a crash cannot enable an older retry.
+                self._publication_heads[key] = {
+                    'revision': uuid.uuid4().hex, 'operation': operation_id, 'time': time.time(),
+                }
+                self._save_locked()
+                persisted = True
+            return self._source_manager.publish_result(video_id, result, language, **options)
+        except Exception:
+            with self._lock:
+                if previous is None:
+                    self._publication_heads.pop(key)
+                else:
+                    self._publication_heads[key] = previous
+                if persisted:
+                    self._save_locked()
+            raise
+
+    def _remember_publish_head(self, record, language):
+        key = self._publication_key(record['video_id'], language)
+        head = self._publication_heads.get(key)
+        record.setdefault('_publish_retry_heads', {})[language] = [key, head['revision'] if head else None]
+
+    def _check_publish_retry(self, record, language):
+        key = self._publication_key(record['video_id'], language)
+        head = self._publication_heads.get(key)
+        operation_id = record.get('task_id') or record['publication_id']
+        baseline = record.get('_publish_retry_heads', {}).get(language)
+        if baseline is not None:
+            current = head['revision'] if head else None
+            stale = baseline != [key, current] and (not head or head['operation'] != operation_id)
+        else:
+            # Older records only have status and timestamps to identify a newer publication.
+            attempted_at = record['created_at'] if 'publication_id' in record else record['updated_at']
+
+            def newer(other, published):
+                return (published and other.get('updated_at', 0) > attempted_at
+                        and self._publication_key(other['video_id'], language) == key)
+
+            stale = ((head and head['time'] > attempted_at)
+                     or any(newer(other, other.get('publish_status', {}).get(language, {}).get('status') == 'published')
+                            for other in self._tasks.values())
+                     or any(newer(publication, publication['language'] == language
+                                  and publication['publish_status'] == 'published')
+                            for publication in self._publications.values()))
+        if stale:
+            raise ValueError('目的地已有較新的字幕，無法重試舊版發布')
 
     def _save(self):
         with self._lock:
@@ -215,7 +283,8 @@ class SubtitleTaskManager:
 
     def list_publications(self):
         with self._lock:
-            return [self._copy(publication) for publication in self._publications.values()]
+            return [self._copy({key: value for key, value in publication.items() if key != '_publish_retry_heads'})
+                    for publication in self._publications.values()]
 
     def get_publication(self, publication_id):
         with self._lock:
@@ -286,6 +355,7 @@ class SubtitleTaskManager:
             }
             if _library_request is not None:
                 task.update(library_translation=True, **_library_request)
+                task.setdefault('force_asr', False)
             self._tasks[task_id] = task
             self._queue.append(task_id)
             try:
@@ -297,12 +367,16 @@ class SubtitleTaskManager:
         self.start_dispatcher()
         return self._copy(task)
 
-    def submit_library_translation(self, video_id, trial_seconds=None):
+    def submit_library_translation(self, video_id, trial_seconds=None, *, force_asr=False):
         if trial_seconds is not None and (
                 type(trial_seconds) is not int or trial_seconds != LIBRARY_TRIAL_SECONDS):
             raise ValueError('試翻範圍必須為前 120 秒')
+        if not isinstance(force_asr, bool):
+            raise ValueError('強制語音辨識選項格式無效')
+        # Keep the fingerprint of requests already queued before force_asr was added.
         return self.submit(video_id, ['translation'], {}, ['zh-TW'],
-                           _library_request={'trial_seconds': trial_seconds})
+                           _library_request={'trial_seconds': trial_seconds,
+                                             **({'force_asr': True} if force_asr else {})})
 
     def redo(self, video_id, stage, profile_snapshot, language=None,
              input_result_id=None, *, audio_path=None, video_path=None,
@@ -566,7 +640,7 @@ class SubtitleTaskManager:
         return sorted(normalized, key=lambda cue: cue[:2])
 
     @staticmethod
-    def _library_asr(video_path, temp_dir, limit, progress, cancel):
+    def _library_asr(video_path, temp_dir, limit, progress, cancel, *, force_asr=False):
         wav = os.path.join(temp_dir, 'audio.wav')
         log = os.path.join(temp_dir, 'audio.log')
         output = os.path.join(temp_dir, 'japanese')
@@ -575,6 +649,8 @@ class SubtitleTaskManager:
         _, duration = engine._validate_pcm16_wav(wav)
         if sys.platform == 'win32':
             progress('model', None, asr_service='native')
+            if force_asr:
+                raise LibraryTranslationError('強制語音辨識需要受管 Speaches 服務')
             profile = engine.recognition_profile()
             with engine._recognition_profile_scope(profile):
                 runtime = engine._prepare_runtime(progress, cancel)
@@ -592,10 +668,16 @@ class SubtitleTaskManager:
                 settings = {'base_url': asr.DEFAULT_URL, 'model': asr.DEFAULT_MODEL}
             service = 'speaches' if urlsplit(settings['base_url']).hostname == 'uav-speaches' else 'loopback'
             progress('transcribe_ja', None, asr_service=service)
+            managed = settings['base_url'] == asr.DEFAULT_URL
+            if force_asr and not managed:
+                raise LibraryTranslationError('強制語音辨識需要受管 Speaches 服務')
+            transcribe = asr.transcribe_library if managed else asr.transcribe
             try:
-                path = asr.transcribe(settings, wav, output, log, cancel, progress)
+                path = transcribe(settings, wav, output, log, cancel, progress)
             except (engine.SubtitleCancelled, engine.SubtitleStorageError):
                 raise
+            except asr.LibraryQualityError as exc:
+                raise LibraryTranslationError(str(exc)) from exc
             except (engine.SubtitleError, OSError, ValueError) as exc:
                 raise LibraryTranslationError('本機語音辨識失敗，請檢查 Speaches 或本機辨識服務及模型') from exc
         return path, duration
@@ -606,7 +688,7 @@ class SubtitleTaskManager:
             stage='translation', language='zh-TW',
             segments=[SubtitleSegment(str(index), start / 1000, end / 1000, text)
                       for index, (start, end, text) in enumerate(cues, 1)])
-        return self._source_manager.publish_result(task['video_id'], result, 'zh-TW')
+        return self._publish_locked(task['video_id'], result, 'zh-TW', task['task_id'])
 
     def _run_library_translation(self, task, generation):
         from uav_downloader.daemon.subtitle_files import read_video_subtitle, subtitle_cue_text
@@ -614,13 +696,14 @@ class SubtitleTaskManager:
 
         task_id, video_id = task['task_id'], task['video_id']
         limit = task['trial_seconds']
+        force_asr = task.get('force_asr', False)
         cancel = lambda: self._cancelled(task_id, generation)
 
         def progress(phase, percent, *, processed=None, duration=None, count=None, total=None,
                      source_kind=None, asr_service=None):
             stage = {'subtitle_source': 'prepare', 'audio': 'audio', 'model': 'asr',
-                     'transcribe_ja': 'asr', 'asr_tail_retry': 'asr', 'asr_cached': 'asr',
-                     'save': 'save', 'publish': 'publish'}.get(phase, 'translation')
+                     'transcribe_ja': 'asr', 'save': 'save', 'publish': 'publish'}.get(
+                         phase, 'asr' if phase.startswith('asr_') else 'translation')
             with self._lock:
                 engine._check_cancel(cancel)
                 current = self._tasks[task_id]
@@ -650,8 +733,8 @@ class SubtitleTaskManager:
             verify = self._source_manager.verify_active
             verify(video_id, source)
             duration = None
-            track_paths = [source.video_path]
-            if source.output_mode == 'upload':
+            track_paths = [] if force_asr else [source.video_path]
+            if not force_asr and source.output_mode == 'upload':
                 track_paths.append(source.publish_path)
             with engine._generation_slot(cancel):
                 for track_path in track_paths:
@@ -663,7 +746,8 @@ class SubtitleTaskManager:
                     break
                 else:
                     progress('audio', None, source_kind='asr')
-                    path, duration = self._library_asr(source.video_path, work, limit, progress, cancel)
+                    path, duration = self._library_asr(source.video_path, work, limit, progress, cancel,
+                                                       force_asr=force_asr)
                     original_text = engine._read_srt_text(path) if path else ''
                 cues = self._library_cues(original_text, limit)
                 dialogue = [cue for cue in cues if not is_sound_only_cue(cue[2])]
@@ -712,6 +796,7 @@ class SubtitleTaskManager:
             engine._check_cancel(cancel)
             current = self._tasks[task_id]
             if limit is None:
+                self._remember_publish_head(current, 'zh-TW')
                 try:
                     published = self._publish_library_translation(task, translated)
                     publication = {'status': 'published', 'path': published['path']}
@@ -943,13 +1028,14 @@ class SubtitleTaskManager:
                 if not task or task['generation'] != generation or task['status'] != 'running':
                     raise engine.SubtitleCancelled('Subtitle generation cancelled')
                 task['publish_status'][language] = {'status': 'publishing', 'result_id': result_id}
+                self._remember_publish_head(task, language)
                 task['updated_at'] = time.time()
                 self._save_locked()
             try:
                 value = results.get(video_id, result_id)
                 if value is None:
                     raise ValueError('字幕結果不存在')
-                self._source_manager.publish_result(video_id, value, language)
+                self._publish_locked(video_id, value, language, task_id)
                 status = {'status': 'published', 'result_id': result_id}
             except Exception as exc:
                 status = {'status': 'failed', 'result_id': result_id,
@@ -973,6 +1059,11 @@ class SubtitleTaskManager:
             video_id, result_id = task['video_id'], entry['result_id']
         from uav_downloader.subtitles import results
         with self._video_lock(video_id):
+            with self._lock:
+                task = self._tasks[task_id]
+                if task['publish_status'][language]['status'] != 'failed':
+                    raise ValueError('字幕發布目前無法重試')
+                self._check_publish_retry(task, language)
             if task.get('library_translation'):
                 path = self._library_track_path(task_id, language)
                 track = engine._read_srt_text(str(path))
@@ -981,7 +1072,7 @@ class SubtitleTaskManager:
                 result = results.get(video_id, result_id)
                 if result is None:
                     raise ValueError('字幕結果不存在')
-                published = self._source_manager.publish_result(video_id, result, language)
+                published = self._publish_locked(video_id, result, language, task_id)
             with self._lock:
                 task = self._tasks[task_id]
                 task['publish_status'][language] = {'status': 'published', 'result_id': result_id,
@@ -1023,6 +1114,7 @@ class SubtitleTaskManager:
             }
             with self._lock:
                 self._publications[publication_id] = publication
+                self._remember_publish_head(publication, output_language)
                 self._save_locked()
             status = self._publish_restored_locked(publication)
         return {'publication_id': publication_id, 'video_id': video_id,
@@ -1037,8 +1129,8 @@ class SubtitleTaskManager:
             value = results.get(video_id, result_id)
             if value is None:
                 raise ValueError('字幕結果不存在')
-            published = self._source_manager.publish_result(
-                video_id, value, publication['language'],
+            published = self._publish_locked(
+                video_id, value, publication['language'], publication['publication_id'],
                 replace_existing=publication.get('replace_existing', False))
             status = {'publish_status': 'published', 'path': published['path']}
         except Exception as exc:
@@ -1074,6 +1166,7 @@ class SubtitleTaskManager:
         with self._video_lock(video_id):
             with self._lock:
                 self._publications[publication_id] = publication
+                self._remember_publish_head(publication, language)
                 self._save_locked()
             status = self._publish_restored_locked(publication)
         return {'publication_id': publication_id, 'video_id': video_id,
@@ -1090,8 +1183,12 @@ class SubtitleTaskManager:
             if (not publication or publication.get('purpose') not in ('restore', 'selected')
                     or publication.get('publish_status') != 'failed'):
                 raise ValueError('字幕發布目前無法重試')
-            publication = copy.deepcopy(publication)
         with self._video_lock(publication['video_id']):
+            with self._lock:
+                publication = self._publications[publication_id]
+                if publication['publish_status'] != 'failed':
+                    raise ValueError('字幕發布目前無法重試')
+                self._check_publish_retry(publication, publication['language'])
             status = self._publish_restored_locked(publication)
         return {'publication_id': publication_id, 'video_id': publication['video_id'],
                 'result_id': publication['result_id'], 'language': publication['language'],

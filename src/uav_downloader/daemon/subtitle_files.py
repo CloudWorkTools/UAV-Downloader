@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 from html import escape
 import json
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -129,20 +130,28 @@ class SubtitleFileManager:
                 os.unlink(temporary)
 
     def publication_lock_key(self, video_id):
-        """Return one lock identity for source IDs that publish to the same file."""
+        """Share one lock for the subtitle stem and its provenance file."""
+        return self.publication_identity(video_id)[0]
+
+    def publication_identity(self, video_id):
+        """Identify the shared subtitle stem and the media entitled to its managed tracks."""
         with self._lock:
             descriptor = self._sources.get(video_id)
             if not isinstance(descriptor, dict):
-                return video_id
+                return video_id, None
             relative = (descriptor.get('relative_path') if descriptor.get('kind') == 'smb'
                         else descriptor.get('remote_relative_path')
                         if descriptor.get('output_mode') == 'upload' else None)
             nas_identity = descriptor.get('nas_identity')
-            if relative and isinstance(nas_identity, list):
-                return ('nas-publication', tuple(nas_identity), relative)
+            if relative and isinstance(nas_identity, list) and len(nas_identity) == len(_NAS_IDENTITY_FIELDS):
+                _, host, share, directory, *_ = nas_identity
+                stem = ntpath.normpath(ntpath.join(directory, os.path.splitext(relative)[0]))
+                identity = descriptor.get('remote_identity', descriptor.get('identity'))
+                return ('nas-publication', host.casefold(), share.casefold(), stem), identity
             if descriptor.get('kind') == 'local' and isinstance(descriptor.get('path'), str):
-                return ('local-publication', os.path.normcase(os.path.abspath(descriptor['path'])))
-            return video_id
+                path = os.path.normcase(os.path.abspath(descriptor['path']))
+                return ('local-publication', os.path.splitext(path)[0]), descriptor.get('identity')
+            return video_id, None
 
     @staticmethod
     def _media_identity(path, *, handle=None):
@@ -449,8 +458,8 @@ class SubtitleFileManager:
         manifest = engine._load_subtitle_provenance(manifest_path)
         old_manifest = json.loads(json.dumps(manifest))
         old_entry = manifest['tracks'].get(language)
-        exists = filesystem.exists(target)
         linked = filesystem.islink(target)
+        exists = linked or filesystem.exists(target)
         if linked and replace_existing:
             raise ValueError('字幕目標不可使用符號連結')
         old_hash = self._file_hash(target) if exists and not linked else ''
@@ -466,7 +475,7 @@ class SubtitleFileManager:
         if exists and not replace_target:
             target = stem + f'.{language}.uav-{suffix}.srt'
             counter = 2
-            while filesystem.exists(target):
+            while filesystem.islink(target) or filesystem.exists(target):
                 if not filesystem.islink(target) and self._file_hash(target) == expected_hash:
                     return target
                 target = stem + f'.{language}.uav-{suffix}-{counter}.srt'
@@ -488,7 +497,7 @@ class SubtitleFileManager:
             folder, temporary = self._temporary(filesystem, os.path.dirname(target), data)
             if self._media_identity(source_path) != identity:
                 raise ValueError('字幕來源影片已變更，請重新選取')
-            if replace_target and exists and self._file_hash(canonical) != old_hash:
+            if replace_target and (filesystem.islink(canonical) or self._file_hash(canonical) != old_hash):
                 raise FileExistsError('字幕檔在發布期間已變更')
             if replace_target:
                 filesystem.replace(temporary, target)
