@@ -1058,6 +1058,34 @@
       "reviewer": "/root/flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/82b0bcfa60e8f578261b52941b03ae210b4b8ce773af0942ec59fffec27c2205.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "2d472e6514e98cfe6ac44d670dfb8aad6290507916f733ec2052b332e3c13619",
+      "reviewer": "/root/deploy_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/2d472e6514e98cfe6ac44d670dfb8aad6290507916f733ec2052b332e3c13619.json"
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "81a61c97c59eba7985f4afb90b9c51035b1e75042dcc14bca748390c282fd10b",
+      "reviewer": "/root/deploy_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.execute/81a61c97c59eba7985f4afb90b9c51035b1e75042dcc14bca748390c282fd10b.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "a6b0e128c7ffadd6f28578bb931e159dd0f949c87478953e1e3155df464311cf",
+      "reviewer": "/root/deploy_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/a6b0e128c7ffadd6f28578bb931e159dd0f949c87478953e1e3155df464311cf.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "980582cba4bcbe27374654f34f7bccff650dff1649eecb831075cf4be3d04ae1",
+      "reviewer": "/root/deploy_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/980582cba4bcbe27374654f34f7bccff650dff1649eecb831075cf4be3d04ae1.json"
     }
   ],
   "policy_inputs": [
