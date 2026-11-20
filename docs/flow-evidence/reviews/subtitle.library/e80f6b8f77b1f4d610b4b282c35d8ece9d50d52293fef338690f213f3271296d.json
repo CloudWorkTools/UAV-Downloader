@@ -1,0 +1,29 @@
+{
+  "feature": "subtitle.library",
+  "fingerprint": "e80f6b8f77b1f4d610b4b282c35d8ece9d50d52293fef338690f213f3271296d",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "17 個目標測試通過。同一舊格式發布操作首次因儲存離線失敗，恢復並重啟後可再次重試；登記另一操作後，時鐘倒退仍會阻擋舊重試。",
+    "同 stem 不同副檔名、不同目的地與語言、寫入後清理噴錯、寫入後回應遺失、手動選版及相容辨識分流的目標測試通過。",
+    "有版本紀錄時按操作識別判斷舊格式，只有無版本紀錄的既有資料仍按已發布紀錄時間判斷。"
+  ],
+  "newly_read_paths": [
+    "docs/flow-manifest.json",
+    "src/uav_downloader/daemon/subtitle_tasks.py",
+    "tests/test_subtitle_tasks.py"
+  ],
+  "reused_evidence": [
+    "前輪兩個實體字幕檔探針及新版對應的回歸測試。",
+    "前輪 22 個 ASR 目標測試，以及 production-shadow-candidate.log 記錄的真實切塊恢復和重複拒絕。",
+    "c579d63 已核對受管、原生及相容服務流程圖與發布失敗契約。"
+  ],
+  "additional_reads": [],
+  "limitations": [
+    "使用隔離暫存與注入的儲存異常。未使用正式服務、真實 SMB 斷線或執行全量測試。"
+  ],
+  "token_usage": "unavailable",
+  "reviewer": "Codex 獨立審查代理 candidate_review",
+  "base": "e978cf064f929931306fd709b0a8ad73811fe969",
+  "candidate": "d9aa8d81a858c1f277b50845228647a7b10937a3"
+}
