@@ -103,10 +103,10 @@ def _discover_models(profile, *, api_key=None):
             # Keep this endpoint/schema explicit instead of guessing between
             # the native v1 catalog and OpenAI-compatible model-list shapes.
         endpoint = base + '/api/v0/models'
-    elif provider == 'anthropic':
-        endpoint = base + '/v1/models'
-    elif provider == 'gemini':
-        endpoint = base + '/v1beta/models'
+    elif provider in ('anthropic', 'gemini'):
+        version = '/v1' if provider == 'anthropic' else '/v1beta'
+        prefix = base if urlsplit(base).path.endswith(version) else base + version
+        endpoint = prefix + '/models'
     else:
         return {'available': False, 'models': [], 'message': '此模型服務不支援自動載入清單',
                 'manual_entry_allowed': True}
@@ -146,7 +146,7 @@ def _discover_models(profile, *, api_key=None):
         elif isinstance(payload, dict) and isinstance(payload.get('models'), list):
             names = [item.get('name') for item in payload['models'] if isinstance(item, dict)]
         else:
-            names = []
+            raise ValueError('unexpected model catalog shape')
         cleaned = []
         for name in names:
             if isinstance(name, str) and name and len(name) <= 160:

@@ -199,6 +199,8 @@
       const endpointField=byId('subtitle-profile-url');
       const connectionStatus=byId('subtitle-model-discovery-status');
       const options=byId('subtitle-discovered-models');
+      const formSignature=ids=>JSON.stringify(ids.map(id=>byId(id)?.value));
+      const connectionFields=['subtitle-profile-id','subtitle-profile-url','subtitle-profile-provider','subtitle-profile-key'];
       function clearCatalog(){
         options?.replaceChildren();
         if(connectionStatus)connectionStatus.textContent='';
@@ -211,7 +213,7 @@
         const profileId=byId('subtitle-profile-id').value;
         const base_url=endpointField.value.trim(),provider=byId('subtitle-profile-provider').value;
         const api_key=byId('subtitle-profile-key').value;
-        const signature=[profileId,base_url,provider,api_key].join('\n');
+        const signature=formSignature(connectionFields);
         clearCatalog();
         try{
           const url=new URL(base_url);
@@ -227,19 +229,20 @@
         if(connectionStatus)connectionStatus.textContent='正在查詢模型服務…';
         try{
           const result=await discoverModels(profileId,draft);
-          const current=[byId('subtitle-profile-id').value,endpointField.value.trim(),byId('subtitle-profile-provider').value,byId('subtitle-profile-key').value].join('\n');
-          if(current!==signature)return;
+          if(formSignature(connectionFields)!==signature)return;
           if(result===false){if(connectionStatus)connectionStatus.textContent='未送出查詢。';return;}
           for(const model of result.models||[]){const option=el('option',model);option.value=model;options?.append(option);}
           const message=result.available?`已連線，已載入 ${result.models.length} 個模型。請從模型名稱選擇，再執行階段測試。`:result.message||'無法取得模型清單。';
           if(connectionStatus)connectionStatus.textContent=message;
           status(message,!result.available);
           if(result.available&&result.models.length===1)byId('subtitle-profile-model').value=result.models[0];
-        }catch(error){if(connectionStatus)connectionStatus.textContent=error.message;}
+        }catch(error){if(connectionStatus&&formSignature(connectionFields)===signature)connectionStatus.textContent=error.message;}
         finally{discover.disabled=false;}
       });
       const test=byId('subtitle-test-profile');
       if(test)test.addEventListener('click',async()=>{
+        const fields=[...connectionFields,'subtitle-profile-model','subtitle-profile-parameters','subtitle-test-stage'];
+        const signature=formSignature(fields);
         test.disabled=true;
         try{const profileId=byId('subtitle-profile-id').value;const stage=byId('subtitle-test-stage').value;
           const saved=state.profiles.find(item=>item.profile_id===profileId);
@@ -247,10 +250,11 @@
             throw new Error('請先保存目前的網址、模型和參數，再執行階段測試。');
           }
           const report=await testProfile(profileId,stage,{allowReasoning:byId('subtitle-test-allow-reasoning').checked});
+          if(formSignature(fields)!==signature)return;
           const message=report===false?'未呼叫外部服務。':formatProbe(report);
           if(connectionStatus)connectionStatus.textContent=message;
           status(message,report!==false&&report.success===false);
-        }catch(error){if(connectionStatus)connectionStatus.textContent=error.message;status(error.message,true);}finally{test.disabled=false;}
+        }catch(error){if(formSignature(fields)===signature){if(connectionStatus)connectionStatus.textContent=error.message;status(error.message,true);}}finally{test.disabled=false;}
       });
       for(const stage of STAGES){const select=stageSelect(stage);if(select)select.addEventListener('change',()=>{state.profileIds[stage]=select.value;});const enabled=byId(`subtitle-stage-enabled-${stage}`);if(enabled)enabled.addEventListener('change',()=>{state.selectedStages=readSelectedStages();});}
       for(const input of root.querySelectorAll('input[name="subtitle-target-language"], input[name="subtitle-output-language"]'))input.addEventListener('change',()=>{state.targetLanguages=readChecked('subtitle-target-language');state.outputLanguages=readChecked('subtitle-output-language');});

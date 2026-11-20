@@ -878,3 +878,32 @@ def test_draft_model_discovery_checks_entered_url_without_saving(subtitle_http, 
     assert result['models'] == ['available-model']
     assert seen == [('http://localhost:8780/v1', None, 'draft-secret')]
     assert profiles.load_profiles() == before
+
+
+@pytest.mark.parametrize(('provider', 'base_url'), [
+    ('anthropic', 'https://api.anthropic.com/v1'),
+    ('gemini', 'https://generativelanguage.googleapis.com/v1beta'),
+])
+def test_model_catalog_keeps_existing_api_version(provider, base_url, monkeypatch):
+    import requests
+
+    from uav_downloader.daemon import subtitle_http as api
+
+    seen = []
+
+    def get(url, **kwargs):
+        seen.append(url)
+        return SimpleNamespace(status_code=200, iter_content=lambda size: [b'{"data":[]}'])
+
+    class Session:
+        def __enter__(self):
+            return SimpleNamespace(get=get)
+
+        def __exit__(self, *_args):
+            pass
+
+    monkeypatch.setattr(requests, 'Session', Session)
+    profile = profiles.StageProfile('catalog', 'Catalog', 'text', provider,
+                                    ('translation',), base_url, 'model', '{}')
+    assert api._discover_models(profile, api_key='test-key')['available'] is True
+    assert seen == [base_url + '/models']
