@@ -117,8 +117,8 @@
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
       "kind": "python-module",
-      "md5": "87d78db288beccd89a0bf71d69105673",
-      "semantic_hash": "b5439ffcff6ed7b4e8590a18a586af6dd980499a33b5146e0add5b768f73c5d7"
+      "md5": "2ef11fe523d4a1fff513e58eda2447ff",
+      "semantic_hash": "3bdf35eac51b9eaa45fe5c56202d522c94b309c9c963e021c30619c17bdc0779"
     },
     {
       "path": "src/uav_downloader/metadata.py",
@@ -209,8 +209,8 @@
     {
       "path": "src/uav_downloader/subtitles/asr.py",
       "kind": "python-module",
-      "md5": "fac06c423a38747fb60fa2f22ecef2af",
-      "semantic_hash": "b04971f6925620e354f70d6b817ea6cb8a7e4a0abd3f94c9f6ec42f9609f8238"
+      "md5": "e053852ee1e123a58bdf9d6fe37ead75",
+      "semantic_hash": "9bb0c5567ac627538a8f19fa039a280355ecde3d9a0d8497d63bf34eb3cbd18a"
     },
     {
       "path": "src/uav_downloader/core/media_errors.py",
@@ -221,14 +221,14 @@
     {
       "path": "src/uav_downloader/subtitles/asr_library.py",
       "kind": "python-module",
-      "md5": "e51c5904b7f6aa7231fe28ee313a707a",
-      "semantic_hash": "49f5a1408ac2f1b41d1ee94e749658069a0b75c406084c0a5638a424ae8af301"
+      "md5": "d9d57edd9075b86cbf5c4c79c45b022f",
+      "semantic_hash": "d92395a8cd13aba481daff0c2586570be751048d31ac89931f0aa40c742a6567"
     },
     {
       "path": "src/uav_downloader/daemon/subtitle_tasks.py",
       "kind": "python-module",
-      "md5": "662aff374957ae1aa23bb80e55c719aa",
-      "semantic_hash": "992c638282d2b040599d5808555e9fadce4325ab03e63cd6fd16ec53feef29de"
+      "md5": "53200ec19a6a3f35bec9147bfc6fd986",
+      "semantic_hash": "d2234cb5ac55b0eaee67b9d67f82e99275f05d1a24ed23417f402bf3bd47e17a"
     },
     {
       "path": "src/uav_downloader/daemon/subtitle_files.py",
@@ -672,6 +672,18 @@
         "storage.destination"
       ],
       "mappings": [
+        {
+          "node": "SUBTITLE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "SUBTITLE",
+          "path": "src/uav_downloader/subtitles/asr.py"
+        },
+        {
+          "node": "SUBTITLE",
+          "path": "src/uav_downloader/subtitles/asr_library.py"
+        },
         {
           "node": "START",
           "path": "src/uav_downloader/daemon/task_manager.py"
@@ -1211,35 +1223,35 @@
     {
       "feature": "download.batch",
       "fingerprint": "8cb0c1aae8d2a71b87f3dd3a52fc65c12a5cefde37bfae65154196394b55cc5f",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/8cb0c1aae8d2a71b87f3dd3a52fc65c12a5cefde37bfae65154196394b55cc5f.json"
     },
     {
       "feature": "download.execute",
       "fingerprint": "a8e77f001451fb9cc8bf3478cfee3415d1752db2973121fcb91673bfe51e2e4b",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.execute/a8e77f001451fb9cc8bf3478cfee3415d1752db2973121fcb91673bfe51e2e4b.json"
     },
     {
       "feature": "queue.enqueue",
       "fingerprint": "01fe6d61573bcfe723b5cad3104c7cf48735c17be94c54be70e0f9d86f6b85e3",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/queue.enqueue/01fe6d61573bcfe723b5cad3104c7cf48735c17be94c54be70e0f9d86f6b85e3.json"
     },
     {
       "feature": "storage.destination",
       "fingerprint": "73c0842fa16b90747c401283e3fdadacc69ac57413a94f5a48ea384aab56fe61",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/storage.destination/73c0842fa16b90747c401283e3fdadacc69ac57413a94f5a48ea384aab56fe61.json"
     },
     {
       "feature": "subtitle.library",
       "fingerprint": "e80f6b8f77b1f4d610b4b282c35d8ece9d50d52293fef338690f213f3271296d",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/subtitle.library/e80f6b8f77b1f4d610b4b282c35d8ece9d50d52293fef338690f213f3271296d.json"
     }

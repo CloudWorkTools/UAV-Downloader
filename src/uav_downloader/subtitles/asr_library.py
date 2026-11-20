@@ -83,7 +83,7 @@ def _speech_regions(source, request):
         except (engine.SubtitleCancelled, engine.SubtitleStorageError):
             raise
         except (ValueError, TypeError):
-            raise asr.LibraryQualityError(start / _RATE, end / _RATE) from None
+            raise asr.RecognitionQualityError(start / _RATE, end / _RATE) from None
         except (engine.SubtitleError, OSError):
             raise engine.SubtitleError(
                 f'原片第 {start / _RATE:.3f} 至 {end / _RATE:.3f} 秒無法確認語音區間') from None
@@ -250,7 +250,7 @@ def transcribe_managed(settings, wav_path, output_base, log_path, cancel_check, 
                             engine._notify(progress_callback, 'asr_tail_retry', None)
                             continue
                         if isinstance(exc, ValueError):
-                            raise asr.LibraryQualityError(position / _RATE, core_end / _RATE) from None
+                            raise asr.RecognitionQualityError(position / _RATE, core_end / _RATE) from None
                         raise engine.SubtitleError(
                             f'原片第 {position / _RATE:.3f} 至 {core_end / _RATE:.3f} 秒辨識服務失敗') from None
                     break

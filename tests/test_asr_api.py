@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import socket
 import threading
+from types import SimpleNamespace
 import wave
 
 import pytest
@@ -546,11 +547,54 @@ def managed_worker(tmp_path, monkeypatch):
     def transcribe(seconds, **kwargs):
         wav = tmp_path / 'library.wav'
         audio(wav, seconds)
-        return asr.transcribe_library(settings, str(wav), str(tmp_path / 'library'),
+        return asr.transcribe(settings, str(wav), str(tmp_path / 'library'),
                                       str(tmp_path / 'log'), **kwargs)
 
     monkeypatch.setattr(engine, '_run_process', run)
     return transcribe, responses, requests
+
+
+@pytest.mark.parametrize('name, seconds, intervals, expected', [
+    ('散步', 18, [{'start': 1000, 'end': 2400}, {'start': 11000, 'end': 14000}], [
+        ('00:00:01,000 --> 00:00:01,800', '朝の道'),
+        ('00:00:11,200 --> 00:00:12,500', '空を見上げる'),
+    ]),
+    ('會議', 47, [{'start': 30500, 'end': 33000}], None),
+])
+def test_download_subtitles_use_managed_quality_checks(
+        tmp_path, monkeypatch, api_server, name, seconds, intervals, expected):
+    from uav_downloader.daemon.task_manager import TaskManager
+
+    settings, responses, requests, _ = api_server
+    monkeypatch.setattr(asr, 'DEFAULT_URL', settings['base_url'])
+    monkeypatch.setattr(asr, 'load_settings', lambda **_kwargs: settings)
+    monkeypatch.setattr(engine, '_extract_audio', lambda _video, wav, *_args: audio(Path(wav), seconds))
+    video = tmp_path / (name + '.mp4')
+    video.write_bytes(b'video')
+    responses.append((200, intervals))
+    if expected:
+        responses.extend([
+            (200, word_payload(segment(1, 1.8, '朝の道'))),
+            (200, {'segments': [segment(0, 6, '空を見上げる')],
+                   'words': [{'start': 2.2, 'end': 3.5, 'word': '空を見上げる'}]}),
+        ])
+    else:
+        repetition = word_payload(segment(2, 3, '同じ文' * 12))
+        responses.extend([(200, repetition), (200, repetition)])
+    task = SimpleNamespace(dest=str(tmp_path), name=name, subtitle_mode='ja',
+                           cancelled_event=threading.Event(), set_phase=lambda *_args: None, error=None)
+
+    TaskManager._run_subtitles(None, task, None)
+
+    assert [path for path, _, _ in requests] == [
+        '/v1/audio/speech/timestamps', '/v1/audio/transcriptions', '/v1/audio/transcriptions']
+    subtitle = video.with_suffix('.ja.srt')
+    if expected:
+        assert task.error is None
+        assert [(cue.timing, cue.text) for cue in engine.parse_srt(subtitle.read_text())] == expected
+    else:
+        assert '30.500 至 33.000 秒無法確認字幕' in task.error
+        assert not subtitle.exists()
 
 
 def test_managed_library_http_keeps_words_on_their_side_of_silence(tmp_path, monkeypatch, api_server):
@@ -566,7 +610,7 @@ def test_managed_library_http_keeps_words_on_their_side_of_silence(tmp_path, mon
     ])
     wav = tmp_path / 'library.wav'
     audio(wav, 120)
-    path = asr.transcribe_library(settings, str(wav), str(tmp_path / 'out'), str(tmp_path / 'log'))
+    path = asr.transcribe(settings, str(wav), str(tmp_path / 'out'), str(tmp_path / 'log'))
     assert [(cue.timing, cue.text) for cue in engine.parse_srt(Path(path).read_text())] == [
         ('00:00:01,840 --> 00:00:02,320', 'はい'),
         ('00:01:55,396 --> 00:01:57,076', '別の言葉'),
@@ -618,7 +662,7 @@ def test_managed_library_conflicting_seam_preserves_existing_file(
         [dict(start=0, end=123000)], word_payload(segment(119.6, 120.2, '境界')),
         conflicting, conflicting,
     ])
-    with pytest.raises(asr.LibraryQualityError, match='原片第 120.000 至 123.000 秒無法確認字幕'):
+    with pytest.raises(asr.RecognitionQualityError, match='原片第 120.000 至 123.000 秒無法確認字幕'):
         transcribe(123)
     assert old.read_text(encoding='utf-8') == '原字幕'
     assert len(requests) == 4 and not responses
@@ -671,7 +715,7 @@ def test_managed_library_retries_suspect_result_without_accepting_empty(managed_
     transcribe, responses, requests = managed_worker
     responses.extend([[dict(start=100, end=2000)], invalid, word_payload()])
     progress = []
-    with pytest.raises(asr.LibraryQualityError, match='^原片第 0.100 至 2.000 秒無法確認字幕$'):
+    with pytest.raises(asr.RecognitionQualityError, match='^原片第 0.100 至 2.000 秒無法確認字幕$'):
         transcribe(4, progress_callback=lambda *args: progress.append(args))
     assert not (tmp_path / 'library.srt').exists()
     assert progress == [('asr_tail_retry', None)]
@@ -740,11 +784,11 @@ def test_managed_library_cancellation_skips_publication(managed_worker, tmp_path
     assert not (tmp_path / 'library.srt').exists()
 
 
-def test_library_leaves_compatible_api_on_legacy_path(tmp_path, api_server):
+def test_compatible_api_accepts_segment_only(tmp_path, api_server):
     settings, responses, requests, _ = api_server
     responses.append((200, {'segments': [segment(.2, .8, '旧応答')]}))
     wav = tmp_path / 'library.wav'
     audio(wav, 2)
-    path = asr.transcribe_library(settings, str(wav), str(tmp_path / 'out'), str(tmp_path / 'log'))
+    path = asr.transcribe(settings, str(wav), str(tmp_path / 'out'), str(tmp_path / 'log'))
     assert [cue.text for cue in engine.parse_srt(Path(path).read_text())] == ['旧応答']
     assert [path for path, _, _ in requests] == ['/v1/audio/transcriptions']

@@ -1030,13 +1030,12 @@ def test_library_recognition_uses_managed_asr_and_preserves_prior_tracks(tmp_pat
         calls.append(settings['base_url'])
         progress('asr_quality', 95)
         if outcome == 'quality_failed':
-            raise asr.LibraryQualityError(713.4, 715.1)
+            raise asr.RecognitionQualityError(713.4, 715.1)
         path = Path(output + '.srt')
         path.write_text('1\n00:00:01,000 --> 00:00:02,000\n新\n', encoding='utf-8')
         return str(path)
 
-    monkeypatch.setattr(asr, 'transcribe_library', managed)
-    monkeypatch.setattr(asr, 'transcribe', lambda *_: pytest.fail('影片庫誤用舊辨識路徑'))
+    monkeypatch.setattr(asr, 'transcribe', managed)
     if outcome == 'managed':
         ja.unlink()
     task_id = manager.submit_library_translation(video_id, force_asr=outcome != 'managed')['task_id']

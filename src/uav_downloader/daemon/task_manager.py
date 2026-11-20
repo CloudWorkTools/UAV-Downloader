@@ -1098,7 +1098,7 @@ class TaskManager:
                 asr_settings=load_settings(secret=True),
                 progress_callback=lambda stage, percent: task.set_phase({
                     'audio': '擷取字幕音訊', 'transcribe_ja': '辨識日文字幕',
-                    'asr_tail_retry': '重新辨識異常尾段', 'asr_cached': '讀取已完成辨識片段',
+                    'asr_tail_retry': '重新辨識字幕異常區段', 'asr_cached': '讀取已完成辨識片段',
                     'translate_en': '翻譯英文字幕', 'translate_zh': '翻譯繁體中文字幕',
                     'translation_model': '準備本機翻譯模型',
                 }.get(stage, '處理影片字幕'), percent or 0, 100 if percent is not None else 0),
