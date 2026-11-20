@@ -117,7 +117,12 @@
         applyLibraryCaption();
       });
       media.textTracks.addEventListener('change',()=>{
-        const active=[...media.textTracks].find(track=>track.mode==='showing');
+        const showing=[...media.textTracks].filter(track=>track.mode==='showing');
+        const preferred=libraryCaptionLanguage??'zh-TW';
+        const active=showing.find(track=>track.language===preferred)||showing[0];
+        if(showing.length>1){
+          for(const track of showing)if(track!==active)track.mode='disabled';
+        }
         selector.value=active?.language||'';
       });
     }
@@ -138,6 +143,7 @@
       track.srclang=language;
       track.label=labelText;
       track.src=src;
+      track.default=language===(libraryCaptionLanguage??'zh-TW');
       track.addEventListener('error',()=>{
         if(track.isConnected&&track.track.mode==='showing')byId('subtitle-library-error').textContent=
           `${languageLabels[language]}字幕無法載入，請重新開啟字幕結果。`;
