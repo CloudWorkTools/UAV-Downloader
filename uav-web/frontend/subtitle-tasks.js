@@ -5,7 +5,7 @@
       const data=await response.json(); if(!response.ok||data.success===false)throw new Error(data.error||'字幕操作失敗'); return data;
     });
     const state={videos:[],videoErrors:[],videoPartial:false,videoNotice:null,tasks:[],publications:[],results:[],selected:new Set(),activeVideo:null,preview:null};
-    let submitting=false,resultsRequest=0,refreshInFlight=null;
+    let submitting=false,resultsRequest=0,refreshInFlight=null,videoScanInFlight=null;
     let pendingTaskRender=false,pendingResultsRender=false;
     let libraryVideo=null, libraryTrigger=null, libraryResult=null, libraryTrackKey=null, libraryTrackUrls=[];
     let libraryTrackRequest=0;
@@ -23,7 +23,8 @@
     const stageLabels={vad:'語音區間',asr:'語音辨識',correction:'字幕校正',translation:'字幕翻譯'};
     const statusLabels={queued:'排隊中',running:'處理中',retry_wait:'等待重試',cancelling:'取消中',waiting_for_resume:'等待手動續跑',completed:'已完成',failed:'失敗',cancelled:'已取消'};
     const languageLabels={ja:'日文',en:'英文','zh-TW':'繁體中文'};
-    const libraryPhases={model:'準備辨識模型',audio:'讀取影片音訊',transcribe:'語音辨識',translation_model:'準備翻譯模型',translate_zh:'字幕翻譯',saving:'儲存字幕'};
+    const libraryPhases={model:'準備辨識模型',audio:'擷取影片音訊',transcribe:'語音辨識',transcribe_ja:'日文語音辨識',subtitle_source:'確認日文字幕來源',save:'儲存字幕',
+      asr_tail_retry:'辨識片段重試',asr_cached:'沿用辨識片段',translation_model:'準備翻譯模型',translate_zh:'字幕翻譯',saving:'儲存字幕'};
     const sourceLabels={history:'下載歷史',configured:'影片目錄',smb:'NAS'};
     const publicationLabels={published:'已發布',failed:'儲存失敗',publishing:'發布中',not_requested:'未要求發布'};
     const label=(map,value,fallback='')=>map[value]||fallback||value||'—';
@@ -209,10 +210,141 @@
         button.disabled=working||busyActions.has(`library:${videoId}`);
       }
     }
+    function taskFlow(task){
+      const server='部署伺服器';
+      const pending='waiting';
+      const completed=task.completed||[];
+      const publication=Object.values(task.publish_status||{});
+      const outputFailed=publication.some(entry=>entry.status==='failed');
+      const outputRequested=task.library_translation?!task.trial_seconds:!!task.output_languages?.length;
+      const nodes=[{id:'queue',title:'接收與排隊',where:server,status:task.status==='queued'?'queued':'completed'}];
+      const persistedStage=task.failure_stage||task.current_stage;
+      const flowStages={prepare:'source',audio:'source',save:'output',publish:'output'};
+      let active=flowStages[persistedStage]||persistedStage;
+      const phase=libraryPhases[task.phase];
+      if(task.library_translation){
+        let source=task.library_source;
+        const recognitionPhase=['audio','model','transcribe','transcribe_ja','asr_tail_retry','asr_cached'].includes(task.phase);
+        if(!source&&recognitionPhase)source='asr';
+        if(!task.failure_stage&&(!active||(persistedStage==='translation'&&recognitionPhase))){
+          if(recognitionPhase)active=task.phase==='audio'?'source':'asr';
+          else if(['saving','save'].includes(task.phase))active='output';
+          else if(['translation_model','translate_zh'].includes(task.phase))active='translation';
+          else if(!active&&task.status==='running')active='source';
+        }
+        const translated=task.status==='completed'||active==='output';
+        const recognitionServices={speaches:'同機語音辨識服務 · Speaches',loopback:'同機語音辨識服務',native:'部署伺服器本機模型'};
+        const asrDone=source==='asr'&&(active==='translation'||translated);
+        nodes.push(
+          {id:'source',title:source==='existing_srt'?'讀取日文 SRT':source==='asr'?'擷取影片音訊':'確認日文字幕來源',where:server,
+            status:source==='existing_srt'||(source==='asr'&&active!=='source')||translated?'completed':pending},
+          {id:'asr',title:'日文語音辨識',where:recognitionServices[task.library_asr_service]||'部署環境的語音辨識服務',
+            status:source==='existing_srt'?'skipped':asrDone?'completed':translated?'unknown':pending},
+          {id:'translation',title:'翻譯繁中',where:`${server} · FuguMT／OPUS-MT`,status:translated?'completed':pending},
+        );
+      }else{
+        const stages=task.selected_stages||[];
+        if(task.status==='failed'&&!active)active=stages.find(stage=>task.error?.startsWith(`${stage} 階段`));
+        if(!active){
+          const allDone=stages.length&&stages.every(stage=>completed.some(key=>key.startsWith(`${stage}:`)));
+          if(task.status==='running'){
+            if(allDone)active='output';
+            else if(!completed.length)active='source';
+          }
+        }
+        const prepared=(active&&active!=='source')||completed.length||task.status==='completed';
+        nodes.push({id:'source',title:'準備影片與字幕輸入',where:server,status:prepared?'completed':pending});
+        const providerNames={localai:'LocalAI',openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',ollama:'Ollama',lmstudio:'LM Studio','openai-compatible':'OpenAI 相容服務'};
+        for(const stage of Object.keys(stageLabels)){
+          const snapshot=task.profile_snapshots?.[stage]||task.profile_snapshots?.text;
+          const profile=snapshot?.profile;
+          const endpoint=[providerNames[profile?.provider]||profile?.provider,profile?.model].filter(Boolean).join('／');
+          const keys=stage==='translation'?(task.target_languages||[]).map(language=>`translation:${language}`):[`${stage}:`];
+          const done=keys.length&&keys.every(key=>completed.includes(key));
+          nodes.push({id:stage,title:stageLabels[stage],where:endpoint?`設定檔服務 · ${endpoint}`:'設定檔指定的服務',
+            status:!stages.includes(stage)?'skipped':done||task.status==='completed'?'completed':pending});
+        }
+      }
+      nodes.push({id:'output',title:outputRequested?'儲存與發布字幕':'儲存字幕結果',where:server,
+        status:outputFailed?'failed':task.status==='completed'?'completed':pending,
+        error:publication.find(entry=>entry.status==='failed')?.error});
+      const current=nodes.find(node=>node.id===active);
+      if(!current&&task.status==='waiting_for_resume')nodes[0].status='paused';
+      if(current){
+        const statuses={running:'running',retry_wait:'retry_wait',failed:'failed',waiting_for_resume:'paused',cancelling:'cancelling',cancelled:'cancelled'};
+        if(statuses[task.status]&&current.status!=='skipped'){
+          current.status=task.phase==='asr_tail_retry'&&task.status==='running'?'retry_wait':statuses[task.status];
+          if(task.status==='running')current.phase=phase;
+          if(task.status==='failed')current.error=task.error;
+          current.percent=task.stage_progress??task.progress;
+        }
+      }
+      return nodes;
+    }
+    function renderTaskFlows(panel,list){
+      let container=panel.querySelector('[data-subtitle-task-flows]');
+      if(!container){
+        container=el('div','','space-y-3');
+        container.dataset.subtitleTaskFlows='';
+        panel.insertBefore(container,byId('subtitle-current-job-queue'));
+      }
+      const taskLabels={queued:'排隊中',waiting:'等待中',running:'處理中',retry_wait:'等待重試',paused:'等待手動續跑',cancelling:'取消中',
+        cancelled:'已取消',failed:'失敗',completed:'已完成',skipped:'已略過',unknown:'既有任務未記錄'};
+      const flows=list.map(task=>{
+        const video=state.videos.find(item=>item.video_id===task.video_id);
+        return {id:task.task_id,title:video?.title||video?.name||task.video_id,nodes:taskFlow(task)};
+      });
+      const signature=JSON.stringify(flows);
+      if(container.dataset.flowSignature===signature)return;
+      container.dataset.flowSignature=signature;
+      container.replaceChildren();
+      for(const {id,title,nodes} of flows){
+        const diagram=el('ol','','flex flex-wrap items-stretch gap-2 text-xs text-gray-200');
+        diagram.setAttribute('role','list');
+        diagram.setAttribute('aria-label',`${title}的字幕流程`);
+        diagram.dataset.subtitleTaskFlow=id;
+        for(const [index,node] of nodes.entries()){
+          const item=el('li','','flex min-w-0 items-center gap-2');
+          item.dataset.flowStage=node.id;
+          item.dataset.flowStatus=node.status;
+          if(index){
+            const arrow=el('span','→','text-gray-400');
+            arrow.setAttribute('aria-hidden','true');
+            item.append(arrow);
+          }
+          const active=['queued','running','retry_wait','paused','cancelling'].includes(node.status);
+          if(active)item.setAttribute('aria-current','step');
+          const color=node.status==='failed'?'border-red-400':active?'border-sky-400':'border-[#535366]';
+          const card=el('div','',`min-w-0 break-words rounded-lg border ${color} bg-[#1a1820] p-2`);
+          card.append(el('p',node.title,'font-semibold text-white'),
+            el('p',node.where,'text-gray-300'),
+            el('p',[taskLabels[node.status],node.phase].filter(Boolean).join(' · '),'text-gray-200'));
+          if(node.error)card.append(el('p',node.error,'text-rose-300'));
+          if(node.status==='running'&&Number.isFinite(node.percent)&&node.percent>=0&&node.percent<=100){
+            const bar=el('progress','','block w-full');
+            bar.max=100;
+            bar.value=node.percent;
+            bar.setAttribute('aria-label',`${node.title}進度`);
+            card.append(bar,el('span',`${node.percent}%`));
+          }
+          item.append(card);
+          diagram.append(item);
+        }
+        const section=el('div','','space-y-2 rounded-lg border border-[#535366] p-3');
+        section.append(el('p',title,'break-words text-sm font-medium text-white'),diagram);
+        container.append(section);
+      }
+    }
     function renderCurrentJobs({focus=false}={}){
       const panel=byId('subtitle-current-job');
       if(!panel)return;
-      const list=currentJobs.length?currentJobs.map(job=>state.tasks.find(task=>task.task_id===job.task_id)||job):state.tasks.slice().sort((a,b)=>(b.created_at||0)-(a.created_at||0)).slice(0,1);
+      const activeStatuses=['queued','running','retry_wait','cancelling','waiting_for_resume'];
+      const current=currentJobs.map(job=>state.tasks.find(task=>task.task_id===job.task_id)||job);
+      const list=[...current,...state.tasks.filter(task=>activeStatuses.includes(task.status)
+        &&!current.some(job=>job.task_id===task.task_id))];
+      if(!list.length&&state.tasks.length){
+        list.push(state.tasks.reduce((latest,task)=>(task.created_at||0)>(latest.created_at||0)?task:latest));
+      }
       panel.hidden=!submitNotice&&!list.length;
       const lines=list.map(task=>{
         const video=state.videos.find(item=>item.video_id===task.video_id);
@@ -236,6 +368,7 @@
         if(Number.isFinite(value))bar.value=value;
         else bar.removeAttribute('value');
       }
+      renderTaskFlows(panel,list);
       if(focus&&!panel.hidden)panel.focus();
     }
     async function submitLibraryTranslation(trial){
@@ -407,10 +540,57 @@
       catch(error){failed=true;status(error.message,true);}
       finally{submitting=false;if(pending)pending.textContent='';if(button)button.disabled=false;if(failed)restoreFailedDialogActionFocus('subtitle-confirm-dialog',button,wasFocused);}
     }
+    function renderResultSelector(){
+      const selector=byId('subtitle-result-video');
+      if(!selector||selector.contains(root.activeElement))return;
+      const previous=selector.value;
+      const known=new Map(state.videos.map(video=>[video.video_id,video.title||video.name||video.video_id]));
+      for(const task of state.tasks){
+        if(!known.has(task.video_id))known.set(task.video_id,`${task.video_id} · 來源可能離線`);
+      }
+      selector.replaceChildren();
+      for(const [id,title] of known){
+        const option=el('option',title);
+        option.value=id;
+        selector.append(option);
+      }
+      if(known.has(previous))selector.value=previous;
+      else if(selector.options.length)selector.value=selector.options[0].value;
+    }
+    function renderTaskPanels(){
+      renderTasks();
+      renderPublications();
+      updateLibraryStatus();
+      renderCurrentJobs();
+    }
     async function refresh({scanVideos=false}={}){
-      if(refreshInFlight){await refreshInFlight;if(scanVideos)return refresh({scanVideos:true});return state;}
-      refreshInFlight=(async()=>{try{const [videos,tasks]=await Promise.all([scanVideos?api('GET','/api/subtitles/videos'):Promise.resolve(null),api('GET','/api/subtitles/tasks')]);if(videos){state.videos=videos.videos||[];state.videoErrors=videos.errors||[];state.videoPartial=videos.partial===true;state.videoNotice=videos.notice||null;settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;renderVideos();renderVideoErrors();}state.tasks=tasks.tasks||[];state.publications=tasks.publications||[];renderTasks();renderPublications();updateLibraryStatus();renderCurrentJobs();const selector=byId('subtitle-result-video');if(scanVideos&&selector&&!selector.contains(root.activeElement)){const previous=selector.value;selector.replaceChildren();const known=new Set();for(const video of state.videos){const option=el('option',video.title||video.name||video.video_id);option.value=video.video_id;selector.append(option);known.add(video.video_id);}for(const task of state.tasks){if(known.has(task.video_id))continue;const option=el('option',`${task.video_id} · 來源可能離線`);option.value=task.video_id;selector.append(option);known.add(task.video_id);}if([...selector.options].some(option=>option.value===previous))selector.value=previous;else if(selector.options.length)selector.value=selector.options[0].value;}if(state.activeVideo)await loadResults(state.activeVideo);return state;}catch(error){status(error.message,true);return state;}})();
-      try{return await refreshInFlight;}finally{refreshInFlight=null;}
+      if(scanVideos&&!videoScanInFlight){
+        videoScanInFlight=api('GET','/api/subtitles/videos').then(videos=>{
+          state.videos=videos.videos||[];
+          state.videoErrors=videos.errors||[];
+          state.videoPartial=videos.partial===true;
+          state.videoNotice=videos.notice||null;
+          settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;
+          renderVideos();
+          renderVideoErrors();
+          renderTaskPanels();
+          renderResultSelector();
+        }).catch(error=>{
+          state.videoNotice=`影片庫載入失敗：${error.message}`;
+          renderVideoErrors();
+        }).finally(()=>{videoScanInFlight=null;});
+      }
+      if(!refreshInFlight){
+        refreshInFlight=api('GET','/api/subtitles/tasks').then(async tasks=>{
+          state.tasks=tasks.tasks||[];
+          state.publications=tasks.publications||[];
+          renderTaskPanels();
+          if(scanVideos)renderResultSelector();
+          if(state.activeVideo)await loadResults(state.activeVideo);
+        }).catch(error=>{status(error.message,true);}).finally(()=>{refreshInFlight=null;});
+      }
+      await Promise.all([refreshInFlight,scanVideos?videoScanInFlight:null]);
+      return state;
     }
     function bind(){
       byId('subtitle-video-search')?.addEventListener('input',renderVideos);

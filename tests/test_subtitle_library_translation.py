@@ -29,7 +29,11 @@ def test_trial_clips_cues_and_full_uses_safe_publication(tmp_path, monkeypatch):
     with engine._translation_profile_scope(SimpleNamespace(uses_api=True)):
         trial = manager.submit_library_translation(video_id, 120)
         manager._run_task(trial['task_id'])
-        assert manager.get_task(trial['task_id'])['status'] == 'completed'
+        restored = SubtitleTaskManager(tmp_path / 'tasks.json', source_manager=files)
+        completed_trial = restored.get_task(trial['task_id'])
+        assert completed_trial['status'] == 'completed'
+        assert completed_trial['library_source'] == 'existing_srt'
+        assert 'library_asr_service' not in completed_trial
         segments = engine.parse_srt(manager.library_track(trial['task_id'], 'zh-TW'))
         assert [cue.timing for cue in segments] == ['00:01:59,000 --> 00:02:00,000']
         assert list(tmp_path.glob('movie.zh-TW*.srt')) == [old_translation]
@@ -61,8 +65,46 @@ def test_linux_recognition_uses_local_sidecar_if_configured_endpoint_is_cloud(tm
         return output + '.srt'
 
     monkeypatch.setattr(asr, 'transcribe', transcribe)
+    steps = []
+
+    def progress(phase, percent, **detail):
+        steps.append((phase, percent, detail))
+
     path, seconds = SubtitleTaskManager._library_asr(
-        'video.mp4', str(tmp_path), 120, lambda *_: None, lambda: False)
+        'video.mp4', str(tmp_path), 120, progress, lambda: False)
     assert path == str(tmp_path / 'japanese.srt')
     assert seconds == 120
     assert durations == [120]
+    assert steps[-1] == ('transcribe_ja', None, {'asr_service': 'speaches'})
+
+
+def test_failed_library_recognition_restores_actual_route_and_failure_stage(tmp_path, monkeypatch):
+    movie = tmp_path / 'movie.mp4'
+    movie.write_bytes(b'complete media')
+    files = SubtitleFileManager(tmp_path / 'files.json')
+    video_id = files.register(str(movie), allowed_roots=[str(tmp_path)]).video_id
+    monkeypatch.setattr(SubtitleTaskManager, 'start_dispatcher', lambda self: None)
+    from uav_downloader.daemon import subtitle_tasks
+    monkeypatch.setattr(subtitle_tasks.sys, 'platform', 'linux')
+    monkeypatch.setattr(engine, '_extract_audio', lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, '_validate_pcm16_wav', lambda _path: (16000, 1))
+    monkeypatch.setattr(asr, 'load_settings', lambda **kwargs: {
+        'base_url': 'http://127.0.0.1:43210/v1', 'model': 'recognition'})
+
+    def reject(_settings, _wav, _output, _log, _cancel, progress):
+        progress('asr_cached', None)
+        raise engine.SubtitleError('no transcription')
+
+    monkeypatch.setattr(asr, 'transcribe', reject)
+    path = tmp_path / 'tasks.json'
+    manager = SubtitleTaskManager(path, source_manager=files)
+    task_id = manager.submit_library_translation(video_id, 120)['task_id']
+    manager._run_task(task_id)
+
+    restored = SubtitleTaskManager(path, source_manager=files)
+    failed = restored.get_task(task_id)
+    assert (failed['status'], failed['phase'], failed['failure_stage']) == (
+        'failed', 'asr_cached', 'asr')
+    assert (failed['library_source'], failed['library_asr_service']) == ('asr', 'loopback')
+    assert '127.0.0.1' not in str(failed)
+    assert 'failure_stage' not in restored.resume(task_id)

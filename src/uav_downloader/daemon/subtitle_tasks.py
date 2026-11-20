@@ -397,6 +397,7 @@ class SubtitleTaskManager:
             old_status, old_error, old_generation, old_updated = (
                 task['status'], task['error'], task['generation'], task['updated_at'])
             old_queue = list(self._queue)
+            old_failure_stage = task.pop('failure_stage', None)
             task['generation'] += 1
             task['status'] = 'queued'
             task['error'] = None
@@ -408,6 +409,8 @@ class SubtitleTaskManager:
             except Exception:
                 task['status'], task['error'], task['generation'], task['updated_at'] = (
                     old_status, old_error, old_generation, old_updated)
+                if old_failure_stage is not None:
+                    task['failure_stage'] = old_failure_stage
                 self._queue = old_queue
                 raise
         self.start_dispatcher()
@@ -571,6 +574,7 @@ class SubtitleTaskManager:
         engine._extract_audio(video_path, wav, log, cancel, duration_seconds=limit)
         _, duration = engine._validate_pcm16_wav(wav)
         if sys.platform == 'win32':
+            progress('model', None, asr_service='native')
             profile = engine.recognition_profile()
             with engine._recognition_profile_scope(profile):
                 runtime = engine._prepare_runtime(progress, cancel)
@@ -586,7 +590,8 @@ class SubtitleTaskManager:
                     raise LibraryTranslationError('本機語音辨識設定已變更，請重試')
             else:
                 settings = {'base_url': asr.DEFAULT_URL, 'model': asr.DEFAULT_MODEL}
-            progress('transcribe_ja', None)
+            service = 'speaches' if urlsplit(settings['base_url']).hostname == 'uav-speaches' else 'loopback'
+            progress('transcribe_ja', None, asr_service=service)
             try:
                 path = asr.transcribe(settings, wav, output, log, cancel, progress)
             except (engine.SubtitleCancelled, engine.SubtitleStorageError):
@@ -610,11 +615,15 @@ class SubtitleTaskManager:
         limit = task['trial_seconds']
         cancel = lambda: self._cancelled(task_id, generation)
 
-        def progress(phase, percent, *, processed=None, duration=None, count=None, total=None):
+        def progress(phase, percent, *, processed=None, duration=None, count=None, total=None,
+                     source_kind=None, asr_service=None):
+            stage = {'subtitle_source': 'prepare', 'audio': 'audio', 'model': 'asr',
+                     'transcribe_ja': 'asr', 'asr_tail_retry': 'asr', 'asr_cached': 'asr',
+                     'save': 'save', 'publish': 'publish'}.get(phase, 'translation')
             with self._lock:
                 engine._check_cancel(cancel)
                 current = self._tasks[task_id]
-                current.update(phase=phase, current_stage='translation',
+                current.update(phase=phase, current_stage=stage,
                                stage_progress=percent, progress=percent,
                                updated_at=time.time())
                 if processed is not None:
@@ -623,8 +632,17 @@ class SubtitleTaskManager:
                     current['media_duration_seconds'] = duration
                 if count is not None:
                     current.update(processed_cues=count, total_cues=total)
+                if phase == 'subtitle_source' and source_kind is None:
+                    for key in ('library_source', 'library_asr_service', 'processed_cues', 'total_cues',
+                                'processed_seconds', 'media_duration_seconds'):
+                        current.pop(key, None)
+                if source_kind is not None:
+                    current['library_source'] = source_kind
+                if asr_service is not None:
+                    current['library_asr_service'] = asr_service
                 self._save_locked()
 
+        progress('subtitle_source', None)
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         with self._source_manager.resolve(video_id) as source, tempfile.TemporaryDirectory(
                 prefix='subtitle-library-', dir=self._state_path.parent) as work:
@@ -640,9 +658,10 @@ class SubtitleTaskManager:
                         original_text = read_video_subtitle(track_path, 'ja')
                     except FileNotFoundError:
                         continue
+                    progress('subtitle_source', None, source_kind='existing_srt')
                     break
                 else:
-                    engine._check_cancel(cancel)
+                    progress('audio', None, source_kind='asr')
                     path, duration = self._library_asr(source.video_path, work, limit, progress, cancel)
                     original_text = engine._read_srt_text(path) if path else ''
                 cues = self._library_cues(original_text, limit)
@@ -672,6 +691,7 @@ class SubtitleTaskManager:
                         progress('translate_zh', len(translated) * 100 // len(cues),
                                  processed=processed, count=len(translated), total=len(cues))
             verify(video_id, source)
+        progress('save', None)
         for language, rows in [('ja', cues), ('zh-TW', translated)]:
             path = self._library_track_path(task_id, language)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -680,6 +700,8 @@ class SubtitleTaskManager:
                 f'{engine._format_srt_timestamp(end / 1000)}', text)
                 for index, (start, end, text) in enumerate(rows, 1)]
             engine._atomic_write_text(str(path), engine.render_srt(formatted))
+        if limit is None:
+            progress('publish', None)
         with self._lock:
             engine._check_cancel(cancel)
             current = self._tasks[task_id]
@@ -742,17 +764,16 @@ class SubtitleTaskManager:
                     key = f'{stage}:{language or ""}'
                     if key in task['completed']:
                         continue
-                    input_id = self._input_for(task, stage)
-                    if stage != 'vad' and not input_id:
-                        raise ValueError(f'字幕階段 {stage} 缺少明確的上游結果')
                     with self._lock:
                         current = self._tasks[task_id]
                         if current['generation'] != generation or current['status'] != 'running':
                             raise engine.SubtitleCancelled('Subtitle generation cancelled')
-                        current['current_stage'] = stage
-                        current['current_language'] = language
-                        current['updated_at'] = time.time()
+                        current.update(current_stage=stage, current_language=language, phase=stage,
+                                       stage_progress=None, progress=None, updated_at=time.time())
                         self._save_locked()
+                    input_id = self._input_for(task, stage)
+                    if stage != 'vad' and not input_id:
+                        raise ValueError(f'字幕階段 {stage} 缺少明確的上游結果')
                     cancel_check = lambda: self._cancelled(task_id, generation)
                     snapshot_key = stage if stage in task['profile_snapshots'] else 'text'
                     snapshot = _snapshot_from_dict(task['profile_snapshots'][snapshot_key])
@@ -847,6 +868,7 @@ class SubtitleTaskManager:
                         current['error'] = None
                     else:
                         current['status'] = 'failed'
+                        current['failure_stage'] = current.get('current_stage') or 'prepare'
                         current['error'] = _safe_error(current.get('current_stage'), exc)
                     current['current_stage'] = None
                     current['current_language'] = None

@@ -461,20 +461,26 @@ def test_retry_wait_is_persisted_and_restored_for_manual_resume(manager, monkeyp
     assert restored.get_task(task['task_id'])['retry_attempts'] == {'vad:': 1}
 
 
-def test_progress_callback_is_visible_in_task_snapshot(manager, monkeypatch):
+def test_progress_callback_is_visible_in_current_task_stage(manager, monkeypatch):
     from uav_downloader.subtitles import engine
 
-    task = submit(manager)
-    def run_stage(*args, progress_callback, **kwargs):
-        progress_callback('transcribing', 37)
+    task = manager.submit('video-1', ['vad', 'asr'], {'vad': SNAPSHOT, 'asr': ASR_SNAPSHOT}, [],
+                          audio_path='/tmp/video.wav')
+
+    def run_stage(_video_id, _audio_path, stage, _snapshot, *, progress_callback, **kwargs):
         visible = manager.get_task(task['task_id'])
-        assert visible['phase'] == 'transcribing'
+        assert (visible['phase'], visible['current_stage']) == (stage, stage)
+        assert visible['stage_progress'] is None
+        assert visible['progress'] is None
+        progress_callback(stage, 37)
+        visible = manager.get_task(task['task_id'])
         assert visible['stage_progress'] == 37
         assert visible['progress'] == 37
-        return SimpleNamespace(result_id='result-vad')
+        return SimpleNamespace(result_id=f'result-{stage}')
 
     monkeypatch.setattr(engine, 'run_stage', run_stage)
     manager._run_task(task['task_id'])
+    assert manager.get_task(task['task_id'])['completed'] == ['vad:', 'asr:']
 
 
 def test_http_auth_error_is_specific_and_does_not_echo_url_or_secret(manager, monkeypatch):
