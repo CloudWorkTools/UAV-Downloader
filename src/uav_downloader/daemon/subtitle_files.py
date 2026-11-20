@@ -1,7 +1,7 @@
 """Trusted video sources and atomic SRT publication for subtitle tasks."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 import hashlib
 from html import escape
@@ -131,14 +131,10 @@ class SubtitleFileManager:
 
     def publication_lock_key(self, video_id):
         """Share one lock for the subtitle stem and its provenance file."""
-        return self.publication_identity(video_id)[0]
-
-    def publication_identity(self, video_id):
-        """Identify the shared subtitle stem and the media entitled to its managed tracks."""
         with self._lock:
             descriptor = self._sources.get(video_id)
             if not isinstance(descriptor, dict):
-                return video_id, None
+                return video_id
             relative = (descriptor.get('relative_path') if descriptor.get('kind') == 'smb'
                         else descriptor.get('remote_relative_path')
                         if descriptor.get('output_mode') == 'upload' else None)
@@ -146,12 +142,11 @@ class SubtitleFileManager:
             if relative and isinstance(nas_identity, list) and len(nas_identity) == len(_NAS_IDENTITY_FIELDS):
                 _, host, share, directory, *_ = nas_identity
                 stem = ntpath.normpath(ntpath.join(directory, os.path.splitext(relative)[0]))
-                identity = descriptor.get('remote_identity', descriptor.get('identity'))
-                return ('nas-publication', host.casefold(), share.casefold(), stem), identity
+                return ('nas-publication', host.casefold(), share.casefold(), stem)
             if descriptor.get('kind') == 'local' and isinstance(descriptor.get('path'), str):
                 path = os.path.normcase(os.path.abspath(descriptor['path']))
-                return ('local-publication', os.path.splitext(path)[0]), descriptor.get('identity')
-            return video_id, None
+                return ('local-publication', os.path.splitext(path)[0])
+            return video_id
 
     @staticmethod
     def _media_identity(path, *, handle=None):
@@ -407,7 +402,8 @@ class SubtitleFileManager:
                 target.flush()
             return folder, path
         except BaseException:
-            filesystem.rmtree(folder, ignore_errors=True)
+            with suppress(OSError):
+                filesystem.rmtree(folder, ignore_errors=True)
             raise
 
     @staticmethod
@@ -512,8 +508,9 @@ class SubtitleFileManager:
                     pass
             raise
         finally:
-            if folder and filesystem.exists(folder):
-                filesystem.rmtree(folder, ignore_errors=True)
+            if folder:
+                with suppress(OSError):
+                    filesystem.rmtree(folder, ignore_errors=True)
 
     def _configured_roots(self):
         prefs = config._load_prefs()

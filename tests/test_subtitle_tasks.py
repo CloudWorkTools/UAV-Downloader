@@ -861,12 +861,7 @@ def test_publish_retries_preserve_newer_destination_after_restart(tmp_path, monk
     video_id = files.register(str(movie), allowed_roots=[str(tmp_path)]).video_id
     alias_id = files.register(str(movie), allowed_roots=[str(tmp_path.parent)]).video_id
     assert alias_id != video_id
-    assert files.publication_identity(alias_id) == files.publication_identity(video_id)
-    other_movie = movie.with_suffix('.mkv')
-    other_movie.write_bytes(b'different media')
-    other_id = files.register(str(other_movie), allowed_roots=[str(tmp_path)]).video_id
-    assert files.publication_lock_key(other_id) == files.publication_lock_key(video_id)
-    assert files.publication_identity(other_id) != files.publication_identity(video_id)
+    assert files.publication_lock_key(alias_id) == files.publication_lock_key(video_id)
     monkeypatch.setattr(SubtitleTaskManager, 'start_dispatcher', lambda self: None)
     monkeypatch.setattr(engine, 'translate_cues', lambda texts, *_: texts)
     old_result = SimpleNamespace(
@@ -938,15 +933,15 @@ def test_publish_retries_preserve_newer_destination_after_restart(tmp_path, monk
 
     monkeypatch.setattr(engine, 'translate_cues', unexpected_model)
     if not newer:
-        retried = manager.retry_publish(failed['task_id'], 'zh-TW')
-        assert retried['publish_status']['zh-TW']['status'] == 'published'
+        retried = manager.retry_restored_publish(restored['publication_id'])
+        assert retried['publish_status'] == 'published'
         before_retry = translated.read_bytes()
-        assert '舊任務' in before_retry.decode()
-    for task in [failed, staged] if newer else [staged]:
+        assert '舊的分階段結果' in before_retry.decode()
+    for task in (failed, staged):
         with pytest.raises(ValueError, match='較新的字幕'):
             manager.retry_publish(task['task_id'], 'zh-TW')
         assert manager.get_task(task['task_id'])['publish_status']['zh-TW']['status'] == 'failed'
-    for record in (manual, restored):
+    for record in (manual, restored) if newer else (manual,):
         with pytest.raises(ValueError, match='較新的字幕'):
             manager.retry_restored_publish(record['publication_id'])
     assert translated.read_bytes() == before_retry
@@ -1022,3 +1017,81 @@ def test_library_recognition_uses_managed_asr_and_preserves_prior_tracks(tmp_pat
         assert '新' in manager.library_track(task_id, 'ja')
     if outcome != 'managed':
         assert ja.read_bytes() == old_srt
+
+
+@pytest.mark.parametrize(('newer_name', 'failure_kind'), [
+    ('movie.mkv', None), ('other.mkv', None), ('movie.mp4', 'cleanup'), ('movie.mp4', 'writer'),
+])
+def test_manual_publish_retry_checks_the_shared_subtitle_filename(tmp_path, monkeypatch, newer_name, failure_kind):
+    from uav_downloader.core.storage import LocalStorage
+    from uav_downloader.daemon.subtitle_files import SubtitleFileManager
+    from uav_downloader.daemon.subtitle_tasks import SubtitleTaskManager
+    from uav_downloader.subtitles import results
+    from uav_downloader.subtitles.models import SubtitleSegment
+
+    original_video = tmp_path / 'movie.mp4'
+    newer_video = tmp_path / newer_name
+    original_video.write_bytes(b'original media')
+    if newer_video != original_video:
+        newer_video.write_bytes(b'different media')
+    files_state = tmp_path / 'files.json'
+    files = SubtitleFileManager(files_state)
+    task_state = tmp_path / 'tasks.json'
+    manager = SubtitleTaskManager(task_state, source_manager=files)
+
+    def result(video, result_id, text):
+        return SimpleNamespace(
+            video_id=files.register(str(video), allowed_roots=[str(tmp_path)]).video_id,
+            result_id=result_id, stage='translation', language='zh-TW',
+            segments=(SubtitleSegment('line', 1, 2, text),))
+
+    old = result(original_video, 'old-manual', '舊字幕')
+    new = result(newer_video, 'new-manual', '新字幕')
+    target = original_video.with_suffix('.zh-TW.srt')
+    target.write_bytes('人工字幕'.encode())
+    monkeypatch.setattr(results, 'get', lambda _video, result_id: old if result_id == old.result_id else new)
+
+    def storage_offline(*_):
+        raise OSError('offline fixture')
+
+    with monkeypatch.context() as failure:
+        failure.setattr(files, '_temporary', storage_offline)
+        failed = manager.publish_result(old.video_id, old.result_id, 'zh-TW', replace_existing=True)
+    assert failed['publish_status'] == 'failed'
+    assert target.read_bytes() == '人工字幕'.encode()
+    def fail_workspace_operation(operation):
+        def maybe_fail(filesystem, path, *args, **kwargs):
+            if Path(path).name.startswith('.uav-subtitle-'):
+                raise OSError('lost storage connection during cleanup')
+            return operation(filesystem, path, *args, **kwargs)
+        return maybe_fail
+
+    writer = files.publish_result
+
+    def lose_writer_response(*args, **kwargs):
+        writer(*args, **kwargs)
+        raise OSError('lost storage response after writing')
+
+    with monkeypatch.context() as failure:
+        if failure_kind == 'cleanup':
+            failure.setattr(LocalStorage, 'exists', fail_workspace_operation(LocalStorage.exists))
+            failure.setattr(LocalStorage, 'rmtree', fail_workspace_operation(LocalStorage.rmtree))
+        elif failure_kind == 'writer':
+            failure.setattr(files, 'publish_result', lose_writer_response)
+        published = manager.publish_result(new.video_id, new.result_id, 'zh-TW', replace_existing=True)
+    assert published['publish_status'] == ('failed' if failure_kind == 'writer' else 'published')
+    manager = SubtitleTaskManager(task_state, source_manager=SubtitleFileManager(files_state))
+
+    new_target = newer_video.with_suffix('.zh-TW.srt')
+    before_retry = new_target.read_bytes()
+    assert '新字幕' in before_retry.decode()
+    if target == new_target:
+        with pytest.raises(ValueError, match='較新的字幕'):
+            manager.retry_restored_publish(failed['publication_id'])
+    else:
+        assert manager.retry_restored_publish(failed['publication_id'])['publish_status'] == 'published'
+        assert '舊字幕' in target.read_text(encoding='utf-8')
+    assert new_target.read_bytes() == before_retry
+    if failure_kind == 'writer':
+        assert manager.retry_restored_publish(published['publication_id'])['publish_status'] == 'published'
+        assert new_target.read_bytes() == before_retry

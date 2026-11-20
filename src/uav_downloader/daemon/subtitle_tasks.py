@@ -197,40 +197,37 @@ class SubtitleTaskManager:
             except FileNotFoundError:
                 pass
 
-    def _video_lock(self, video_id):
+    def _publication_destination(self, video_id):
         key_resolver = getattr(self._source_manager, 'publication_lock_key', None)
-        key = key_resolver(video_id) if key_resolver else video_id
+        return key_resolver(video_id) if key_resolver else video_id
+
+    def _video_lock(self, video_id):
+        key = self._publication_destination(video_id)
         with self._lock:
             return self._video_locks.setdefault(key, threading.Lock())
 
     def _publication_key(self, video_id, language):
-        identity = getattr(self._source_manager, 'publication_identity', None)
-        destination = json.dumps([identity(video_id) if identity else video_id, language], ensure_ascii=False)
+        destination = json.dumps([self._publication_destination(video_id), language], ensure_ascii=False)
         return hashlib.sha256(destination.encode('utf-8')).hexdigest()
 
     def _publish_locked(self, video_id, result, language, operation_id, **options):
         """Persist a publication revision while the destination lock is held."""
         key = self._publication_key(video_id, language)
-        persisted = False
-        try:
-            with self._lock:
-                previous = self._publication_heads.get(key)
-                # Record the revision before writing so a crash cannot enable an older retry.
-                self._publication_heads[key] = {
-                    'revision': uuid.uuid4().hex, 'operation': operation_id, 'time': time.time(),
-                }
+        with self._lock:
+            previous = self._publication_heads.get(key)
+            self._publication_heads[key] = {
+                'revision': uuid.uuid4().hex, 'operation': operation_id, 'time': time.time(),
+            }
+            try:
                 self._save_locked()
-                persisted = True
-            return self._source_manager.publish_result(video_id, result, language, **options)
-        except Exception:
-            with self._lock:
+            except Exception:
                 if previous is None:
                     self._publication_heads.pop(key)
                 else:
                     self._publication_heads[key] = previous
-                if persisted:
-                    self._save_locked()
-            raise
+                raise
+        # Storage can change the destination even when the writer reports failure.
+        return self._source_manager.publish_result(video_id, result, language, **options)
 
     def _remember_publish_head(self, record, language):
         key = self._publication_key(record['video_id'], language)
