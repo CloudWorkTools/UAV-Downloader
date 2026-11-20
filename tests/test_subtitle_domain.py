@@ -494,3 +494,14 @@ def test_english_postprocess_fixes_model_casing_without_rewriting_words():
     assert domain.postprocess_english(
         "eBay and iPhone are already correctly styled."
     ) == "eBay and iPhone are already correctly styled."
+
+
+def test_sound_only_cues_preserve_words_and_mixed_dialogue():
+    assert all(domain.is_sound_only_cue(text) for text in (
+        'あっ、あっ、あっ！', 'あああああ', '［喘ぎ声］', '（笑い声）',
+        'はぁ、はぁ', 'ｷｬｰｷｬｰ', 'ワンワン', 'ニャーニャー', '啊、啊、啊',
+    ))
+    assert not any(domain.is_sound_only_cue(text) for text in (
+        'はい、はい', 'いや、いや', 'やめて、やめて', 'あっ、ちょっと待って',
+        '啊，等一下', '嗯', '明日', 'どんどん進んで',
+    ))

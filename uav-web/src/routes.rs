@@ -255,6 +255,7 @@ async fn subtitles_handler(
     if !method_allowed {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
+    let media = uri.path().starts_with("/api/subtitles/videos/") && uri.path().ends_with("/media");
     let content_type = headers.get(header::CONTENT_TYPE);
     if matches!(method, Method::POST | Method::PUT) && !is_json_content_type(content_type) {
         return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
@@ -267,13 +268,37 @@ async fn subtitles_handler(
         method,
         &uri.to_string(),
         content_type,
+        headers.get(header::RANGE).filter(|_| media),
+        media,
         body,
     ).await {
         Ok(response) => response,
         Err(_) => return subtitle_gateway_error(),
     };
     let status = response.status();
+    if media {
+        let mut result = Response::builder().status(status);
+        for name in [
+            header::CONTENT_TYPE, header::CONTENT_LENGTH, header::CONTENT_RANGE,
+            header::ACCEPT_RANGES, header::CACHE_CONTROL, header::X_CONTENT_TYPE_OPTIONS,
+        ] {
+            if let Some(value) = response.headers().get(&name) {
+                result = result.header(name, value);
+            }
+        }
+        let stream = futures_util::stream::unfold(Some(response), |response| async {
+            let mut response = response?;
+            match response.chunk().await {
+                Ok(Some(bytes)) => Some((Ok(bytes), Some(response))),
+                Ok(None) => None,
+                Err(error) => Some((Err(error), None)),
+            }
+        });
+        return result.body(Body::from_stream(stream)).unwrap_or_else(|_| subtitle_gateway_error());
+    }
     let content_type = response.headers().get(reqwest::header::CONTENT_TYPE).cloned();
+    let cache_control = response.headers().get(header::CACHE_CONTROL).cloned();
+    let content_type_options = response.headers().get(header::X_CONTENT_TYPE_OPTIONS).cloned();
     let body = match response.bytes().await {
         Ok(body) => body,
         Err(_) => return subtitle_gateway_error(),
@@ -281,6 +306,12 @@ async fn subtitles_handler(
     let mut result = Response::builder().status(status);
     if let Some(content_type) = content_type {
         result = result.header(header::CONTENT_TYPE, content_type);
+    }
+    if let Some(cache_control) = cache_control {
+        result = result.header(header::CACHE_CONTROL, cache_control);
+    }
+    if let Some(options) = content_type_options {
+        result = result.header(header::X_CONTENT_TYPE_OPTIONS, options);
     }
     result.body(Body::from(body)).unwrap_or_else(|_| subtitle_gateway_error())
 }
@@ -341,6 +372,11 @@ fn subtitle_method_allowed(path: &str, method: &Method) -> Option<bool> {
         ["tasks"] => &[Method::GET, Method::POST][..],
         ["tasks", task_id] if decode_id(task_id).is_some() => &[Method::GET][..],
         ["tasks", task_id, "action"] if decode_id(task_id).is_some() => &[Method::POST][..],
+        ["tasks", task_id, "tracks", "ja" | "zh-TW"]
+            if decode_id(task_id).is_some() => &[Method::GET][..],
+        ["videos", video_id, "media"] if decode_id(video_id).is_some() => &[Method::GET][..],
+        ["videos", video_id, "tracks", "ja" | "en" | "zh-TW"]
+            if decode_id(video_id).is_some() => &[Method::GET][..],
         ["videos", video_id, "results"] if decode_id(video_id).is_some() => &[Method::GET][..],
         ["videos", video_id, "results", result_id]
             if decode_id(video_id).is_some() && decode_id(result_id).is_some() => &[Method::GET][..],
@@ -426,6 +462,14 @@ mod tests {
                         header::CONTENT_TYPE,
                         HeaderValue::from_static("text/plain; charset=utf-8"),
                     );
+                    if status == 206 {
+                        response.headers_mut().insert(
+                            header::CONTENT_RANGE, HeaderValue::from_static("bytes 0-9/20"),
+                        );
+                        response.headers_mut().insert(
+                            header::ACCEPT_RANGES, HeaderValue::from_static("bytes"),
+                        );
+                    }
                     Ok::<_, Infallible>(response)
                 }
             }),
@@ -448,6 +492,24 @@ mod tests {
             ws_hub: WsHub::new(),
             static_dir: None,
         })
+    }
+
+    #[tokio::test]
+    async fn subtitle_proxy_streams_media_with_range() {
+        let (daemon_url, mut seen, shutdown) = mock_daemon().await;
+        let response = app(daemon_url).oneshot(
+            Request::get("/api/subtitles/videos/video-1/media?status=206")
+                .header(header::RANGE, "bytes=0-9")
+                .body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 0-9/20");
+        assert_eq!(response.headers()[header::ACCEPT_RANGES], "bytes");
+        assert_eq!(to_bytes(response.into_body(), 32).await.unwrap().as_ref(), b"daemon-206");
+        let request = seen.recv().await.unwrap();
+        assert_eq!(request.headers[header::RANGE], "bytes=0-9");
+        assert_eq!(request.headers[header::AUTHORIZATION], "Bearer test-secret");
+        shutdown.send(()).unwrap();
     }
 
     #[tokio::test]

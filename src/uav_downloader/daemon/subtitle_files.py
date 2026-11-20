@@ -4,22 +4,84 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
+from html import escape
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 import threading
 import time
 
 from uav_downloader.core import config
 from uav_downloader.core.storage import SMB_PATH_ROOT, storage_fs, storage_open
+from uav_downloader.core.video_identity import video_code
 from uav_downloader.daemon import nas
 from uav_downloader.subtitles import asr, engine
 
 _LANGUAGES = ('ja', 'en', 'zh-TW')
 _VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.ts'}
 _NAS_IDENTITY_FIELDS = ('mode', 'host', 'share', 'directory', 'username', 'direct_path')
+
+
+def subtitle_cue_text(text):
+    return '\n'.join(line for line in text.splitlines() if line.strip()).strip()
+
+
+def srt_to_vtt(text):
+    timestamps = r'(\d{2,}:[0-5]\d:[0-5]\d[,\.]\d{3})'
+    blocks = ['WEBVTT']
+    normalized = text.lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n').strip()
+    if not normalized:
+        return 'WEBVTT\n\n'
+    # Old model output can contain paragraph breaks or empty cues.
+    cues = re.split(r'(?<=\n)[ \t]*\n(?=[ \t]*[0-9]+[ \t]*\n[^\n]*-->)', normalized)
+    for cue in cues:
+        index, _, tail = cue.partition('\n')
+        cue_timing, _, text = tail.partition('\n')
+        timing = re.fullmatch(
+            timestamps + r'\s+-->\s+' + timestamps + r'(?:\s+[^\n]*)?', cue_timing.strip())
+        if not index.strip().isdigit() or not timing:
+            raise ValueError('字幕時間碼格式無效')
+        start, end = (part.replace(',', '.') for part in timing.groups())
+        text = subtitle_cue_text(text)
+        if text:
+            blocks.append(f'{start} --> {end}\n{escape(text, quote=False)}')
+    return '\n\n'.join(blocks) + '\n\n'
+
+
+@contextmanager
+def open_preview_file(path, mode='rb'):
+    filesystem = storage_fs(path)
+    if filesystem.remote or os.open not in os.supports_dir_fd:
+        with storage_open(path, mode) as stream:
+            yield stream
+        return
+    anchor, *parts = Path(path).parts
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(anchor, directory_flags)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, directory_flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=directory)
+    finally:
+        os.close(directory)
+    with os.fdopen(descriptor, mode) as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('預覽檔案不是一般檔案')
+        yield stream
+
+
+def read_video_subtitle(path, language):
+    track = engine.subtitle_paths(path).get(language)
+    filesystem = storage_fs(path)
+    if track is None or filesystem.islink(track) or not filesystem.isfile(track):
+        raise FileNotFoundError('找不到可預覽的字幕')
+    return engine._read_srt_text(track, open_file=open_preview_file)
 
 
 @dataclass(frozen=True)
@@ -83,9 +145,9 @@ class SubtitleFileManager:
             return video_id
 
     @staticmethod
-    def _media_identity(path):
+    def _media_identity(path, *, handle=None):
         try:
-            return engine._media_identity(path)
+            return engine._media_identity(path) if handle is None else engine._media_identity(path, handle=handle)
         except engine.SubtitleError as exc:
             if isinstance(exc.__cause__, OSError):
                 raise OSError('字幕影片來源離線或無讀取權限') from None
@@ -456,6 +518,64 @@ class SubtitleFileManager:
                 pass
         return [root for root in roots if isinstance(root, str) and root]
 
+    @staticmethod
+    def _video_entry(video_id, path, title, source, folder):
+        name = os.path.basename(path)
+        filesystem = storage_fs(path)
+        languages = []
+        for language, track in engine.subtitle_paths(path).items():
+            try:
+                if filesystem.isfile(track) and not filesystem.islink(track):
+                    languages.append(language)
+            except OSError:
+                continue
+        return {'video_id': video_id, 'name': name, 'title': title, 'source': source,
+                'folder': folder.replace(os.path.sep, '/'),
+                'code': video_code({'title': title}) or video_code({'title': Path(name).stem}),
+                'subtitle_languages': languages}
+
+    @contextmanager
+    def preview_video(self, video_id):
+        with self._lock:
+            locator = self._listed.get(video_id)
+        if locator is None:
+            raise ValueError('影片來源已失效，請重新載入影片清單')
+        path, root = locator['path'], locator['root']
+        if locator['kind'] == 'local':
+            self._validate_local(path, self._configured_roots())
+            with open_preview_file(path) as stream:
+                descriptor = {'kind': 'local', 'path': path, 'root': root,
+                              'identity': self._media_identity(path, handle=stream),
+                              'output_mode': 'local'}
+                if self._video_id(descriptor) != video_id:
+                    raise ValueError('影片已變更，請重新載入影片清單')
+                yield path, stream
+            return
+        settings = nas.load_settings(secret=True)
+        if (not settings.get('enabled') or settings.get('mode') not in ('smb', 'upload')
+                or self._nas_identity(settings) != locator['settings']):
+            raise ValueError('NAS 設定已變更，請重新載入影片清單')
+        relative = os.path.relpath(path, root)
+        root = nas.smb_destination()
+        path = os.path.join(root, relative)
+        with nas.open_smb_storage(settings, root, create_directory=False):
+            filesystem = storage_fs(path)
+            if self._validate_smb_locator(filesystem, root, path) != relative:
+                raise ValueError('NAS 影片路徑已變更')
+            if not filesystem.remote or not filesystem.isfile(path):
+                raise ValueError('NAS 影片已離線或不存在')
+            with open_preview_file(path) as stream:
+                descriptor = {'kind': 'smb', 'relative_path': relative,
+                              'identity': self._media_identity(path, handle=stream),
+                              'output_mode': 'smb', 'nas_identity': locator['settings']}
+                if self._video_id(descriptor) != video_id:
+                    raise ValueError('NAS 影片已變更，請重新載入影片清單')
+                yield path, stream
+
+    @staticmethod
+    def preview_track(path, language):
+        return srt_to_vtt(read_video_subtitle(path, language))
+
     def list_videos(self, *, max_entries=1000):
         """List bounded history/configured-root videos and retain source-safe locators."""
         if not isinstance(max_entries, int) or isinstance(max_entries, bool) or not 1 <= max_entries <= 5000:
@@ -464,7 +584,7 @@ class SubtitleFileManager:
 
         self.list_errors = []
         self.list_partial = False
-        self._listed = {}
+        listed = {}
         candidates = {}
         scan_remaining = max_entries
         scan_deadline = time.monotonic() + 8.0
@@ -483,7 +603,8 @@ class SubtitleFileManager:
             path = entry.get('file_path')
             if not path or path.startswith('smb://'):
                 continue
-            candidates[path] = ('history', entry.get('title', ''))
+            if Path(path).suffix.lower() in _VIDEO_EXTENSIONS and not Path(path).name.startswith('.'):
+                candidates[os.path.abspath(path)] = ('history', entry.get('title', ''), None)
         for root in self._configured_roots():
             if scan_remaining <= 0 or scan_expired():
                 self.list_partial = True
@@ -500,13 +621,15 @@ class SubtitleFileManager:
                                     break
                                 scan_remaining -= 1
                                 try:
-                                    if entry.is_symlink():
+                                    if entry.name.startswith('.') or entry.is_symlink():
                                         pass
                                     elif entry.is_dir(follow_symlinks=False):
                                         pending.append(entry.path)
                                     elif (entry.is_file(follow_symlinks=False)
                                           and Path(entry.name).suffix.lower() in _VIDEO_EXTENSIONS):
-                                        candidates.setdefault(entry.path, ('configured', ''))
+                                        origin, title, scanned_root = candidates.get(
+                                            entry.path, ('configured', '', None))
+                                        candidates[entry.path] = (origin, title, scanned_root or root)
                                 except OSError:
                                     self.list_errors.append({'source': 'local', 'root': current,
                                                              'error': '影片離線或無讀取權限'})
@@ -518,11 +641,11 @@ class SubtitleFileManager:
                                                  'error': '下載或掛載目錄離線或無讀取權限'})
                 if pending:
                     self.list_partial = True
-            except OSError:
+            except (OSError, ValueError):
                 self.list_errors.append({'source': 'local', 'root': str(root),
                                          'error': '下載或掛載目錄離線或無讀取權限'})
         result = []
-        for path, (origin, title) in candidates.items():
+        for path, (origin, title, scanned_root) in candidates.items():
             if scan_expired():
                 break
             try:
@@ -532,10 +655,10 @@ class SubtitleFileManager:
                 descriptor = {'kind': 'local', 'path': checked, 'root': root,
                               'identity': identity, 'output_mode': 'local'}
                 video_id = self._video_id(descriptor)
-                self._listed[video_id] = {'kind': 'local', 'path': checked, 'root': root}
-                result.append({'video_id': video_id,
-                               'name': os.path.basename(path), 'title': title,
-                               'source': origin})
+                listed[video_id] = {'kind': 'local', 'path': checked, 'root': root}
+                folder = os.path.relpath(root, scanned_root) if scanned_root else os.path.basename(root)
+                result.append(self._video_entry(video_id, checked, title, origin,
+                                                '' if folder == '.' else folder))
             except (OSError, ValueError):
                 self.list_errors.append({'source': origin, 'root': os.path.dirname(path),
                                          'error': '影片離線或無讀取權限'})
@@ -544,7 +667,7 @@ class SubtitleFileManager:
                 and scan_remaining > 0 and not scan_expired()):
             root = nas.smb_destination()
             try:
-                with nas.open_smb_storage(settings, root):
+                with nas.open_smb_storage(settings, root, create_directory=False):
                     filesystem = storage_fs(root)
                     pending = [(root, '', 0)]
                     while pending and scan_remaining > 0 and not scan_expired():
@@ -559,7 +682,7 @@ class SubtitleFileManager:
                                     path = os.path.join(current, name)
                                     relative = os.path.join(relative_dir, name) if relative_dir else name
                                     try:
-                                        if entry.is_symlink():
+                                        if name.startswith('.') or entry.is_symlink():
                                             pass
                                         elif entry.is_dir(follow_symlinks=False):
                                             if depth < 5:
@@ -574,12 +697,12 @@ class SubtitleFileManager:
                                                           'nas_identity': self._nas_identity(settings),
                                                           'output_mode': 'smb'}
                                             video_id = self._video_id(descriptor)
-                                            self._listed[video_id] = {
+                                            listed[video_id] = {
                                                 'kind': 'smb', 'path': path, 'root': root,
                                                 'settings': self._nas_identity(settings)}
-                                            result.append({'video_id': video_id,
-                                                           'name': name, 'title': '', 'source': 'smb'})
-                                    except OSError:
+                                            result.append(self._video_entry(
+                                                video_id, path, '', 'smb', relative_dir))
+                                    except (OSError, ValueError):
                                         self.list_errors.append({'source': 'smb', 'root': relative,
                                                                  'error': '影片離線或無讀取權限'})
                                     if scan_remaining <= 0:
@@ -596,6 +719,8 @@ class SubtitleFileManager:
         if len(result) > max_entries:
             result = result[:max_entries]
             self.list_partial = True
+        with self._lock:
+            self._listed = listed
         return result
 
     def register_history(self, video_id):

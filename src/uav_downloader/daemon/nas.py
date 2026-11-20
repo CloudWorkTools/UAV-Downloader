@@ -378,12 +378,12 @@ def public_destination(settings, filename=''):
 
 
 @contextmanager
-def open_smb_storage(settings, destination):
+def open_smb_storage(settings, destination, *, create_directory=True):
     from uav_downloader.core.smb_storage import SmbStorage
     backend = SmbStorage(settings, destination)
     try:
         with registered_storage(destination, backend):
-            if settings['directory']:
+            if create_directory and settings['directory']:
                 backend.makedirs(destination, exist_ok=True)
             if not backend.isdir(destination):
                 raise NasError('NAS 共享資料夾或子目錄不存在')

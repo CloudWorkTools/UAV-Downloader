@@ -5,8 +5,12 @@
       const data=await response.json(); if(!response.ok||data.success===false)throw new Error(data.error||'字幕操作失敗'); return data;
     });
     const state={videos:[],videoErrors:[],videoPartial:false,videoNotice:null,tasks:[],publications:[],results:[],selected:new Set(),activeVideo:null,preview:null};
-    let submitting=false,resultsRequest=0,refreshInFlight=null;
+    let submitting=false,resultsRequest=0,refreshInFlight=null,videoScanInFlight=null;
     let pendingTaskRender=false,pendingResultsRender=false;
+    let libraryVideo=null, libraryTrigger=null, libraryResult=null, libraryTrackKey=null, libraryTrackUrls=[];
+    let libraryTrackRequest=0;
+    let libraryCaptionLanguage=null;
+    let activeFolder=null,currentJobs=[],submitNotice='';
     const byId=id=>root.getElementById(id), el=(tag,text='',cls='')=>{const node=root.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;};
     function addSnapshotDetails(container,entries,label='檢視設定快照'){
       const details=el('details','','text-xs text-gray-400');const summary=el('summary',label,'cursor-pointer');details.append(summary);
@@ -20,6 +24,8 @@
     const stageLabels={vad:'語音區間',asr:'語音辨識',correction:'字幕校正',translation:'字幕翻譯'};
     const statusLabels={queued:'排隊中',running:'處理中',retry_wait:'等待重試',cancelling:'取消中',waiting_for_resume:'等待手動續跑',completed:'已完成',failed:'失敗',cancelled:'已取消'};
     const languageLabels={ja:'日文',en:'英文','zh-TW':'繁體中文'};
+    const libraryPhases={model:'準備辨識模型',audio:'擷取影片音訊',transcribe:'語音辨識',transcribe_ja:'日文語音辨識',subtitle_source:'確認日文字幕來源',save:'儲存字幕',
+      asr_tail_retry:'辨識片段重試',asr_cached:'沿用辨識片段',translation_model:'準備翻譯模型',translate_zh:'字幕翻譯',saving:'儲存字幕'};
     const sourceLabels={history:'下載歷史',configured:'影片目錄',smb:'NAS'};
     const publicationLabels={published:'已發布',failed:'儲存失敗',publishing:'發布中',not_requested:'未要求發布'};
     const label=(map,value,fallback='')=>map[value]||fallback||value||'—';
@@ -35,12 +41,399 @@
       const box=byId('subtitle-videos'); if(!box||box.contains(root.activeElement))return;
       box.replaceChildren();
       if(!state.videos.length){box.append(el('p','目前找不到可處理的影片。影片會從下載歷史與已設定的影片目錄載入。','text-sm text-gray-400'));return;}
+      const searchText=value=>String(value||'').normalize('NFKC').toLowerCase();
+      const query=searchText(byId('subtitle-video-search')?.value).trim().split(/\s+/).filter(Boolean);
+      const groups=new Map();
       for(const video of state.videos){
-        const row=el('label','', 'flex items-start gap-3 rounded-lg border border-[#3e3e4e] p-3');
-        const check=el('input');check.type='checkbox';check.value=video.video_id;check.dataset.testid=`subtitle-video-${video.video_id}`;check.checked=state.selected.has(video.video_id);check.className='mt-1 h-5 w-5 accent-brand-600';
-        check.addEventListener('change',()=>{check.checked?state.selected.add(video.video_id):state.selected.delete(video.video_id);});
-        const text=el('span',`${video.title || video.name || '未命名影片'} · ${label(sourceLabels,video.source,'影片')}`,'min-w-0 break-words text-sm');row.append(check,text);box.append(row);
+        const folder=video.folder||'根目錄';
+        const storage=video.source==='smb'?'NAS／SMB':'本機';
+        const groupName=`${storage} · ${folder}`;
+        if(!groups.has(groupName))groups.set(groupName,[]);
+        groups.get(groupName).push(video);
       }
+      const folders=byId('subtitle-folders');
+      if(folders){
+        const sorted=[...groups].sort(([a],[b])=>Number(b.startsWith('NAS'))-Number(a.startsWith('NAS'))||a.localeCompare(b,'zh-Hant'));
+        if(!groups.has(activeFolder))activeFolder=sorted[0]?.[0];
+        folders.replaceChildren(el('h5','資料夾','px-1 text-sm font-semibold text-white'));
+        for(const [name,videos] of sorted){
+          const button=el('button',`${name} · ${videos.length}`,'min-h-12 w-full break-words rounded-lg border border-[#3e3e4e] px-3 py-2 text-left text-sm aria-pressed:bg-[#42344d]');
+          button.type='button';
+          button.setAttribute('aria-pressed',String(name===activeFolder&&!query.length));
+          button.addEventListener('click',()=>{activeFolder=name;byId('subtitle-video-search').value='';renderVideos();[...folders.querySelectorAll('button')].find(item=>item.getAttribute('aria-pressed')==='true')?.focus();});
+          folders.append(button);
+        }
+      }
+      let shown=0;
+      for(const [folder,entries] of groups){
+        if(folders&&!query.length&&folder!==activeFolder)continue;
+        const videos=entries.filter(video=>query.every(word=>searchText([video.title,video.name,video.code].join(' ')).includes(word)));
+        if(!videos.length)continue;
+        shown+=videos.length;
+        const group=el('section','','space-y-2');
+        group.append(el('h5',folder,'break-words px-2 text-xs font-medium text-gray-400'));
+        for(const video of videos){
+          const row=el('div','','flex items-center gap-2 rounded-lg border border-[#3e3e4e] p-2');
+          const choice=el('label','','flex min-w-0 flex-1 items-start gap-2 p-1');
+          const title=video.title||video.name||'未命名影片';
+          const check=el('input');check.type='checkbox';check.value=video.video_id;check.dataset.testid=`subtitle-video-${video.video_id}`;check.checked=state.selected.has(video.video_id);check.className='mt-1 h-5 w-5 accent-brand-600';
+          check.addEventListener('change',()=>{check.checked?state.selected.add(video.video_id):state.selected.delete(video.video_id);});
+          choice.append(check,el('span',title,'min-w-0 break-words text-sm'));
+          const preview=el('button','預覽與翻譯','min-h-10 shrink-0 rounded border border-[#3e3e4e] px-2 text-xs');
+          preview.type='button';
+          preview.setAttribute('aria-label',`預覽與翻譯：${title}`);
+          preview.setAttribute('aria-controls','subtitle-library-player');
+          preview.addEventListener('click',()=>openLibraryVideo(video,preview));
+          row.append(choice,preview);
+          group.append(row);
+        }
+        box.append(group);
+      }
+      if(!shown)box.append(el('p','找不到符合的影片。','text-sm text-gray-400'));
+    }
+    function applyLibraryCaption(){
+      const media=byId('subtitle-library-video');
+      const selector=byId('subtitle-library-caption');
+      const tracks=[...media.querySelectorAll('track')];
+      const language=libraryCaptionLanguage??'zh-TW';
+      for(const track of tracks)track.track.mode=track.srclang===language?'showing':'disabled';
+      if(!selector)return;
+      selector.replaceChildren(new Option('關閉字幕',''),...tracks.map(track=>new Option(track.label,track.srclang)));
+      selector.value=tracks.some(track=>track.srclang===language)?language:'';
+      selector.disabled=!tracks.length;
+    }
+    function bindLibraryCaption(){
+      const media=byId('subtitle-library-video');
+      if(!media||byId('subtitle-library-caption'))return;
+      const label=el('label','顯示字幕','flex flex-wrap items-center gap-2 text-sm text-gray-200');
+      const selector=el('select','','min-h-10 rounded border border-[#535366] bg-[#282832] px-3');
+      selector.id='subtitle-library-caption';
+      selector.append(new Option('關閉字幕',''));
+      selector.disabled=true;
+      label.append(selector);
+      media.after(label);
+      selector.addEventListener('change',()=>{
+        libraryCaptionLanguage=selector.value;
+        applyLibraryCaption();
+      });
+      media.textTracks.addEventListener('change',()=>{
+        const showing=[...media.textTracks].filter(track=>track.mode==='showing');
+        const preferred=libraryCaptionLanguage??'zh-TW';
+        const active=showing.find(track=>track.language===preferred)||showing[0];
+        if(showing.length>1){
+          for(const track of showing)if(track!==active)track.mode='disabled';
+        }
+        selector.value=active?.language||'';
+      });
+    }
+    function setLibraryTracks(key){
+      const media=byId('subtitle-library-video');
+      libraryTrackRequest++;
+      libraryTrackKey=key;
+      media.replaceChildren();
+      for(const url of libraryTrackUrls)URL.revokeObjectURL(url);
+      libraryTrackUrls=[];
+      applyLibraryCaption();
+    }
+    function appendLibraryTrack(language,src,labelText){
+      const media=byId('subtitle-library-video');
+      const previous=[...media.querySelectorAll('track')].find(track=>track.srclang===language);
+      const track=el('track');
+      track.kind='subtitles';
+      track.srclang=language;
+      track.label=labelText;
+      track.src=src;
+      track.default=language===(libraryCaptionLanguage??'zh-TW');
+      track.addEventListener('error',()=>{
+        if(track.isConnected&&track.track.mode==='showing')byId('subtitle-library-error').textContent=
+          `${languageLabels[language]}字幕無法載入，請重新開啟字幕結果。`;
+      });
+      if(previous)previous.replaceWith(track);
+      else media.append(track);
+      applyLibraryCaption();
+    }
+    function openLibraryVideo(video,trigger,result=null){
+      const player=byId('subtitle-library-player'), media=byId('subtitle-library-video');
+      if(!player||!media)return;
+      libraryVideo=video;
+      libraryTrigger=trigger;
+      libraryResult=result;
+      setLibraryTracks(null);
+      player.hidden=false;
+      const title=byId('subtitle-library-title');
+      title.textContent=video.title||video.name||'影片預覽';
+      byId('subtitle-library-error').textContent='';
+      media.src=`/api/subtitles/videos/${encodeURIComponent(video.video_id)}/media`;
+      updateLibraryStatus();
+      title.focus();
+    }
+    function closeLibraryVideo(){
+      if(!libraryVideo)return;
+      const media=byId('subtitle-library-video');
+      libraryVideo=null;
+      media.pause();
+      media.removeAttribute('src');
+      setLibraryTracks(null);
+      media.load();
+      byId('subtitle-library-player').hidden=true;
+      if(libraryTrigger?.isConnected)libraryTrigger.focus();
+      else byId('subtitle-video-search')?.focus();
+    }
+    function mediaTime(seconds){
+      const value=Math.floor(seconds);
+      return `${Math.floor(value/60)}:${String(value%60).padStart(2,'0')}`;
+    }
+    function addCompletedLibraryTracks(task){
+      const request=libraryTrackRequest;
+      for(const language of ['ja','zh-TW']){
+        const path=`/api/subtitles/tasks/${encodeURIComponent(task.task_id)}/tracks/${encodeURIComponent(language)}`;
+        api('GET',path).then(result=>{
+          if(libraryTrackRequest!==request||typeof result.vtt!=='string')return;
+          const url=URL.createObjectURL(new Blob([result.vtt],{type:'text/vtt'}));
+          libraryTrackUrls.push(url);
+          appendLibraryTrack(language,url,`${languageLabels[language]}（${task.trial_seconds?'試翻':'本次結果'}）`);
+        }).catch(error=>{
+          if(libraryTrackRequest===request)byId('subtitle-library-error').textContent=`字幕預覽載入失敗：${error.message}`;
+        });
+      }
+    }
+    function updateLibraryStatus(){
+      if(!libraryVideo)return;
+      const videoId=libraryVideo.video_id;
+      const tasks=state.tasks.filter(task=>task.video_id===videoId&&task.library_translation)
+        .sort((a,b)=>(b.created_at??0)-(a.created_at??0));
+      const latest=tasks[0];
+      const lastCompleted=tasks.find(task=>task.task_id===libraryResult&&task.status==='completed')
+        ||tasks.find(task=>task.status==='completed');
+      const video=state.videos.find(item=>item.video_id===videoId)||libraryVideo;
+      const trackKey=JSON.stringify([videoId,lastCompleted?.task_id,video.subtitle_languages]);
+      if(trackKey!==libraryTrackKey){
+        setLibraryTracks(trackKey);
+        for(const language of ['zh-TW','ja']){
+          if(!video.subtitle_languages?.includes(language))continue;
+          appendLibraryTrack(language,`/api/subtitles/videos/${encodeURIComponent(videoId)}/tracks/${encodeURIComponent(language)}`,languageLabels[language]);
+        }
+        if(lastCompleted)addCompletedLibraryTracks(lastCompleted);
+      }
+      const progress=byId('subtitle-library-stage-progress');
+      const timeline=byId('subtitle-library-timeline');
+      const position=byId('subtitle-library-position');
+      const phase=byId('subtitle-library-phase');
+      const percent=latest?.stage_progress??latest?.progress;
+      const phaseName=libraryPhases[latest?.phase]||stageLabels[latest?.current_stage];
+      const details=[phaseName&&latest?.status==='running'?phaseName:'',
+        Number.isFinite(percent)?`階段進度 ${percent}%`:'',
+        Number.isFinite(latest?.processed_cues)?`已翻譯 ${latest.processed_cues}／${latest.total_cues} 句`:'',
+        latest?.error];
+      const elapsed=latest?.status==='running'&&Number.isFinite(latest.created_at)
+        ? `已提交 ${mediaTime(Math.max(0,Date.now()/1000-latest.created_at))}`:'';
+      const message=latest?[latest.trial_seconds?'試翻':'整部翻譯',label(statusLabels,latest.status),...details,
+        Number.isFinite(percent)?'':elapsed].filter(Boolean).join(' · '):'尚未啟動翻譯';
+      if(phase.textContent!==message)phase.textContent=message;
+      progress.hidden=!Number.isFinite(percent);
+      if(!progress.hidden)progress.value=percent;
+      const processed=latest?.processed_seconds;
+      const duration=byId('subtitle-library-video').duration;
+      timeline.hidden=!Number.isFinite(processed)||!Number.isFinite(duration)||duration<=0;
+      if(!timeline.hidden){
+        const positionSeconds=Math.min(processed,duration);
+        timeline.max=duration;
+        timeline.value=positionSeconds;
+        position.textContent=`已處理至 ${mediaTime(positionSeconds)}／${mediaTime(duration)}（影片時間軸 ${Math.floor(positionSeconds/duration*100)}%）`;
+      }else{
+        position.textContent=Number.isFinite(processed)?`已處理至 ${mediaTime(processed)}`:'';
+      }
+      const working=tasks.some(task=>['queued','running','retry_wait','cancelling','waiting_for_resume'].includes(task.status));
+      for(const id of ['subtitle-library-trial','subtitle-library-full']){
+        const button=byId(id);
+        button.disabled=working||busyActions.has(`library:${videoId}`);
+      }
+    }
+    function taskFlow(task){
+      const server='部署伺服器';
+      const pending='waiting';
+      const completed=task.completed||[];
+      const publication=Object.values(task.publish_status||{});
+      const outputFailed=publication.some(entry=>entry.status==='failed');
+      const outputRequested=task.library_translation?!task.trial_seconds:!!task.output_languages?.length;
+      const nodes=[{id:'queue',title:'接收與排隊',where:server,status:task.status==='queued'?'queued':'completed'}];
+      const persistedStage=task.failure_stage||task.current_stage;
+      const flowStages={prepare:'source',audio:'source',save:'output',publish:'output'};
+      let active=flowStages[persistedStage]||persistedStage;
+      const phase=libraryPhases[task.phase];
+      if(task.library_translation){
+        let source=task.library_source;
+        const recognitionPhase=['audio','model','transcribe','transcribe_ja','asr_tail_retry','asr_cached'].includes(task.phase);
+        if(!source&&recognitionPhase)source='asr';
+        if(!task.failure_stage&&(!active||(persistedStage==='translation'&&recognitionPhase))){
+          if(recognitionPhase)active=task.phase==='audio'?'source':'asr';
+          else if(['saving','save'].includes(task.phase))active='output';
+          else if(['translation_model','translate_zh'].includes(task.phase))active='translation';
+          else if(!active&&task.status==='running')active='source';
+        }
+        const translated=task.status==='completed'||active==='output';
+        const recognitionServices={speaches:'同機語音辨識服務 · Speaches',loopback:'同機語音辨識服務',native:'部署伺服器本機模型'};
+        const asrDone=source==='asr'&&(active==='translation'||translated);
+        nodes.push(
+          {id:'source',title:source==='existing_srt'?'讀取日文 SRT':source==='asr'?'擷取影片音訊':'確認日文字幕來源',where:server,
+            status:source==='existing_srt'||(source==='asr'&&active!=='source')||translated?'completed':pending},
+          {id:'asr',title:'日文語音辨識',where:recognitionServices[task.library_asr_service]||'部署環境的語音辨識服務',
+            status:source==='existing_srt'?'skipped':asrDone?'completed':translated?'unknown':pending},
+          {id:'translation',title:'翻譯繁中',where:`${server} · FuguMT／OPUS-MT`,status:translated?'completed':pending},
+        );
+      }else{
+        const stages=task.selected_stages||[];
+        if(task.status==='failed'&&!active)active=stages.find(stage=>task.error?.startsWith(`${stage} 階段`));
+        if(!active){
+          const allDone=stages.length&&stages.every(stage=>completed.some(key=>key.startsWith(`${stage}:`)));
+          if(task.status==='running'){
+            if(allDone)active='output';
+            else if(!completed.length)active='source';
+          }
+        }
+        const prepared=(active&&active!=='source')||completed.length||task.status==='completed';
+        nodes.push({id:'source',title:'準備影片與字幕輸入',where:server,status:prepared?'completed':pending});
+        const providerNames={localai:'LocalAI',openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',ollama:'Ollama',lmstudio:'LM Studio','openai-compatible':'OpenAI 相容服務'};
+        for(const stage of Object.keys(stageLabels)){
+          const snapshot=task.profile_snapshots?.[stage]||task.profile_snapshots?.text;
+          const profile=snapshot?.profile;
+          const endpoint=[providerNames[profile?.provider]||profile?.provider,profile?.model].filter(Boolean).join('／');
+          const keys=stage==='translation'?(task.target_languages||[]).map(language=>`translation:${language}`):[`${stage}:`];
+          const done=keys.length&&keys.every(key=>completed.includes(key));
+          nodes.push({id:stage,title:stageLabels[stage],where:endpoint?`設定檔服務 · ${endpoint}`:'設定檔指定的服務',
+            status:!stages.includes(stage)?'skipped':done||task.status==='completed'?'completed':pending});
+        }
+      }
+      nodes.push({id:'output',title:outputRequested?'儲存與發布字幕':'儲存字幕結果',where:server,
+        status:outputFailed?'failed':task.status==='completed'?'completed':pending,
+        error:publication.find(entry=>entry.status==='failed')?.error});
+      const current=nodes.find(node=>node.id===active);
+      if(!current&&task.status==='waiting_for_resume')nodes[0].status='paused';
+      if(current){
+        const statuses={running:'running',retry_wait:'retry_wait',failed:'failed',waiting_for_resume:'paused',cancelling:'cancelling',cancelled:'cancelled'};
+        if(statuses[task.status]&&current.status!=='skipped'){
+          current.status=task.phase==='asr_tail_retry'&&task.status==='running'?'retry_wait':statuses[task.status];
+          if(task.status==='running')current.phase=phase;
+          if(task.status==='failed')current.error=task.error;
+          current.percent=task.stage_progress??task.progress;
+        }
+      }
+      return nodes;
+    }
+    function renderTaskFlows(panel,list){
+      let container=panel.querySelector('[data-subtitle-task-flows]');
+      if(!container){
+        container=el('div','','space-y-3');
+        container.dataset.subtitleTaskFlows='';
+        panel.insertBefore(container,byId('subtitle-current-job-queue'));
+      }
+      const taskLabels={queued:'排隊中',waiting:'等待中',running:'處理中',retry_wait:'等待重試',paused:'等待手動續跑',cancelling:'取消中',
+        cancelled:'已取消',failed:'失敗',completed:'已完成',skipped:'已略過',unknown:'既有任務未記錄'};
+      const flows=list.map(task=>{
+        const video=state.videos.find(item=>item.video_id===task.video_id);
+        return {id:task.task_id,title:video?.title||video?.name||task.video_id,nodes:taskFlow(task)};
+      });
+      const signature=JSON.stringify(flows);
+      if(container.dataset.flowSignature===signature)return;
+      container.dataset.flowSignature=signature;
+      container.replaceChildren();
+      for(const {id,title,nodes} of flows){
+        const diagram=el('ol','','flex flex-wrap items-stretch gap-2 text-xs text-gray-200');
+        diagram.setAttribute('role','list');
+        diagram.setAttribute('aria-label',`${title}的字幕流程`);
+        diagram.dataset.subtitleTaskFlow=id;
+        for(const [index,node] of nodes.entries()){
+          const item=el('li','','flex min-w-0 items-center gap-2');
+          item.dataset.flowStage=node.id;
+          item.dataset.flowStatus=node.status;
+          if(index){
+            const arrow=el('span','→','text-gray-400');
+            arrow.setAttribute('aria-hidden','true');
+            item.append(arrow);
+          }
+          const active=['queued','running','retry_wait','paused','cancelling'].includes(node.status);
+          if(active)item.setAttribute('aria-current','step');
+          const color=node.status==='failed'?'border-red-400':active?'border-sky-400':'border-[#535366]';
+          const card=el('div','',`min-w-0 break-words rounded-lg border ${color} bg-[#1a1820] p-2`);
+          card.append(el('p',node.title,'font-semibold text-white'),
+            el('p',node.where,'text-gray-300'),
+            el('p',[taskLabels[node.status],node.phase].filter(Boolean).join(' · '),'text-gray-200'));
+          if(node.error)card.append(el('p',node.error,'text-rose-300'));
+          if(node.status==='running'&&Number.isFinite(node.percent)&&node.percent>=0&&node.percent<=100){
+            const bar=el('progress','','block w-full');
+            bar.max=100;
+            bar.value=node.percent;
+            bar.setAttribute('aria-label',`${node.title}進度`);
+            card.append(bar,el('span',`${node.percent}%`));
+          }
+          item.append(card);
+          diagram.append(item);
+        }
+        const section=el('div','','space-y-2 rounded-lg border border-[#535366] p-3');
+        section.append(el('p',title,'break-words text-sm font-medium text-white'),diagram);
+        container.append(section);
+      }
+    }
+    function renderCurrentJobs({focus=false}={}){
+      const panel=byId('subtitle-current-job');
+      if(!panel)return;
+      const activeStatuses=['queued','running','retry_wait','cancelling','waiting_for_resume'];
+      const current=currentJobs.map(job=>state.tasks.find(task=>task.task_id===job.task_id)||job);
+      const list=[...current,...state.tasks.filter(task=>activeStatuses.includes(task.status)
+        &&!current.some(job=>job.task_id===task.task_id))];
+      if(!list.length&&state.tasks.length){
+        list.push(state.tasks.reduce((latest,task)=>(task.created_at||0)>(latest.created_at||0)?task:latest));
+      }
+      panel.hidden=!submitNotice&&!list.length;
+      const lines=list.map(task=>{
+        const video=state.videos.find(item=>item.video_id===task.video_id);
+        const name=video?.title||video?.name||task.video_id;
+        const phase=libraryPhases[task.phase]||stageLabels[task.current_stage];
+        const percent=task.stage_progress??task.progress;
+        const progress=task.status==='running'&&Number.isFinite(percent)?`進度 ${percent}%`:'';
+        const cues=Number.isFinite(task.processed_cues)?`已翻譯 ${task.processed_cues}／${task.total_cues} 句`:'';
+        const time=Number.isFinite(task.processed_seconds)?`處理至 ${mediaTime(task.processed_seconds)}`:'';
+        const publication=Object.values(task.publish_status||{}).find(value=>value.status==='failed');
+        return [name,task.status==='queued'?'已收到，排隊中':label(statusLabels,task.status),phase,progress,cues,time,task.error,publication?.error].filter(Boolean).join(' · ');
+      });
+      const message=[submitNotice,...lines].filter(Boolean).join('\n');
+      const statusNode=byId('subtitle-current-job-status');
+      if(statusNode.textContent!==message)statusNode.textContent=message;
+      statusNode.style.whiteSpace='pre-line';
+      const bar=byId('subtitle-current-job-progress'),task=list[0];
+      bar.hidden=list.length!==1||task.status!=='running';
+      if(!bar.hidden){
+        const value=task.stage_progress??task.progress;
+        if(Number.isFinite(value))bar.value=value;
+        else bar.removeAttribute('value');
+      }
+      renderTaskFlows(panel,list);
+      if(focus&&!panel.hidden)panel.focus();
+    }
+    async function submitLibraryTranslation(trial){
+      if(!libraryVideo)return;
+      const video_id=libraryVideo.video_id;
+      const key=`library:${video_id}`;
+      if(busyActions.has(key))return;
+      busyActions.add(key);
+      currentJobs=[];submitNotice='正在提交字幕任務…';renderCurrentJobs({focus:true});
+      libraryResult=null;
+      byId('subtitle-library-error').textContent='';
+      updateLibraryStatus();
+      try{
+        const item={video_id,library_translation:true};
+        if(trial)item.trial_seconds=120;
+        const result=await api('POST','/api/subtitles/tasks',{items:[item]});
+        if(!result.items?.[0]?.success)throw new Error(result.items?.[0]?.error||'字幕任務沒有成功提交。');
+        currentJobs=[result.items[0].task].filter(Boolean);submitNotice='';renderCurrentJobs({focus:true});
+        status('字幕任務已加入佇列。');
+        await refresh();
+      }catch(error){
+        submitNotice=error.message;renderCurrentJobs();
+        if(libraryVideo?.video_id===video_id)byId('subtitle-library-error').textContent=error.message;
+        status(error.message,true);
+      }
+      finally{busyActions.delete(key);updateLibraryStatus();}
     }
     function renderVideoErrors(){const box=byId('subtitle-video-errors');if(!box)return;box.replaceChildren();if(state.videoNotice)box.append(el('p',state.videoNotice));for(const error of state.videoErrors){box.append(el('p',`${label(sourceLabels,error.source,'影片來源')}：${error.error||'目前無法讀取'}`));}}
     function renderTasks(preserveFocus=false){
@@ -69,9 +462,13 @@
           addAction('up','往前',()=>act(task,'reorder',{position:Math.max(0,index-1)}));
           addAction('down','往後',()=>act(task,'reorder',{position:index+1}));
         }
-        addAction('redo','重做階段',()=>openRedo(task));
-        if(['queued','waiting_for_resume'].includes(task.status)&&!task.ever_started&&!task.inputs?.length)addAction('settings','套用新設定',()=>applySettings(task));
-        addAction('results','查看字幕結果',()=>loadResults(task.video_id));
+        if(task.library_translation){
+          if(source&&task.status==='completed')addAction('results','播放字幕結果',()=>openLibraryVideo(source,root.activeElement,task.task_id));
+        }else{
+          addAction('redo','重做階段',()=>openRedo(task));
+          if(['queued','waiting_for_resume'].includes(task.status)&&!task.ever_started&&!task.inputs?.length)addAction('settings','套用新設定',()=>applySettings(task));
+          addAction('results','查看字幕結果',()=>loadResults(task.video_id));
+        }
         row.append(actions);box.append(row);
       }
       if(focusedTestId){const target=[...box.querySelectorAll('[data-testid]')].find(node=>node.dataset.testid===focusedTestId);target?.focus();}
@@ -161,17 +558,90 @@
       if(submitting)return;
       let spec;try{spec=requestBody();if(!spec)throw new Error('請至少選擇一個字幕階段。');}catch(error){status(error.message,true);return;}
       const items=[...state.selected].map(video_id=>({video_id,...spec}));
-      submitting=true;status('');const button=byId('subtitle-confirm-submit'),wasFocused=root.activeElement===button;let failed=false;if(button)button.disabled=true;
-      try{const data=await api('POST','/api/subtitles/tasks',{items});const accepted=data.items||[];const failed=accepted.filter(item=>!item.success);state.selected=new Set(failed.map(item=>item.video_id).filter(Boolean));if(failed.length)status(`已提交 ${accepted.length-failed.length} 項；${failed.length} 項失敗：${failed.map(item=>item.error).join('；')}`,true);else status(`已提交 ${accepted.length} 項字幕任務。`);byId('subtitle-confirm-dialog')?.close();await refresh();}
+      submitting=true;status('');
+      const pending=byId('subtitle-confirm-pending');
+      if(pending)pending.textContent='正在提交字幕任務…';
+      const button=byId('subtitle-confirm-submit'),wasFocused=root.activeElement===button;let failed=false;if(button)button.disabled=true;
+      try{
+        const data=await api('POST','/api/subtitles/tasks',{items});
+        const accepted=data.items||[];
+        const rejected=accepted.filter(item=>!item.success);
+        const acceptedTasks=accepted.filter(item=>item.success&&item.task).map(item=>item.task);
+        if(!acceptedTasks.length)throw new Error(rejected.map(item=>item.error).join('；')||'沒有字幕任務成功送出。');
+        state.selected=new Set(rejected.map(item=>item.video_id).filter(Boolean));
+        currentJobs=acceptedTasks;
+        submitNotice=rejected.length?`另有 ${rejected.length} 項未送出：${rejected.map(item=>item.error).join('；')}`:'';
+        byId('subtitle-confirm-dialog')?.close();
+        status(submitNotice,!!rejected.length);
+        renderCurrentJobs({focus:true});
+        await refresh();
+      }
       catch(error){failed=true;status(error.message,true);}
-      finally{submitting=false;if(button)button.disabled=false;if(failed)restoreFailedDialogActionFocus('subtitle-confirm-dialog',button,wasFocused);}
+      finally{submitting=false;if(pending)pending.textContent='';if(button)button.disabled=false;if(failed)restoreFailedDialogActionFocus('subtitle-confirm-dialog',button,wasFocused);}
+    }
+    function renderResultSelector(){
+      const selector=byId('subtitle-result-video');
+      if(!selector||selector.contains(root.activeElement))return;
+      const previous=selector.value;
+      const known=new Map(state.videos.map(video=>[video.video_id,video.title||video.name||video.video_id]));
+      for(const task of state.tasks){
+        if(!known.has(task.video_id))known.set(task.video_id,`${task.video_id} · 來源可能離線`);
+      }
+      selector.replaceChildren();
+      for(const [id,title] of known){
+        const option=el('option',title);
+        option.value=id;
+        selector.append(option);
+      }
+      if(known.has(previous))selector.value=previous;
+      else if(selector.options.length)selector.value=selector.options[0].value;
+    }
+    function renderTaskPanels(){
+      renderTasks();
+      renderPublications();
+      updateLibraryStatus();
+      renderCurrentJobs();
     }
     async function refresh({scanVideos=false}={}){
-      if(refreshInFlight){await refreshInFlight;if(scanVideos)return refresh({scanVideos:true});return state;}
-      refreshInFlight=(async()=>{try{const [videos,tasks]=await Promise.all([scanVideos?api('GET','/api/subtitles/videos'):Promise.resolve(null),api('GET','/api/subtitles/tasks')]);if(videos){state.videos=videos.videos||[];state.videoErrors=videos.errors||[];state.videoPartial=videos.partial===true;state.videoNotice=videos.notice||null;settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;renderVideos();renderVideoErrors();}state.tasks=tasks.tasks||[];state.publications=tasks.publications||[];renderTasks();renderPublications();const selector=byId('subtitle-result-video');if(scanVideos&&selector&&!selector.contains(root.activeElement)){const previous=selector.value;selector.replaceChildren();const known=new Set();for(const video of state.videos){const option=el('option',video.title||video.name||video.video_id);option.value=video.video_id;selector.append(option);known.add(video.video_id);}for(const task of state.tasks){if(known.has(task.video_id))continue;const option=el('option',`${task.video_id} · 來源可能離線`);option.value=task.video_id;selector.append(option);known.add(task.video_id);}if([...selector.options].some(option=>option.value===previous))selector.value=previous;else if(selector.options.length)selector.value=selector.options[0].value;}if(state.activeVideo)await loadResults(state.activeVideo);return state;}catch(error){status(error.message,true);return state;}})();
-      try{return await refreshInFlight;}finally{refreshInFlight=null;}
+      if(scanVideos&&!videoScanInFlight){
+        videoScanInFlight=api('GET','/api/subtitles/videos').then(videos=>{
+          state.videos=videos.videos||[];
+          state.videoErrors=videos.errors||[];
+          state.videoPartial=videos.partial===true;
+          state.videoNotice=videos.notice||null;
+          settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;
+          renderVideos();
+          renderVideoErrors();
+          renderTaskPanels();
+          renderResultSelector();
+        }).catch(error=>{
+          state.videoNotice=`影片庫載入失敗：${error.message}`;
+          renderVideoErrors();
+        }).finally(()=>{videoScanInFlight=null;});
+      }
+      if(!refreshInFlight){
+        refreshInFlight=api('GET','/api/subtitles/tasks').then(async tasks=>{
+          state.tasks=tasks.tasks||[];
+          state.publications=tasks.publications||[];
+          renderTaskPanels();
+          if(scanVideos)renderResultSelector();
+          if(state.activeVideo)await loadResults(state.activeVideo);
+        }).catch(error=>{status(error.message,true);}).finally(()=>{refreshInFlight=null;});
+      }
+      await Promise.all([refreshInFlight,scanVideos?videoScanInFlight:null]);
+      return state;
     }
     function bind(){
+      bindLibraryCaption();
+      byId('subtitle-video-search')?.addEventListener('input',renderVideos);
+      byId('subtitle-library-close')?.addEventListener('click',closeLibraryVideo);
+      byId('subtitle-library-trial')?.addEventListener('click',()=>submitLibraryTranslation(true));
+      byId('subtitle-library-full')?.addEventListener('click',()=>submitLibraryTranslation(false));
+      const media=byId('subtitle-library-video');
+      media?.addEventListener('loadedmetadata',updateLibraryStatus);
+      media?.addEventListener('error',()=>{
+        if(libraryVideo)byId('subtitle-library-error').textContent='無法播放這部影片，請檢查檔案是否仍在原位置，以及瀏覽器是否支援其格式。';
+      });
       byId('subtitle-submit')?.addEventListener('click',submitSelected);
       byId('subtitle-confirm-submit')?.addEventListener('click',event=>{event.preventDefault();confirmSubmit();});
       byId('subtitle-confirm-cancel')?.addEventListener('click',()=>byId('subtitle-confirm-dialog')?.close());

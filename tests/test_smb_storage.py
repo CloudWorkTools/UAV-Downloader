@@ -290,7 +290,7 @@ def test_smb_video_listing_uses_bounded_stream_and_reports_partial(smb, tmp_path
     monkeypatch.setattr(manager, '_configured_roots', lambda: [])
     monkeypatch.setattr(nas, 'load_settings', lambda **_kwargs: dict(smb.settings, enabled=True, mode='smb'))
     monkeypatch.setattr(nas, 'smb_destination', lambda: smb.root)
-    monkeypatch.setattr(nas, 'open_smb_storage', lambda *_args: nullcontext(smb.backend))
+    monkeypatch.setattr(nas, 'open_smb_storage', lambda *_args, **_kwargs: nullcontext(smb.backend))
     consumed = []
     entries = [SimpleNamespace(name=f'item-{index}.txt', is_symlink=lambda: False,
                                is_dir=lambda **_kw: False, is_file=lambda **_kw: True)

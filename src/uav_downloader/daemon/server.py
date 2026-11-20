@@ -464,6 +464,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
     def _dispatch_subtitle_api(self, method, path, body):
         from uav_downloader.daemon import subtitle_http
         try:
+            if method == 'GET' and subtitle_http.serve_preview(self, path):
+                return
             status, value = subtitle_http.route(self, method, path, body)
         except Exception:
             return self._send_error('字幕服務發生內部錯誤', 500)

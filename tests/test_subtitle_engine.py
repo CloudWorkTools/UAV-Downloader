@@ -320,10 +320,10 @@ def test_translate_cues_uses_exact_domain_rules_and_dedupes_model_work(
 
     monkeypatch.setattr(subtitles, '_run_local_model', fake_model)
     result = subtitles.translate_cues(
-        ['やめて', '未知の台詞', '  未知の台詞  '],
+        ['やめて', '未知の台詞', '  未知の台詞  ', 'あっ、あっ、あっ！'],
         'ja', 'en', 'translate_en')
 
-    assert result == ['Stop.', 'Unknown line.', 'Unknown line.']
+    assert result == ['Stop.', 'Unknown line.', 'Unknown line.', '']
     assert calls == [('ja-model', ['未知の台詞'], None)]
 
 
@@ -1760,7 +1760,8 @@ def test_translation_stage_uses_http_fixture_and_only_selected_stage(
     monkeypatch.setattr(results, '_results_root', lambda: tmp_path / 'results')
     source = results.commit_success(results.StageResult(
         '', 'video-text', 'asr', None, (), _stage_profile_snapshot('asr'),
-        None, (SubtitleSegment('source-1', 0, 1, '原文'),)))
+        None, (SubtitleSegment('sound', 0, 0.25, '［喘ぎ声］'),
+               SubtitleSegment('source-1', 0.25, 1, '原文'),)))
 
     try:
         translated = subtitles.run_stage(
@@ -1774,7 +1775,7 @@ def test_translation_stage_uses_http_fixture_and_only_selected_stage(
         thread.join(timeout=2)
         server.server_close()
 
-    assert translated.segments == (SubtitleSegment('source-1', 0, 1, '譯文'),)
+    assert translated.segments == (SubtitleSegment('source-1', 0.25, 1, '譯文'),)
     assert translated.input_result_ids == (source.result_id,)
     assert seen == ['/api/show', '/api/chat']
 

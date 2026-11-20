@@ -1,0 +1,32 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "e5f047a2630428c211a1be4d31347c238a58588885344a01efb24aa0a573ce32",
+  "reviewer": "/root/planb_flow",
+  "verdict": "pass",
+  "findings": [],
+  "base": "fba2476f8b8c7d29fd39d471c402e22117551422",
+  "candidate": "e712dc9ce90efe8bfcccf108c0b6f6972f882141",
+  "evidence": [
+    "既有批次路由、批次請求與字幕快照邊界未改。Node 批次測試通過。",
+    "模型查詢保留正確 API 版本且拒絕不符清單格式的回應。定向 HTTP 5 項通過。"
+  ],
+  "newly_read_paths": [
+    "src/uav_downloader/daemon/subtitle_http.py",
+    "uav-web/frontend/subtitle-settings.js",
+    "tests/test_subtitle_http.py"
+  ],
+  "reused_evidence": [
+    "本輪前次獨立審查的批次流程結論",
+    "前次部署的 master 審查證據",
+    "準備端 Chromium 本地模型驗收"
+  ],
+  "additional_reads": [
+    "subtitle-settings.js 測試回應更新的表單比對"
+  ],
+  "token_usage": {
+    "status": "unavailable"
+  },
+  "limitations": [
+    "獨立 reviewer 未操作正式部署。"
+  ]
+}

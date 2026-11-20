@@ -8,12 +8,16 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
+from urllib.parse import urlsplit
 import uuid
 
 from uav_downloader.subtitles import asr, engine, results
+from uav_downloader.subtitles.models import SubtitleSegment
 from uav_downloader.subtitles.profiles import ProfileSnapshot
 from uav_downloader.core.storage import SMB_PATH_ROOT
 
@@ -21,6 +25,11 @@ _STAGES = ('vad', 'asr', 'correction', 'translation')
 _RETRY_LIMIT = 2
 _RETRY_DELAYS = (1.0, 3.0)
 _TASK_ID_RE = re.compile(r'subtitle_[0-9a-f]{32}\Z')
+LIBRARY_TRIAL_SECONDS = 120
+
+
+class LibraryTranslationError(ValueError):
+    """A library translation error safe to display to the operator."""
 
 
 def _snapshot_dict(snapshot):
@@ -71,6 +80,8 @@ def _safe_error(stage, error):
     from uav_downloader.subtitles.models import StageRequestError
 
     message = str(error)
+    if isinstance(error, LibraryTranslationError):
+        return message
     if stage == 'publish' and isinstance(error, OSError):
         return '字幕發布失敗：目的地儲存無法寫入，請檢查連線後只重試儲存'
     http = re.search(r'HTTP\s+(\d{3})\b', message, flags=re.IGNORECASE)
@@ -213,7 +224,8 @@ class SubtitleTaskManager:
 
     def submit(self, video_id, selected_stages, profile_snapshots, target_languages,
                *, audio_path=None, video_path=None, input_result_id=None,
-               allow_reasoning=False, output_languages=(), _force_new=False):
+               allow_reasoning=False, output_languages=(), _force_new=False,
+               _library_request=None):
         if not isinstance(video_id, str) or not video_id or len(video_id) > 512:
             raise ValueError('字幕影片識別碼無效')
         if (not isinstance(selected_stages, (list, tuple)) or not selected_stages
@@ -231,7 +243,7 @@ class SubtitleTaskManager:
         snapshots = {key: _snapshot_dict(value) for key, value in profile_snapshots.items()}
         for stage in stages:
             key = stage if stage in snapshots else 'text'
-            if key not in snapshots:
+            if key not in snapshots and _library_request is None:
                 raise ValueError('缺少所選字幕階段的設定快照')
         if (not isinstance(target_languages, (list, tuple))
                 or any(not isinstance(language, str) for language in target_languages)):
@@ -247,7 +259,8 @@ class SubtitleTaskManager:
         output_languages = list(dict.fromkeys(output_languages))
         fingerprint = _request_key(video_id, stages, snapshots, languages,
                                    {'result_id': input_result_id, 'allow_reasoning': allow_reasoning,
-                                    'output_languages': output_languages})
+                                    'output_languages': output_languages,
+                                    **({'library': _library_request} if _library_request is not None else {})})
         with self._lock:
             for task in self._tasks.values():
                 if not _force_new and task['request_key'] == fingerprint and task['status'] in (
@@ -271,6 +284,8 @@ class SubtitleTaskManager:
                 'progress': 0, 'error': None, 'request_key': fingerprint,
                 'created_at': time.time(), 'updated_at': time.time(),
             }
+            if _library_request is not None:
+                task.update(library_translation=True, **_library_request)
             self._tasks[task_id] = task
             self._queue.append(task_id)
             try:
@@ -281,6 +296,13 @@ class SubtitleTaskManager:
                 raise
         self.start_dispatcher()
         return self._copy(task)
+
+    def submit_library_translation(self, video_id, trial_seconds=None):
+        if trial_seconds is not None and (
+                type(trial_seconds) is not int or trial_seconds != LIBRARY_TRIAL_SECONDS):
+            raise ValueError('試翻範圍必須為前 120 秒')
+        return self.submit(video_id, ['translation'], {}, ['zh-TW'],
+                           _library_request={'trial_seconds': trial_seconds})
 
     def redo(self, video_id, stage, profile_snapshot, language=None,
              input_result_id=None, *, audio_path=None, video_path=None,
@@ -321,7 +343,8 @@ class SubtitleTaskManager:
         snapshots = {key: _snapshot_dict(value) for key, value in profile_snapshots.items()}
         with self._lock:
             task = self._tasks.get(task_id)
-            if (not task or task['status'] not in ('queued', 'waiting_for_resume')
+            if (not task or task.get('library_translation')
+                    or task['status'] not in ('queued', 'waiting_for_resume')
                     or task['ever_started'] or task['inputs']):
                 raise ValueError('字幕工作已開始，無法套用新設定')
             if any((stage if stage in snapshots else 'text') not in snapshots
@@ -374,6 +397,7 @@ class SubtitleTaskManager:
             old_status, old_error, old_generation, old_updated = (
                 task['status'], task['error'], task['generation'], task['updated_at'])
             old_queue = list(self._queue)
+            old_failure_stage = task.pop('failure_stage', None)
             task['generation'] += 1
             task['status'] = 'queued'
             task['error'] = None
@@ -385,6 +409,8 @@ class SubtitleTaskManager:
             except Exception:
                 task['status'], task['error'], task['generation'], task['updated_at'] = (
                     old_status, old_error, old_generation, old_updated)
+                if old_failure_stage is not None:
+                    task['failure_stage'] = old_failure_stage
                 self._queue = old_queue
                 raise
         self.start_dispatcher()
@@ -507,6 +533,197 @@ class SubtitleTaskManager:
         folder = self._state_path.parent / 'subtitle-task-audio' / task_id
         shutil.rmtree(folder, ignore_errors=True)
 
+    def _library_track_path(self, task_id, language):
+        return self._state_path.parent / 'subtitle-library-results' / task_id / (language + '.srt')
+
+    def library_track(self, task_id, language):
+        task = self.get_task(task_id)
+        if (language not in ('ja', 'zh-TW') or not task
+                or not task.get('library_translation') or task['status'] != 'completed'):
+            raise FileNotFoundError()
+        path = self._library_track_path(task_id, language)
+        if not path.is_file():
+            raise FileNotFoundError()
+        return engine._read_srt_text(str(path))
+
+    @staticmethod
+    def _library_cues(text, limit):
+        cues = engine.parse_srt(text)
+        if len(cues) > engine.MAX_WHISPER_CUES:
+            raise ValueError('日文字幕片段過多')
+        normalized = []
+        for cue in cues:
+            start_text, end_text = cue.timing.split('-->', 1)
+            start = engine._parse_cli_timestamp(start_text.strip().replace('.', ','))
+            end = engine._parse_cli_timestamp(end_text.strip().partition(' ')[0].replace('.', ','))
+            if start >= end:
+                raise ValueError('日文字幕結束時間必須晚於開始時間')
+            if limit is not None:
+                if start >= limit * 1000:
+                    continue
+                end = min(end, limit * 1000)
+            normalized.append((start, end, cue.text))
+        return sorted(normalized, key=lambda cue: cue[:2])
+
+    @staticmethod
+    def _library_asr(video_path, temp_dir, limit, progress, cancel):
+        wav = os.path.join(temp_dir, 'audio.wav')
+        log = os.path.join(temp_dir, 'audio.log')
+        output = os.path.join(temp_dir, 'japanese')
+        progress('audio', None)
+        engine._extract_audio(video_path, wav, log, cancel, duration_seconds=limit)
+        _, duration = engine._validate_pcm16_wav(wav)
+        if sys.platform == 'win32':
+            progress('model', None, asr_service='native')
+            profile = engine.recognition_profile()
+            with engine._recognition_profile_scope(profile):
+                runtime = engine._prepare_runtime(progress, cancel)
+                path = engine._run_recognition(profile, *runtime, wav, output, log,
+                                               cancel, progress_callback=progress)
+        else:
+            settings = asr.load_settings()
+            host = urlsplit(settings['base_url']).hostname
+            if settings['base_url'] == asr.DEFAULT_URL or host in ('127.0.0.1', '::1', 'localhost'):
+                settings = asr.load_settings(secret=True)
+                if urlsplit(settings['base_url']).hostname not in (
+                        'uav-speaches', '127.0.0.1', '::1', 'localhost'):
+                    raise LibraryTranslationError('本機語音辨識設定已變更，請重試')
+            else:
+                settings = {'base_url': asr.DEFAULT_URL, 'model': asr.DEFAULT_MODEL}
+            service = 'speaches' if urlsplit(settings['base_url']).hostname == 'uav-speaches' else 'loopback'
+            progress('transcribe_ja', None, asr_service=service)
+            try:
+                path = asr.transcribe(settings, wav, output, log, cancel, progress)
+            except (engine.SubtitleCancelled, engine.SubtitleStorageError):
+                raise
+            except (engine.SubtitleError, OSError, ValueError) as exc:
+                raise LibraryTranslationError('本機語音辨識失敗，請檢查 Speaches 或本機辨識服務及模型') from exc
+        return path, duration
+
+    def _publish_library_translation(self, task, cues):
+        result = SimpleNamespace(
+            video_id=task['video_id'], result_id=task['task_id'],
+            stage='translation', language='zh-TW',
+            segments=[SubtitleSegment(str(index), start / 1000, end / 1000, text)
+                      for index, (start, end, text) in enumerate(cues, 1)])
+        return self._source_manager.publish_result(task['video_id'], result, 'zh-TW')
+
+    def _run_library_translation(self, task, generation):
+        from uav_downloader.daemon.subtitle_files import read_video_subtitle, subtitle_cue_text
+        from uav_downloader.subtitles.domain import is_sound_only_cue
+
+        task_id, video_id = task['task_id'], task['video_id']
+        limit = task['trial_seconds']
+        cancel = lambda: self._cancelled(task_id, generation)
+
+        def progress(phase, percent, *, processed=None, duration=None, count=None, total=None,
+                     source_kind=None, asr_service=None):
+            stage = {'subtitle_source': 'prepare', 'audio': 'audio', 'model': 'asr',
+                     'transcribe_ja': 'asr', 'asr_tail_retry': 'asr', 'asr_cached': 'asr',
+                     'save': 'save', 'publish': 'publish'}.get(phase, 'translation')
+            with self._lock:
+                engine._check_cancel(cancel)
+                current = self._tasks[task_id]
+                current.update(phase=phase, current_stage=stage,
+                               stage_progress=percent, progress=percent,
+                               updated_at=time.time())
+                if processed is not None:
+                    current['processed_seconds'] = processed
+                if duration is not None:
+                    current['media_duration_seconds'] = duration
+                if count is not None:
+                    current.update(processed_cues=count, total_cues=total)
+                if phase == 'subtitle_source' and source_kind is None:
+                    for key in ('library_source', 'library_asr_service', 'processed_cues', 'total_cues',
+                                'processed_seconds', 'media_duration_seconds'):
+                        current.pop(key, None)
+                if source_kind is not None:
+                    current['library_source'] = source_kind
+                if asr_service is not None:
+                    current['library_asr_service'] = asr_service
+                self._save_locked()
+
+        progress('subtitle_source', None)
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._source_manager.resolve(video_id) as source, tempfile.TemporaryDirectory(
+                prefix='subtitle-library-', dir=self._state_path.parent) as work:
+            verify = self._source_manager.verify_active
+            verify(video_id, source)
+            duration = None
+            track_paths = [source.video_path]
+            if source.output_mode == 'upload':
+                track_paths.append(source.publish_path)
+            with engine._generation_slot(cancel):
+                for track_path in track_paths:
+                    try:
+                        original_text = read_video_subtitle(track_path, 'ja')
+                    except FileNotFoundError:
+                        continue
+                    progress('subtitle_source', None, source_kind='existing_srt')
+                    break
+                else:
+                    progress('audio', None, source_kind='asr')
+                    path, duration = self._library_asr(source.video_path, work, limit, progress, cancel)
+                    original_text = engine._read_srt_text(path) if path else ''
+                cues = self._library_cues(original_text, limit)
+                dialogue = [cue for cue in cues if not is_sound_only_cue(cue[2])]
+                if not dialogue:
+                    raise LibraryTranslationError('處理範圍中沒有需要翻譯的對白')
+                translated = []
+                processed = 0
+                progress('translate_zh', 0, processed=0, duration=duration,
+                         count=0, total=len(dialogue))
+                with engine._translation_profile_scope(None):
+                    for offset in range(0, len(dialogue), 96):
+                        batch = dialogue[offset:offset + 96]
+                        def report_translation(phase, percent):
+                            if phase == 'translation_model':
+                                progress(phase, percent)
+                            elif percent is not None:
+                                progress('translate_zh',
+                                         (offset * 100 + len(batch) * percent) // len(dialogue))
+
+                        texts = engine.translate_cues(
+                            [cue[2] for cue in batch], 'ja', 'zh-TW', 'translate_zh',
+                            report_translation, cancel)
+                        if len(texts) != len(batch):
+                            raise ValueError('字幕翻譯結果句數不符')
+                        translated.extend((start, end, clean) for (start, end, _), text in zip(batch, texts)
+                                          if (clean := subtitle_cue_text(text)))
+                        processed = max(processed, max(cue[1] for cue in batch) / 1000)
+                        finished = offset + len(batch)
+                        progress('translate_zh', finished * 100 // len(dialogue),
+                                 processed=processed, count=finished, total=len(dialogue))
+                if not translated:
+                    raise LibraryTranslationError('翻譯模型未產生可顯示的繁中字幕')
+            verify(video_id, source)
+        progress('save', None)
+        for language, rows in [('ja', cues), ('zh-TW', translated)]:
+            path = self._library_track_path(task_id, language)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            formatted = [engine.SrtCue(
+                str(index), f'{engine._format_srt_timestamp(start / 1000)} --> '
+                f'{engine._format_srt_timestamp(end / 1000)}', text)
+                for index, (start, end, text) in enumerate(rows, 1)]
+            engine._atomic_write_text(str(path), engine.render_srt(formatted))
+        if limit is None:
+            progress('publish', None)
+        with self._lock:
+            engine._check_cancel(cancel)
+            current = self._tasks[task_id]
+            if limit is None:
+                try:
+                    published = self._publish_library_translation(task, translated)
+                    publication = {'status': 'published', 'path': published['path']}
+                except Exception as exc:
+                    publication = {'status': 'failed', 'error': _safe_error('publish', exc)}
+                current['publish_status']['zh-TW'] = {'result_id': task_id, **publication}
+            current.update(status='completed', current_stage=None, progress=100,
+                           stage_progress=100, phase='done', updated_at=time.time())
+            if task_id in self._queue:
+                self._queue.remove(task_id)
+            self._save_locked()
+
     def _run_task(self, task_id):
         with self._lock:
             task = self._tasks.get(task_id)
@@ -540,6 +757,9 @@ class SubtitleTaskManager:
                 if self._cancelled(task_id, generation):
                     raise engine.SubtitleCancelled('Subtitle generation cancelled')
             video_locked = True
+            if task.get('library_translation'):
+                self._run_library_translation(task, generation)
+                return
             with self._source_manager.resolve(task['video_id']):
                 pass
             self._pin_inputs(task)
@@ -550,17 +770,16 @@ class SubtitleTaskManager:
                     key = f'{stage}:{language or ""}'
                     if key in task['completed']:
                         continue
-                    input_id = self._input_for(task, stage)
-                    if stage != 'vad' and not input_id:
-                        raise ValueError(f'字幕階段 {stage} 缺少明確的上游結果')
                     with self._lock:
                         current = self._tasks[task_id]
                         if current['generation'] != generation or current['status'] != 'running':
                             raise engine.SubtitleCancelled('Subtitle generation cancelled')
-                        current['current_stage'] = stage
-                        current['current_language'] = language
-                        current['updated_at'] = time.time()
+                        current.update(current_stage=stage, current_language=language, phase=stage,
+                                       stage_progress=None, progress=None, updated_at=time.time())
                         self._save_locked()
+                    input_id = self._input_for(task, stage)
+                    if stage != 'vad' and not input_id:
+                        raise ValueError(f'字幕階段 {stage} 缺少明確的上游結果')
                     cancel_check = lambda: self._cancelled(task_id, generation)
                     snapshot_key = stage if stage in task['profile_snapshots'] else 'text'
                     snapshot = _snapshot_from_dict(task['profile_snapshots'][snapshot_key])
@@ -655,6 +874,7 @@ class SubtitleTaskManager:
                         current['error'] = None
                     else:
                         current['status'] = 'failed'
+                        current['failure_stage'] = current.get('current_stage') or 'prepare'
                         current['error'] = _safe_error(current.get('current_stage'), exc)
                     current['current_stage'] = None
                     current['current_language'] = None
@@ -664,6 +884,12 @@ class SubtitleTaskManager:
                     self._save_locked()
         finally:
             if video_locked:
+                with self._lock:
+                    current = self._tasks.get(task_id)
+                    remove_tracks = (current and current.get('library_translation')
+                                     and current['status'] in ('cancelled', 'failed'))
+                if remove_tracks:
+                    shutil.rmtree(self._library_track_path(task_id, 'ja').parent, ignore_errors=True)
                 video_lock.release()
             with self._lock:
                 current = self._tasks.get(task_id)
@@ -747,10 +973,15 @@ class SubtitleTaskManager:
             video_id, result_id = task['video_id'], entry['result_id']
         from uav_downloader.subtitles import results
         with self._video_lock(video_id):
-            result = results.get(video_id, result_id)
-            if result is None:
-                raise ValueError('字幕結果不存在')
-            published = self._source_manager.publish_result(video_id, result, language)
+            if task.get('library_translation'):
+                path = self._library_track_path(task_id, language)
+                track = engine._read_srt_text(str(path))
+                published = self._publish_library_translation(task, self._library_cues(track, None))
+            else:
+                result = results.get(video_id, result_id)
+                if result is None:
+                    raise ValueError('字幕結果不存在')
+                published = self._source_manager.publish_result(video_id, result, language)
             with self._lock:
                 task = self._tasks[task_id]
                 task['publish_status'][language] = {'status': 'published', 'result_id': result_id,

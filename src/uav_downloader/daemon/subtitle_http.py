@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+from pathlib import Path
 import re
 from dataclasses import asdict
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
-from uav_downloader.subtitles import profiles, results
+from uav_downloader.subtitles import engine, profiles, results, settings
 
 
 class ApiError(Exception):
@@ -85,10 +87,9 @@ def _profiles_put(body):
     return {'profiles': [_public_profile(profile) for profile in saved]}
 
 
-def _discover_models(profile):
+def _discover_models(profile, *, api_key=None):
     """Make one bounded, non-redirecting model-list request; failure stays optional."""
     import requests
-    from urllib.parse import urlsplit
     provider = profile.provider
     base = profile.base_url.rstrip('/')
     if provider in ('openai', 'openai-compatible', 'localai'):
@@ -102,15 +103,15 @@ def _discover_models(profile):
             # Keep this endpoint/schema explicit instead of guessing between
             # the native v1 catalog and OpenAI-compatible model-list shapes.
         endpoint = base + '/api/v0/models'
-    elif provider == 'anthropic':
-        endpoint = base + '/v1/models'
-    elif provider == 'gemini':
-        endpoint = base + '/v1beta/models'
+    elif provider in ('anthropic', 'gemini'):
+        version = '/v1' if provider == 'anthropic' else '/v1beta'
+        prefix = base if urlsplit(base).path.endswith(version) else base + version
+        endpoint = prefix + '/models'
     else:
         return {'available': False, 'models': [], 'message': '此模型服務不支援自動載入清單',
                 'manual_entry_allowed': True}
     headers = {}
-    key = profiles.resolve_credential(profile.credential_ref, profile.base_url)
+    key = api_key or profiles.resolve_credential(profile.credential_ref, profile.base_url)
     if key:
         if provider == 'anthropic':
             headers.update({'x-api-key': key, 'anthropic-version': '2023-06-01'})
@@ -145,7 +146,7 @@ def _discover_models(profile):
         elif isinstance(payload, dict) and isinstance(payload.get('models'), list):
             names = [item.get('name') for item in payload['models'] if isinstance(item, dict)]
         else:
-            names = []
+            raise ValueError('unexpected model catalog shape')
         cleaned = []
         for name in names:
             if isinstance(name, str) and name and len(name) <= 160:
@@ -183,12 +184,42 @@ def _test_profile(profile, stage, *, allow_reasoning=False):
 
 
 def _profile_test(body):
-    _keys(body, {'action', 'profile_id', 'stage', 'confirm_external_call', 'allow_reasoning'})
+    _keys(body, {'action', 'profile_id', 'stage', 'confirm_external_call', 'allow_reasoning', 'draft'})
     action = body.get('action')
     if action not in (None, 'test', 'discover_models'):
         raise ApiError(400, '不支援的模型設定檔測試操作')
     if body.get('confirm_external_call') is not True:
         raise ApiError(400, '此操作會連線至模型服務，請明確確認後再測試')
+    if 'draft' in body:
+        if action != 'discover_models':
+            raise ApiError(400, '草稿僅支援查詢模型清單')
+        draft = _obj(body['draft'])
+        _keys(draft, {'provider', 'base_url', 'api_key'})
+        provider, raw_url = draft.get('provider'), draft.get('base_url')
+        if (provider not in settings.PROVIDERS or provider == settings.LOCAL
+                or not isinstance(raw_url, str) or not raw_url.strip()
+                or re.search(r'https?://.*https?://', raw_url, re.IGNORECASE)):
+            raise ApiError(400, '服務網址無效，請檢查 HTTP／HTTPS 是否重複')
+        try:
+            base_url = settings._normalize_base_url(raw_url, provider)
+            if not base_url or not re.match(r'https?://[^/]+', base_url, re.IGNORECASE):
+                raise ValueError()
+            if urlsplit(base_url).port == 0:
+                raise ValueError()
+        except ValueError:
+            raise ApiError(400, '請輸入有效的 HTTP／HTTPS 服務網址') from None
+        key = draft.get('api_key')
+        if key is not None and (not isinstance(key, str) or len(key) > 4096
+                                or re.search(r'[\x00-\x20\x7f]', key)):
+            raise ApiError(400, 'API 金鑰格式無效')
+        saved = next((item for item in profiles.load_profiles()
+                      if item.profile_id == body.get('profile_id')
+                      and item.provider == provider and item.base_url == base_url), None)
+        profile = saved or profiles.StageProfile(
+            profile_id='model-discovery', display_name='模型查詢', kind='text',
+            provider=provider, capabilities=('translation',), base_url=base_url,
+            model='model-discovery', parameters_json='{}')
+        return _discover_models(profile, api_key=key)
     profile_id = _id(body.get('profile_id'), r'[A-Za-z0-9_-]{1,80}', '模型設定檔 ID 格式無效')
     profile = next((item for item in profiles.load_profiles() if item.profile_id == profile_id), None)
     if profile is None:
@@ -313,6 +344,18 @@ def prepare_download_request(spec):
 
 
 def _submission(body, files, manager):
+    if 'library_translation' in body:
+        _keys(body, {'video_id', 'library_translation', 'trial_seconds'})
+        if body['library_translation'] is not True:
+            raise ApiError(400, '影片庫翻譯選項格式無效')
+        video_id = _id(body.get('video_id'), label='字幕影片識別碼格式無效')
+        try:
+            files.register_history(video_id)
+            return manager.submit_library_translation(video_id, body.get('trial_seconds'))
+        except ValueError as exc:
+            raise ApiError(400, str(exc)[:240]) from None
+        except OSError:
+            raise ApiError(503, '字幕影片來源離線或無讀取權限，請確認下載或 NAS 目錄') from None
     _keys(body, {'video_id', 'selected_stages', 'profile_ids', 'target_languages',
                  'output_languages', 'input_result_id', 'allow_reasoning'})
     video_id = _id(body.get('video_id'), label='字幕影片識別碼格式無效')
@@ -381,6 +424,93 @@ def _result_view(item):
                 'snapshot_id': item.profile_snapshot.snapshot_id})}
 
 
+def _media_range(value, size):
+    match = re.fullmatch(r'bytes=([0-9]{0,20})-([0-9]{0,20})', value)
+    if not match or not any(match.groups()) or size == 0:
+        return None
+    first, last = match.groups()
+    start = int(first) if first else max(0, size - int(last))
+    end = min(size - 1, int(last)) if first and last else size - 1
+    return (start, end) if start <= end else None
+
+
+def serve_preview(handler, path):
+    """Serve a read-only media response after the daemon has authenticated it."""
+    segments = [unquote(part) for part in path.split('/') if part]
+    if (segments[:3] != ['api', 'subtitles', 'videos'] or
+            not ((len(segments) == 5 and segments[4] == 'media')
+                 or (len(segments) == 6 and segments[4] == 'tracks'))):
+        return False
+    files = handler.server.subtitle_file_manager
+    started = False
+    try:
+        video_id = _id(segments[3], r'source-v1:[0-9a-f]{64}', '影片識別碼無效')
+        with files.preview_video(video_id) as (video_path, stream):
+            if segments[4] == 'tracks':
+                payload = files.preview_track(video_path, segments[5]).encode('utf-8')
+                started = True
+                handler.send_response(200)
+                handler.send_header('Content-Type', 'text/vtt; charset=utf-8')
+                handler.send_header('Content-Length', str(len(payload)))
+                handler.send_header('Cache-Control', 'private, no-store')
+                handler.send_header('X-Content-Type-Options', 'nosniff')
+                handler.end_headers()
+                handler.wfile.write(payload)
+                return True
+            size = stream.seek(0, 2)
+            value = handler.headers.get('Range')
+            interval = _media_range(value, size) if value is not None else (0, size - 1)
+            if interval is None:
+                started = True
+                handler.send_response(416)
+                handler.send_header('Accept-Ranges', 'bytes')
+                handler.send_header('Content-Range', f'bytes */{size}')
+                handler.send_header('Content-Length', '0')
+                handler.end_headers()
+                return True
+            start, end = interval
+            stream.seek(start)
+            remaining = end - start + 1
+            mime = ('video/mp2t' if Path(video_path).suffix.lower() == '.ts'
+                    else mimetypes.guess_type(video_path)[0] or 'application/octet-stream')
+            started = True
+            handler.send_response(206 if value is not None else 200)
+            handler.send_header('Content-Type', mime)
+            handler.send_header('Content-Length', str(remaining))
+            handler.send_header('Accept-Ranges', 'bytes')
+            handler.send_header('Cache-Control', 'private, no-store')
+            handler.send_header('X-Content-Type-Options', 'nosniff')
+            if value is not None:
+                handler.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+            handler.end_headers()
+            while remaining:
+                chunk = stream.read(min(256 * 1024, remaining))
+                if not chunk:
+                    raise OSError('影片讀取不完整')
+                handler.wfile.write(chunk)
+                remaining -= len(chunk)
+    except ApiError as exc:
+        handler._send_error(exc.message, exc.status)
+    except (BrokenPipeError, ConnectionResetError):
+        handler.close_connection = True
+    except FileNotFoundError:
+        if started:
+            handler.close_connection = True
+        else:
+            handler._send_error('找不到可預覽的字幕或影片', 404)
+    except (ValueError, engine.SubtitleError):
+        if started:
+            handler.close_connection = True
+        else:
+            handler._send_error('預覽來源已變更或字幕格式無效，請重新載入影片清單', 409)
+    except OSError:
+        if started:
+            handler.close_connection = True
+        else:
+            handler._send_error('影片或字幕離線或無讀取權限', 503)
+    return True
+
+
 def route(handler, method, path, body):
     """Handle one `/api/subtitles` request. Return (status, JSON) or None."""
     if path != '/api/subtitles' and not path.startswith('/api/subtitles/'):
@@ -442,6 +572,15 @@ def route(handler, method, path, body):
                 raise ApiError(404, '字幕任務不存在')
             if method == 'GET':
                 return 200, {'task': _task_view(task)}
+        if (method == 'GET' and len(segments) == 6 and segments[:3] == ['api', 'subtitles', 'tasks']
+                and segments[4] == 'tracks'):
+            from uav_downloader.daemon.subtitle_files import srt_to_vtt
+            task_id = _id(segments[3], r'subtitle_[0-9a-f]{32}', '字幕任務 ID 格式無效')
+            try:
+                content = tasks.library_track(task_id, segments[5])
+            except FileNotFoundError:
+                raise ApiError(404, '影片庫字幕結果尚未完成或不存在') from None
+            return 200, {'content': content, 'vtt': srt_to_vtt(content)}
         if len(segments) == 5 and segments[:3] == ['api', 'subtitles', 'tasks'] and segments[4] == 'action' and method == 'POST':
             task_id = _id(segments[3], r'subtitle_[0-9a-f]{32}', '字幕任務 ID 格式無效')
             body = _obj(body); action = body.get('action')

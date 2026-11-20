@@ -39,7 +39,7 @@ impl DaemonClient {
             .build()
             .unwrap_or_default();
         let subtitles_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_default();
@@ -231,12 +231,20 @@ impl DaemonClient {
         method: reqwest::Method,
         uri: &str,
         content_type: Option<&HeaderValue>,
+        range: Option<&HeaderValue>,
+        media: bool,
         body: Vec<u8>,
     ) -> Result<reqwest::Response, reqwest::Error> {
         let url = format!("{}{}", self.base_url.trim_end_matches('/'), uri);
         let mut request = self.apply_auth(self.subtitles_client.request(method, url));
         if let Some(content_type) = content_type {
             request = request.header(reqwest::header::CONTENT_TYPE, content_type);
+        }
+        if !media {
+            request = request.timeout(Duration::from_secs(30));
+        }
+        if let Some(range) = range {
+            request = request.header(reqwest::header::RANGE, range);
         }
         request.body(body).send().await
     }

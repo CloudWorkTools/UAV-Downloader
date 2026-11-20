@@ -1,0 +1,29 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "a0ec7ff321f43af4a4e0ff3aefbc623537506c4d4a70c2cce0ea45bd449ad632",
+  "reviewer": "/root/planb_flow",
+  "verdict": "pass",
+  "findings": [],
+  "base": "fba2476f8b8c7d29fd39d471c402e22117551422",
+  "candidate": "acbf7d0246e812ed8db83005fbf371497954f7ad",
+  "evidence": [
+    "字幕提交的等待提示與錯誤分開，失敗後解除禁用並還原按鈕焦點。批次下載契約未變。",
+    "批次測試、JS 語法與差異檢查通過。"
+  ],
+  "newly_read_paths": [
+    "docs/flow-manifest.json",
+    "uav-web/frontend/index.html",
+    "uav-web/frontend/subtitle-tasks.js"
+  ],
+  "reused_evidence": [
+    "本輪前次獨立審查的批次流程結論",
+    "前次部署的 master 其他功能審查證據"
+  ],
+  "additional_reads": [],
+  "token_usage": {
+    "status": "unavailable"
+  },
+  "limitations": [
+    "獨立 reviewer 未執行瀏覽器測試。"
+  ]
+}
