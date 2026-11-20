@@ -1,0 +1,35 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "02d0f4386b5d5e959ebd4550fc8bb79808defdf779d1755463b470a4fbc71f81",
+  "verdict": "pass",
+  "findings": [],
+  "newly_read_paths": [
+    "docs/flow-manifest.json",
+    "docs/flows/README.md",
+    "docs/flows/download.execute.mmd",
+    "src/uav_downloader/daemon/task_manager.py",
+    "src/uav_downloader/subtitles/asr.py",
+    "src/uav_downloader/subtitles/asr_library.py",
+    "tests/test_asr_api.py"
+  ],
+  "reused_evidence": [
+    "基準已審查的下載發布、取消與重試路徑。"
+  ],
+  "additional_reads": [
+    "src/uav_downloader/subtitles/engine.py 追查辨識入口、暫存與既有軌使用條件。",
+    "src/uav_downloader/daemon/download_files.py、tests/test_daemon_downloads.py 用於核對發布順序及重現完整下載任務。"
+  ],
+  "limitations": [
+    "沒有連線正式服務或真實 NAS。",
+    "此次變更作用於實際辨識。引擎可沿用符合既有來源與設定簽章的已發布字幕，舊軌未回溯驗證。合成探針替代網站下載與模型。"
+  ],
+  "token_usage": "unavailable",
+  "evidence": [
+    "完整 TaskManager._run_task 隔離探針以任意名稱 ARBITRARY-777、合成 47 秒音訊與迴路 HTTP 服務模擬重複。兩次辨識均被拒絕後，最終狀態為 completed，目的地 MP4 位元一致，無 SRT，任務顯示原片 30.500 至 33.000 秒。",
+    "7 個 ASR 目標測試通過，涵蓋另一個 18 秒案例、跨長空檔、相容端點僅 segments 的回應，以及獨立語音區間契約。",
+    "新增下載流程圖節點與程式一致，受管辨識品質告警仍進入下載結果及既有影片發布流程。"
+  ],
+  "reviewer": "Codex 獨立審查代理 candidate_review",
+  "base": "777475770dd18ad702403e7c60968bf28a1b0d7a",
+  "candidate": "a375003b6515d4e6e76867cbe40948d80f71fe2f"
+}

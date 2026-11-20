@@ -1,0 +1,25 @@
+{
+  "feature": "queue.enqueue",
+  "fingerprint": "00f2fcffe1bd14239b45d8f087f93c3bc58c3d726b3b40fa9a666682bce5dbbb",
+  "verdict": "pass",
+  "findings": [],
+  "newly_read_paths": [
+    "docs/flow-manifest.json",
+    "docs/flows/README.md"
+  ],
+  "reused_evidence": [
+    "基準的 queue.enqueue 流程與程式路徑獨立審查。"
+  ],
+  "additional_reads": [],
+  "limitations": [
+    "沒有連線正式服務或真實 NAS。",
+    "以候選差異和基準審查複核，未重跑該流程的全量測試。"
+  ],
+  "token_usage": "unavailable",
+  "evidence": [
+    "流程圖及 manifest 對映和基準一致。共用索引只更新下載執行的字幕覆蓋範圍，提交、佇列及儲存的實際路徑不受影響。"
+  ],
+  "reviewer": "Codex 獨立審查代理 candidate_review",
+  "base": "777475770dd18ad702403e7c60968bf28a1b0d7a",
+  "candidate": "a375003b6515d4e6e76867cbe40948d80f71fe2f"
+}

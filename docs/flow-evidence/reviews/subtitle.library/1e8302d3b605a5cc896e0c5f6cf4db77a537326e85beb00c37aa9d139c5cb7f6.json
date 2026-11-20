@@ -1,0 +1,30 @@
+{
+  "feature": "subtitle.library",
+  "fingerprint": "1e8302d3b605a5cc896e0c5f6cf4db77a537326e85beb00c37aa9d139c5cb7f6",
+  "verdict": "pass",
+  "findings": [],
+  "newly_read_paths": [
+    "docs/flow-manifest.json",
+    "docs/flows/README.md",
+    "src/uav_downloader/daemon/subtitle_tasks.py",
+    "src/uav_downloader/subtitles/asr.py",
+    "src/uav_downloader/subtitles/asr_library.py",
+    "tests/test_subtitle_tasks.py",
+    "tests/test_subtitle_library_translation.py"
+  ],
+  "reused_evidence": [
+    "基準的影片庫辨識、發布與重試獨立審查；本輪流程圖及對映和基準一致。"
+  ],
+  "additional_reads": [],
+  "limitations": [
+    "沒有連線正式服務或真實 NAS。"
+  ],
+  "token_usage": "unavailable",
+  "evidence": [
+    "影片庫辨識呼叫共用入口，受管服務選擇條件與品質失敗錯誤類別一致，保留可顯示的原片區間。相容端點與原生辨識分支、強制辨識檢查及發布程式維持原行為。",
+    "11 個影片庫及發布重試目標測試通過。"
+  ],
+  "reviewer": "Codex 獨立審查代理 candidate_review",
+  "base": "777475770dd18ad702403e7c60968bf28a1b0d7a",
+  "candidate": "a375003b6515d4e6e76867cbe40948d80f71fe2f"
+}
