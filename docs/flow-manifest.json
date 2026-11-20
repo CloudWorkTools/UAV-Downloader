@@ -143,7 +143,7 @@
     {
       "path": "uav-web/frontend/index.html",
       "kind": "file",
-      "md5": "d38d32937869e89d76d48410d5d91464"
+      "md5": "864ff85cdee5d25d00cf925b4a939772"
     },
     {
       "path": "uav-web/frontend/video-selection.js",
@@ -182,14 +182,14 @@
       "path": "uav-web/frontend/subtitle-settings.js",
       "kind": "tree-sitter-module",
       "language": "javascript",
-      "md5": "330768ed0d07a417a259277a59184df8",
-      "semantic_hash": "e81fea814b530acfc08160cbc3ea4e15c2ed2c86cd027e87274f424836ead1f4"
+      "md5": "b54080a560fbe24b18840cc1c026ad05",
+      "semantic_hash": "cf336ef066aac7ea03837c1a9074809a9de82183f33e8efd4c62119e2ea9f2bc"
     },
     {
       "path": "src/uav_downloader/daemon/subtitle_http.py",
       "kind": "python-module",
-      "md5": "d321812c63da5be2c080587fd5af332c",
-      "semantic_hash": "9df0f9fac6b86d402b43bbbe8a102730bbbe1705b580eb1fd145b7606e1b6667"
+      "md5": "65d22a4ba0779918162d6d0e4dac6c64",
+      "semantic_hash": "cd6def24937b20c0cab84872158122c0f3e2a800d51a2324560fca40184a038e"
     },
     {
       "path": "src/uav_downloader/subtitles/profiles.py",

@@ -857,3 +857,24 @@ def test_migrated_legacy_quality_profile_passes_real_correction_probe_without_se
         assert legacy.read_bytes() == legacy_bytes
     finally:
         fixture.shutdown(); fixture.server_close(); thread.join(timeout=2)
+
+
+def test_draft_model_discovery_checks_entered_url_without_saving(subtitle_http, monkeypatch):
+    from uav_downloader.daemon import subtitle_http as api
+
+    request, _, _ = subtitle_http
+    seen = []
+    monkeypatch.setattr(api, '_discover_models', lambda profile, *, api_key=None:
+                        seen.append((profile.base_url, profile.credential_ref, api_key))
+                        or {'available': True, 'models': ['available-model']})
+    body = {'action': 'discover_models', 'confirm_external_call': True,
+            'draft': {'provider': 'localai', 'base_url': 'http://http://localhost:8780/v1'}}
+    assert request('/api/subtitles/profiles/test', 'POST', body)[0] == 400
+    assert not seen
+    body['draft'].update(base_url='http://localhost:8780/v1/', api_key='draft-secret')
+    before = profiles.load_profiles()
+    status, result = request('/api/subtitles/profiles/test', 'POST', body)
+    assert status == 200
+    assert result['models'] == ['available-model']
+    assert seen == [('http://localhost:8780/v1', None, 'draft-secret')]
+    assert profiles.load_profiles() == before

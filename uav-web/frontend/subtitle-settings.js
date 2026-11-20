@@ -70,12 +70,14 @@
       update();
       return report;
     }
-    async function discoverModels(profileId) {
+    async function discoverModels(profileId, draft) {
       const profile = state.profiles.find(item => item.profile_id === profileId);
-      if (!profile) throw new Error('請先選擇字幕模型設定檔');
-      if (!confirmExternal(`即將向 ${profile.base_url || '尚未設定的模型服務'} 查詢模型清單。這會呼叫外部服務。要繼續嗎？`)) return false;
+      if (!profile&&!draft) throw new Error('請先輸入模型服務網址');
+      const url=draft?.base_url||profile?.base_url;
+      if (!confirmExternal(`即將向 ${url} 查詢模型清單。要繼續嗎？`)) return false;
       return api('POST','/api/subtitles/profiles/test',{
         action:'discover_models', profile_id:profileId, confirm_external_call:true,
+        ...(draft ? {draft} : {}),
       });
     }
     function downloadRequest(options) {
@@ -158,6 +160,7 @@
         const parameters=byId('subtitle-profile-parameters'); if(parameters) parameters.value=JSON.stringify(profile.parameters || {},null,2);
         for(const stage of STAGES){const check=byId(`subtitle-profile-cap-${stage}`); if(check)check.checked=!!profile.capabilities?.includes(stage);}
         const secret=byId('subtitle-profile-key'); if(secret)secret.value='';
+        clearCatalog();
         updateCapabilityControls();
       }
       const save=byId('subtitle-profile-save');
@@ -179,6 +182,7 @@
         for(const id of ['subtitle-profile-id','subtitle-profile-name','subtitle-profile-url','subtitle-profile-model','subtitle-profile-key'])byId(id).value='';
         byId('subtitle-profile-kind').value='text';byId('subtitle-profile-provider').value='localai';byId('subtitle-profile-parameters').value='{}';
         for(const stage of STAGES)byId(`subtitle-profile-cap-${stage}`).checked=stage==='correction'||stage==='translation';
+        clearCatalog();
         updateCapabilityControls();
         byId('subtitle-profile-name').focus();
       });
@@ -192,20 +196,61 @@
       byId('subtitle-profile-provider')?.addEventListener('change',updateCapabilityControls);
       updateCapabilityControls();
       const discover=byId('subtitle-discover-models');
+      const endpointField=byId('subtitle-profile-url');
+      const connectionStatus=byId('subtitle-model-discovery-status');
+      const options=byId('subtitle-discovered-models');
+      function clearCatalog(){
+        options?.replaceChildren();
+        if(connectionStatus)connectionStatus.textContent='';
+        endpointField?.removeAttribute('aria-invalid');
+      }
+      for(const id of ['subtitle-profile-url','subtitle-profile-provider','subtitle-profile-key']){
+        byId(id)?.addEventListener('input',clearCatalog);
+      }
       if(discover)discover.addEventListener('click',async()=>{
+        const profileId=byId('subtitle-profile-id').value;
+        const base_url=endpointField.value.trim(),provider=byId('subtitle-profile-provider').value;
+        const api_key=byId('subtitle-profile-key').value;
+        const signature=[profileId,base_url,provider,api_key].join('\n');
+        clearCatalog();
+        try{
+          const url=new URL(base_url);
+          if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||/https?:\/\/.*https?:\/\//i.test(base_url))throw new Error();
+        }catch{
+          endpointField.setAttribute('aria-invalid','true');endpointField.focus();
+          if(connectionStatus)connectionStatus.textContent='服務網址無效，請檢查是否重複輸入 HTTP／HTTPS。';
+          return;
+        }
+        const saved=state.profiles.find(item=>item.profile_id===profileId);
+        const draft=saved?.base_url===base_url&&saved.provider===provider&&!api_key?undefined:{base_url,provider,...(api_key?{api_key}:{})};
         discover.disabled=true;
-        try{const profileId=byId('subtitle-profile-id').value;const result=await discoverModels(profileId);
-          const options=byId('subtitle-discovered-models');if(options){options.replaceChildren();for(const model of result.models||[]){const option=el('option',model);option.value=model;options.append(option);}}
-          status(result===false?'未呼叫外部服務。':result.available?`已載入 ${result.models.length} 個模型；仍可手動輸入。`:result.message || '模型清單無法載入，仍可手動輸入。');
-        }catch(error){status(error.message,true);}finally{discover.disabled=false;}
+        if(connectionStatus)connectionStatus.textContent='正在查詢模型服務…';
+        try{
+          const result=await discoverModels(profileId,draft);
+          const current=[byId('subtitle-profile-id').value,endpointField.value.trim(),byId('subtitle-profile-provider').value,byId('subtitle-profile-key').value].join('\n');
+          if(current!==signature)return;
+          if(result===false){if(connectionStatus)connectionStatus.textContent='未送出查詢。';return;}
+          for(const model of result.models||[]){const option=el('option',model);option.value=model;options?.append(option);}
+          const message=result.available?`已連線，已載入 ${result.models.length} 個模型。請從模型名稱選擇，再執行階段測試。`:result.message||'無法取得模型清單。';
+          if(connectionStatus)connectionStatus.textContent=message;
+          status(message,!result.available);
+          if(result.available&&result.models.length===1)byId('subtitle-profile-model').value=result.models[0];
+        }catch(error){if(connectionStatus)connectionStatus.textContent=error.message;}
+        finally{discover.disabled=false;}
       });
       const test=byId('subtitle-test-profile');
       if(test)test.addEventListener('click',async()=>{
         test.disabled=true;
         try{const profileId=byId('subtitle-profile-id').value;const stage=byId('subtitle-test-stage').value;
+          const saved=state.profiles.find(item=>item.profile_id===profileId);
+          if(!saved||saved.base_url!==endpointField.value.trim()||saved.provider!==byId('subtitle-profile-provider').value||saved.model!==byId('subtitle-profile-model').value.trim()||byId('subtitle-profile-key').value||JSON.stringify(safeJson(byId('subtitle-profile-parameters').value))!==JSON.stringify(saved.parameters||{})){
+            throw new Error('請先保存目前的網址、模型和參數，再執行階段測試。');
+          }
           const report=await testProfile(profileId,stage,{allowReasoning:byId('subtitle-test-allow-reasoning').checked});
-          status(report===false?'未呼叫外部服務。':formatProbe(report),report!==false&&report.success===false);
-        }catch(error){status(error.message,true);}finally{test.disabled=false;}
+          const message=report===false?'未呼叫外部服務。':formatProbe(report);
+          if(connectionStatus)connectionStatus.textContent=message;
+          status(message,report!==false&&report.success===false);
+        }catch(error){if(connectionStatus)connectionStatus.textContent=error.message;status(error.message,true);}finally{test.disabled=false;}
       });
       for(const stage of STAGES){const select=stageSelect(stage);if(select)select.addEventListener('change',()=>{state.profileIds[stage]=select.value;});const enabled=byId(`subtitle-stage-enabled-${stage}`);if(enabled)enabled.addEventListener('change',()=>{state.selectedStages=readSelectedStages();});}
       for(const input of root.querySelectorAll('input[name="subtitle-target-language"], input[name="subtitle-output-language"]'))input.addEventListener('change',()=>{state.targetLanguages=readChecked('subtitle-target-language');state.outputLanguages=readChecked('subtitle-output-language');});

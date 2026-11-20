@@ -6,9 +6,9 @@ import mimetypes
 from pathlib import Path
 import re
 from dataclasses import asdict
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
-from uav_downloader.subtitles import engine, profiles, results
+from uav_downloader.subtitles import engine, profiles, results, settings
 
 
 class ApiError(Exception):
@@ -87,10 +87,9 @@ def _profiles_put(body):
     return {'profiles': [_public_profile(profile) for profile in saved]}
 
 
-def _discover_models(profile):
+def _discover_models(profile, *, api_key=None):
     """Make one bounded, non-redirecting model-list request; failure stays optional."""
     import requests
-    from urllib.parse import urlsplit
     provider = profile.provider
     base = profile.base_url.rstrip('/')
     if provider in ('openai', 'openai-compatible', 'localai'):
@@ -112,7 +111,7 @@ def _discover_models(profile):
         return {'available': False, 'models': [], 'message': '此模型服務不支援自動載入清單',
                 'manual_entry_allowed': True}
     headers = {}
-    key = profiles.resolve_credential(profile.credential_ref, profile.base_url)
+    key = api_key or profiles.resolve_credential(profile.credential_ref, profile.base_url)
     if key:
         if provider == 'anthropic':
             headers.update({'x-api-key': key, 'anthropic-version': '2023-06-01'})
@@ -185,12 +184,42 @@ def _test_profile(profile, stage, *, allow_reasoning=False):
 
 
 def _profile_test(body):
-    _keys(body, {'action', 'profile_id', 'stage', 'confirm_external_call', 'allow_reasoning'})
+    _keys(body, {'action', 'profile_id', 'stage', 'confirm_external_call', 'allow_reasoning', 'draft'})
     action = body.get('action')
     if action not in (None, 'test', 'discover_models'):
         raise ApiError(400, '不支援的模型設定檔測試操作')
     if body.get('confirm_external_call') is not True:
         raise ApiError(400, '此操作會連線至模型服務，請明確確認後再測試')
+    if 'draft' in body:
+        if action != 'discover_models':
+            raise ApiError(400, '草稿僅支援查詢模型清單')
+        draft = _obj(body['draft'])
+        _keys(draft, {'provider', 'base_url', 'api_key'})
+        provider, raw_url = draft.get('provider'), draft.get('base_url')
+        if (provider not in settings.PROVIDERS or provider == settings.LOCAL
+                or not isinstance(raw_url, str) or not raw_url.strip()
+                or re.search(r'https?://.*https?://', raw_url, re.IGNORECASE)):
+            raise ApiError(400, '服務網址無效，請檢查 HTTP／HTTPS 是否重複')
+        try:
+            base_url = settings._normalize_base_url(raw_url, provider)
+            if not base_url or not re.match(r'https?://[^/]+', base_url, re.IGNORECASE):
+                raise ValueError()
+            if urlsplit(base_url).port == 0:
+                raise ValueError()
+        except ValueError:
+            raise ApiError(400, '請輸入有效的 HTTP／HTTPS 服務網址') from None
+        key = draft.get('api_key')
+        if key is not None and (not isinstance(key, str) or len(key) > 4096
+                                or re.search(r'[\x00-\x20\x7f]', key)):
+            raise ApiError(400, 'API 金鑰格式無效')
+        saved = next((item for item in profiles.load_profiles()
+                      if item.profile_id == body.get('profile_id')
+                      and item.provider == provider and item.base_url == base_url), None)
+        profile = saved or profiles.StageProfile(
+            profile_id='model-discovery', display_name='模型查詢', kind='text',
+            provider=provider, capabilities=('translation',), base_url=base_url,
+            model='model-discovery', parameters_json='{}')
+        return _discover_models(profile, api_key=key)
     profile_id = _id(body.get('profile_id'), r'[A-Za-z0-9_-]{1,80}', '模型設定檔 ID 格式無效')
     profile = next((item for item in profiles.load_profiles() if item.profile_id == profile_id), None)
     if profile is None:

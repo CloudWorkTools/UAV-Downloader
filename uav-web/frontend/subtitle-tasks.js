@@ -9,6 +9,7 @@
     let pendingTaskRender=false,pendingResultsRender=false;
     let libraryVideo=null, libraryTrigger=null, libraryResult=null, libraryTrackKey=null, libraryTrackUrls=[];
     let libraryTrackRequest=0;
+    let activeFolder=null,currentJobs=[],submitNotice='';
     const byId=id=>root.getElementById(id), el=(tag,text='',cls='')=>{const node=root.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;};
     function addSnapshotDetails(container,entries,label='檢視設定快照'){
       const details=el('details','','text-xs text-gray-400');const summary=el('summary',label,'cursor-pointer');details.append(summary);
@@ -42,16 +43,31 @@
       const query=searchText(byId('subtitle-video-search')?.value).trim().split(/\s+/).filter(Boolean);
       const groups=new Map();
       for(const video of state.videos){
-        const text=searchText([video.title,video.name,video.code].join(' '));
-        if(!query.every(word=>text.includes(word)))continue;
         const folder=video.folder||'根目錄';
         const storage=video.source==='smb'?'NAS／SMB':'本機';
         const groupName=`${storage} · ${folder}`;
         if(!groups.has(groupName))groups.set(groupName,[]);
         groups.get(groupName).push(video);
       }
-      if(!groups.size){box.append(el('p','找不到符合的影片。','text-sm text-gray-400'));return;}
-      for(const [folder,videos] of groups){
+      const folders=byId('subtitle-folders');
+      if(folders){
+        const sorted=[...groups].sort(([a],[b])=>Number(b.startsWith('NAS'))-Number(a.startsWith('NAS'))||a.localeCompare(b,'zh-Hant'));
+        if(!groups.has(activeFolder))activeFolder=sorted[0]?.[0];
+        folders.replaceChildren(el('h5','資料夾','px-1 text-sm font-semibold text-white'));
+        for(const [name,videos] of sorted){
+          const button=el('button',`${name} · ${videos.length}`,'min-h-12 w-full break-words rounded-lg border border-[#3e3e4e] px-3 py-2 text-left text-sm aria-pressed:bg-[#42344d]');
+          button.type='button';
+          button.setAttribute('aria-pressed',String(name===activeFolder&&!query.length));
+          button.addEventListener('click',()=>{activeFolder=name;byId('subtitle-video-search').value='';renderVideos();[...folders.querySelectorAll('button')].find(item=>item.getAttribute('aria-pressed')==='true')?.focus();});
+          folders.append(button);
+        }
+      }
+      let shown=0;
+      for(const [folder,entries] of groups){
+        if(folders&&!query.length&&folder!==activeFolder)continue;
+        const videos=entries.filter(video=>query.every(word=>searchText([video.title,video.name,video.code].join(' ')).includes(word)));
+        if(!videos.length)continue;
+        shown+=videos.length;
         const group=el('section','','space-y-2');
         group.append(el('h5',folder,'break-words px-2 text-xs font-medium text-gray-400'));
         for(const video of videos){
@@ -71,6 +87,7 @@
         }
         box.append(group);
       }
+      if(!shown)box.append(el('p','找不到符合的影片。','text-sm text-gray-400'));
     }
     function setLibraryTracks(key){
       const media=byId('subtitle-library-video');
@@ -185,12 +202,42 @@
         button.disabled=working||busyActions.has(`library:${videoId}`);
       }
     }
+    function renderCurrentJobs({focus=false}={}){
+      const panel=byId('subtitle-current-job');
+      if(!panel)return;
+      const list=currentJobs.length?currentJobs.map(job=>state.tasks.find(task=>task.task_id===job.task_id)||job):state.tasks.slice().sort((a,b)=>(b.created_at||0)-(a.created_at||0)).slice(0,1);
+      panel.hidden=!submitNotice&&!list.length;
+      const lines=list.map(task=>{
+        const video=state.videos.find(item=>item.video_id===task.video_id);
+        const name=video?.title||video?.name||task.video_id;
+        const phase=libraryPhases[task.phase]||stageLabels[task.current_stage];
+        const percent=task.stage_progress??task.progress;
+        const progress=task.status==='running'&&Number.isFinite(percent)?`進度 ${percent}%`:'';
+        const cues=Number.isFinite(task.processed_cues)?`已翻譯 ${task.processed_cues}／${task.total_cues} 句`:'';
+        const time=Number.isFinite(task.processed_seconds)?`處理至 ${mediaTime(task.processed_seconds)}`:'';
+        const publication=Object.values(task.publish_status||{}).find(value=>value.status==='failed');
+        return [name,task.status==='queued'?'已收到，排隊中':label(statusLabels,task.status),phase,progress,cues,time,task.error,publication?.error].filter(Boolean).join(' · ');
+      });
+      const message=[submitNotice,...lines].filter(Boolean).join('\n');
+      const statusNode=byId('subtitle-current-job-status');
+      if(statusNode.textContent!==message)statusNode.textContent=message;
+      statusNode.style.whiteSpace='pre-line';
+      const bar=byId('subtitle-current-job-progress'),task=list[0];
+      bar.hidden=list.length!==1||task.status!=='running';
+      if(!bar.hidden){
+        const value=task.stage_progress??task.progress;
+        if(Number.isFinite(value))bar.value=value;
+        else bar.removeAttribute('value');
+      }
+      if(focus&&!panel.hidden)panel.focus();
+    }
     async function submitLibraryTranslation(trial){
       if(!libraryVideo)return;
       const video_id=libraryVideo.video_id;
       const key=`library:${video_id}`;
       if(busyActions.has(key))return;
       busyActions.add(key);
+      currentJobs=[];submitNotice='正在提交字幕任務…';renderCurrentJobs({focus:true});
       libraryResult=null;
       byId('subtitle-library-error').textContent='';
       updateLibraryStatus();
@@ -199,9 +246,11 @@
         if(trial)item.trial_seconds=120;
         const result=await api('POST','/api/subtitles/tasks',{items:[item]});
         if(!result.items?.[0]?.success)throw new Error(result.items?.[0]?.error||'字幕任務沒有成功提交。');
+        currentJobs=[result.items[0].task].filter(Boolean);submitNotice='';renderCurrentJobs({focus:true});
         status('字幕任務已加入佇列。');
         await refresh();
       }catch(error){
+        submitNotice=error.message;renderCurrentJobs();
         if(libraryVideo?.video_id===video_id)byId('subtitle-library-error').textContent=error.message;
         status(error.message,true);
       }
@@ -330,14 +379,27 @@
       if(submitting)return;
       let spec;try{spec=requestBody();if(!spec)throw new Error('請至少選擇一個字幕階段。');}catch(error){status(error.message,true);return;}
       const items=[...state.selected].map(video_id=>({video_id,...spec}));
-      submitting=true;status('');const button=byId('subtitle-confirm-submit'),wasFocused=root.activeElement===button;let failed=false;if(button)button.disabled=true;
-      try{const data=await api('POST','/api/subtitles/tasks',{items});const accepted=data.items||[];const failed=accepted.filter(item=>!item.success);state.selected=new Set(failed.map(item=>item.video_id).filter(Boolean));if(failed.length)status(`已提交 ${accepted.length-failed.length} 項；${failed.length} 項失敗：${failed.map(item=>item.error).join('；')}`,true);else status(`已提交 ${accepted.length} 項字幕任務。`);byId('subtitle-confirm-dialog')?.close();await refresh();}
+      submitting=true;status('正在提交字幕任務…');const button=byId('subtitle-confirm-submit'),wasFocused=root.activeElement===button;let failed=false;if(button)button.disabled=true;
+      try{
+        const data=await api('POST','/api/subtitles/tasks',{items});
+        const accepted=data.items||[];
+        const rejected=accepted.filter(item=>!item.success);
+        const acceptedTasks=accepted.filter(item=>item.success&&item.task).map(item=>item.task);
+        if(!acceptedTasks.length)throw new Error(rejected.map(item=>item.error).join('；')||'沒有字幕任務成功送出。');
+        state.selected=new Set(rejected.map(item=>item.video_id).filter(Boolean));
+        currentJobs=acceptedTasks;
+        submitNotice=rejected.length?`另有 ${rejected.length} 項未送出：${rejected.map(item=>item.error).join('；')}`:'';
+        byId('subtitle-confirm-dialog')?.close();
+        status(submitNotice,!!rejected.length);
+        renderCurrentJobs({focus:true});
+        await refresh();
+      }
       catch(error){failed=true;status(error.message,true);}
       finally{submitting=false;if(button)button.disabled=false;if(failed)restoreFailedDialogActionFocus('subtitle-confirm-dialog',button,wasFocused);}
     }
     async function refresh({scanVideos=false}={}){
       if(refreshInFlight){await refreshInFlight;if(scanVideos)return refresh({scanVideos:true});return state;}
-      refreshInFlight=(async()=>{try{const [videos,tasks]=await Promise.all([scanVideos?api('GET','/api/subtitles/videos'):Promise.resolve(null),api('GET','/api/subtitles/tasks')]);if(videos){state.videos=videos.videos||[];state.videoErrors=videos.errors||[];state.videoPartial=videos.partial===true;state.videoNotice=videos.notice||null;settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;renderVideos();renderVideoErrors();}state.tasks=tasks.tasks||[];state.publications=tasks.publications||[];renderTasks();renderPublications();updateLibraryStatus();const selector=byId('subtitle-result-video');if(scanVideos&&selector&&!selector.contains(root.activeElement)){const previous=selector.value;selector.replaceChildren();const known=new Set();for(const video of state.videos){const option=el('option',video.title||video.name||video.video_id);option.value=video.video_id;selector.append(option);known.add(video.video_id);}for(const task of state.tasks){if(known.has(task.video_id))continue;const option=el('option',`${task.video_id} · 來源可能離線`);option.value=task.video_id;selector.append(option);known.add(task.video_id);}if([...selector.options].some(option=>option.value===previous))selector.value=previous;else if(selector.options.length)selector.value=selector.options[0].value;}if(state.activeVideo)await loadResults(state.activeVideo);return state;}catch(error){status(error.message,true);return state;}})();
+      refreshInFlight=(async()=>{try{const [videos,tasks]=await Promise.all([scanVideos?api('GET','/api/subtitles/videos'):Promise.resolve(null),api('GET','/api/subtitles/tasks')]);if(videos){state.videos=videos.videos||[];state.videoErrors=videos.errors||[];state.videoPartial=videos.partial===true;state.videoNotice=videos.notice||null;settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;renderVideos();renderVideoErrors();}state.tasks=tasks.tasks||[];state.publications=tasks.publications||[];renderTasks();renderPublications();updateLibraryStatus();renderCurrentJobs();const selector=byId('subtitle-result-video');if(scanVideos&&selector&&!selector.contains(root.activeElement)){const previous=selector.value;selector.replaceChildren();const known=new Set();for(const video of state.videos){const option=el('option',video.title||video.name||video.video_id);option.value=video.video_id;selector.append(option);known.add(video.video_id);}for(const task of state.tasks){if(known.has(task.video_id))continue;const option=el('option',`${task.video_id} · 來源可能離線`);option.value=task.video_id;selector.append(option);known.add(task.video_id);}if([...selector.options].some(option=>option.value===previous))selector.value=previous;else if(selector.options.length)selector.value=selector.options[0].value;}if(state.activeVideo)await loadResults(state.activeVideo);return state;}catch(error){status(error.message,true);return state;}})();
       try{return await refreshInFlight;}finally{refreshInFlight=null;}
     }
     function bind(){
