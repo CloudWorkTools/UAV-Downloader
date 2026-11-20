@@ -3,6 +3,7 @@ SUBMIT["提交影片庫字幕任務"]
 SOURCE["決定日文字幕來源"]
 EXISTING["讀取既有日文字幕"]
 ASR["受管服務依語音區間分段並核對逐詞時間"]
+COMPAT["使用原生或相容服務辨識"]
 TRANSLATE["用日文字幕時間翻譯繁中"]
 FAILED["回報失敗或取消，保留已發布字幕"]
 PREVIEW["儲存日文及繁中預覽"]
@@ -11,13 +12,17 @@ RETRY["核對保存的發布版本"]
 STALE["拒絕已被新版本取代的重試"]
 SUBMIT --> SOURCE
 SOURCE -->|允許沿用且有既有字幕| EXISTING
-SOURCE -->|需要重新辨識| ASR
+SOURCE -->|需要辨識且使用受管服務| ASR
+SOURCE -->|一般任務使用原生或相容服務| COMPAT
+SOURCE -->|強制重辨識但受管服務不可用| FAILED
 EXISTING --> TRANSLATE
 ASR -->|可採用字幕| TRANSLATE
+COMPAT -->|有可採用的字幕| TRANSLATE
+COMPAT -->|無對白或辨識失敗| FAILED
 ASR -->|無對白或重試後仍無法驗證| FAILED
 TRANSLATE -->|失敗或取消| FAILED
 TRANSLATE -->|完成| PREVIEW
 PREVIEW -->|整片且未取消| PUBLISH
 PUBLISH -->|儲存失敗，使用者重試| RETRY
-RETRY -->|有較新發布版本| STALE
+RETRY -->|已登記較新發布操作| STALE
 RETRY -->|版本仍可發布| PUBLISH
