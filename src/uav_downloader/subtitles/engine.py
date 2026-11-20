@@ -29,7 +29,7 @@ import time
 import unicodedata
 import wave
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Iterable, Optional
@@ -547,9 +547,9 @@ def render_srt(cues: Iterable[SrtCue]) -> str:
     return '\n\n'.join(parts) + ('\n' if parts else '')
 
 
-def _read_srt_text(path: str) -> str:
+def _read_srt_text(path: str, *, open_file=None) -> str:
     try:
-        with storage_open(path, 'rb') as handle:
+        with (open_file or storage_open)(path, 'rb') as handle:
             payload = handle.read(MAX_SRT_FILE_BYTES + 1)
     except OSError as exc:
         raise SubtitleError('Subtitle file could not be read') from exc
@@ -1523,7 +1523,8 @@ def _run_process(args: list[str], log_path: str,
 
 
 def _extract_audio(video_path: str, wav_path: str, log_path: str,
-                   cancel_check: Optional[CancelCheck]) -> None:
+                   cancel_check: Optional[CancelCheck], *,
+                   duration_seconds: Optional[int] = None) -> None:
     ffmpeg = locate_ffmpeg()
     if not ffmpeg:
         raise _asr_failure('audio')
@@ -1538,7 +1539,9 @@ def _extract_audio(video_path: str, wav_path: str, log_path: str,
         with storage_fs(video_path).media_source(video_path) as source:
             _run_process([
                 ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-                *sequential, '-i', source, '-vn', '-ac', '1', '-ar', '16000',
+                *sequential, '-i', source,
+                *(['-t', str(duration_seconds)] if duration_seconds else []),
+                '-vn', '-ac', '1', '-ar', '16000',
                 '-c:a', 'pcm_s16le', wav_path,
             ], log_path, cancel_check,
                 disk_guard_path=os.path.dirname(wav_path),
@@ -4832,13 +4835,14 @@ def _asr_signature(profile: RecognitionProfile) -> str:
     })
 
 
-def _media_identity(path: str) -> str:
+def _media_identity(path: str, *, handle=None) -> str:
     """Return a path-free, copy-stable sampled identity for downloaded media."""
     try:
-        digest = hashlib.sha256()
-        with storage_open(path, 'rb') as handle:
-            metadata = storage_fs(path).stat(path) if storage_fs(path).remote else os.fstat(handle.fileno())
-            size = int(metadata.st_size)
+        with (storage_open(path, 'rb') if handle is None else nullcontext(handle)) as handle:
+            filesystem = storage_fs(path)
+            metadata = filesystem.stat(path) if filesystem.remote else os.fstat(handle.fileno())
+            size = handle.seek(0, os.SEEK_END)
+            digest = hashlib.sha256()
             sample_size = 64 * 1024
             offsets = sorted({
                 0,
@@ -4851,11 +4855,11 @@ def _media_identity(path: str) -> str:
                 digest.update(offset.to_bytes(8, 'big', signed=False))
                 digest.update(len(chunk).to_bytes(4, 'big', signed=False))
                 digest.update(chunk)
-            after = storage_fs(path).stat(path) if storage_fs(path).remote else os.fstat(handle.fileno())
+            after = filesystem.stat(path) if filesystem.remote else os.fstat(handle.fileno())
     except OSError as exc:
         raise SubtitleError('Downloaded video file was not found') from exc
     if (
-            int(after.st_size) != size
+            int(metadata.st_size) != size or int(after.st_size) != size
             or int(after.st_mtime_ns) != int(metadata.st_mtime_ns)):
         raise SubtitleError('Downloaded video file changed during subtitle setup')
     return _stable_signature({

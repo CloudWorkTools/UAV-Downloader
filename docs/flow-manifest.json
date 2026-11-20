@@ -102,14 +102,14 @@
     {
       "path": "src/uav_downloader/daemon/nas.py",
       "kind": "python-module",
-      "md5": "997b6f312d7e5a7895889029b9216835",
-      "semantic_hash": "bf55110a0a1be3e1b0cfea5c8b37148ab171d1f440a9342a954f3f0da7f23b98"
+      "md5": "5c3a865e075d8933a74c6595b9636d14",
+      "semantic_hash": "24b9d3a6ba36c9e35d310a8dc93dd8169ceb7269260c80fd7090f0e907c32f58"
     },
     {
       "path": "src/uav_downloader/daemon/server.py",
       "kind": "python-module",
-      "md5": "026e6eb93eba427c439eaab0bc0677d6",
-      "semantic_hash": "b9cb95a1b93e6ec41f648c129fe05941c3ca2b13fcbfbe5780b4fc340019f942"
+      "md5": "ac91d5f5070114a0a4be12c85416da29",
+      "semantic_hash": "0ba80c2ec5a209a82fd9f267dc9b948b7c9ad3b30e5e6ab199157acedc625fee"
     },
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
@@ -143,7 +143,7 @@
     {
       "path": "uav-web/frontend/index.html",
       "kind": "file",
-      "md5": "d276b2661c20317fe0982495bda33e3b"
+      "md5": "d38d32937869e89d76d48410d5d91464"
     },
     {
       "path": "uav-web/frontend/video-selection.js",
@@ -156,15 +156,15 @@
       "path": "uav-web/src/client.rs",
       "kind": "tree-sitter-module",
       "language": "rust",
-      "md5": "fb4698e8e95a53f5f31fa70d8184d00f",
-      "semantic_hash": "a956078734d920452384ab178a551d8308b25a1475a8f7e54d2c7c29b319673f"
+      "md5": "92484acf9effa0cb9444b51eee968b8b",
+      "semantic_hash": "8effa2f7b3dbe3afcd398448ef21e41faf24e139cb02ff55dbcc9540cdf5ecda"
     },
     {
       "path": "uav-web/src/routes.rs",
       "kind": "tree-sitter-module",
       "language": "rust",
-      "md5": "9b79b083b14b8d2d373c27f140a7074b",
-      "semantic_hash": "417f608ef395d37090fadaaa83171564661e8462116323f62c6d2f9bc401462f"
+      "md5": "1f3c373de582603f4dbb5e31e22d7de1",
+      "semantic_hash": "e1a99c0509df8a6a73ab2108c84c0993df30aadb079cd55194dea7a5edf8844a"
     },
     {
       "path": "uav-web/frontend/mobile-actions.js",
@@ -188,8 +188,8 @@
     {
       "path": "src/uav_downloader/daemon/subtitle_http.py",
       "kind": "python-module",
-      "md5": "813b6ae082c224a1b794b30539950cd1",
-      "semantic_hash": "51fe07f643ff62afc147840fc72276deb250415fc15680e52d5aecf94fda6347"
+      "md5": "d321812c63da5be2c080587fd5af332c",
+      "semantic_hash": "9df0f9fac6b86d402b43bbbe8a102730bbbe1705b580eb1fd145b7606e1b6667"
     },
     {
       "path": "src/uav_downloader/subtitles/profiles.py",

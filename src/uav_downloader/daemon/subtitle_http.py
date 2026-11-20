@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+from pathlib import Path
 import re
 from dataclasses import asdict
 from urllib.parse import unquote
 
-from uav_downloader.subtitles import profiles, results
+from uav_downloader.subtitles import engine, profiles, results
 
 
 class ApiError(Exception):
@@ -313,6 +315,18 @@ def prepare_download_request(spec):
 
 
 def _submission(body, files, manager):
+    if 'library_translation' in body:
+        _keys(body, {'video_id', 'library_translation', 'trial_seconds'})
+        if body['library_translation'] is not True:
+            raise ApiError(400, '影片庫翻譯選項格式無效')
+        video_id = _id(body.get('video_id'), label='字幕影片識別碼格式無效')
+        try:
+            files.register_history(video_id)
+            return manager.submit_library_translation(video_id, body.get('trial_seconds'))
+        except ValueError as exc:
+            raise ApiError(400, str(exc)[:240]) from None
+        except OSError:
+            raise ApiError(503, '字幕影片來源離線或無讀取權限，請確認下載或 NAS 目錄') from None
     _keys(body, {'video_id', 'selected_stages', 'profile_ids', 'target_languages',
                  'output_languages', 'input_result_id', 'allow_reasoning'})
     video_id = _id(body.get('video_id'), label='字幕影片識別碼格式無效')
@@ -381,6 +395,93 @@ def _result_view(item):
                 'snapshot_id': item.profile_snapshot.snapshot_id})}
 
 
+def _media_range(value, size):
+    match = re.fullmatch(r'bytes=([0-9]{0,20})-([0-9]{0,20})', value)
+    if not match or not any(match.groups()) or size == 0:
+        return None
+    first, last = match.groups()
+    start = int(first) if first else max(0, size - int(last))
+    end = min(size - 1, int(last)) if first and last else size - 1
+    return (start, end) if start <= end else None
+
+
+def serve_preview(handler, path):
+    """Serve a read-only media response after the daemon has authenticated it."""
+    segments = [unquote(part) for part in path.split('/') if part]
+    if (segments[:3] != ['api', 'subtitles', 'videos'] or
+            not ((len(segments) == 5 and segments[4] == 'media')
+                 or (len(segments) == 6 and segments[4] == 'tracks'))):
+        return False
+    files = handler.server.subtitle_file_manager
+    started = False
+    try:
+        video_id = _id(segments[3], r'source-v1:[0-9a-f]{64}', '影片識別碼無效')
+        with files.preview_video(video_id) as (video_path, stream):
+            if segments[4] == 'tracks':
+                payload = files.preview_track(video_path, segments[5]).encode('utf-8')
+                started = True
+                handler.send_response(200)
+                handler.send_header('Content-Type', 'text/vtt; charset=utf-8')
+                handler.send_header('Content-Length', str(len(payload)))
+                handler.send_header('Cache-Control', 'private, no-store')
+                handler.send_header('X-Content-Type-Options', 'nosniff')
+                handler.end_headers()
+                handler.wfile.write(payload)
+                return True
+            size = stream.seek(0, 2)
+            value = handler.headers.get('Range')
+            interval = _media_range(value, size) if value is not None else (0, size - 1)
+            if interval is None:
+                started = True
+                handler.send_response(416)
+                handler.send_header('Accept-Ranges', 'bytes')
+                handler.send_header('Content-Range', f'bytes */{size}')
+                handler.send_header('Content-Length', '0')
+                handler.end_headers()
+                return True
+            start, end = interval
+            stream.seek(start)
+            remaining = end - start + 1
+            mime = ('video/mp2t' if Path(video_path).suffix.lower() == '.ts'
+                    else mimetypes.guess_type(video_path)[0] or 'application/octet-stream')
+            started = True
+            handler.send_response(206 if value is not None else 200)
+            handler.send_header('Content-Type', mime)
+            handler.send_header('Content-Length', str(remaining))
+            handler.send_header('Accept-Ranges', 'bytes')
+            handler.send_header('Cache-Control', 'private, no-store')
+            handler.send_header('X-Content-Type-Options', 'nosniff')
+            if value is not None:
+                handler.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+            handler.end_headers()
+            while remaining:
+                chunk = stream.read(min(256 * 1024, remaining))
+                if not chunk:
+                    raise OSError('影片讀取不完整')
+                handler.wfile.write(chunk)
+                remaining -= len(chunk)
+    except ApiError as exc:
+        handler._send_error(exc.message, exc.status)
+    except (BrokenPipeError, ConnectionResetError):
+        handler.close_connection = True
+    except FileNotFoundError:
+        if started:
+            handler.close_connection = True
+        else:
+            handler._send_error('找不到可預覽的字幕或影片', 404)
+    except (ValueError, engine.SubtitleError):
+        if started:
+            handler.close_connection = True
+        else:
+            handler._send_error('預覽來源已變更或字幕格式無效，請重新載入影片清單', 409)
+    except OSError:
+        if started:
+            handler.close_connection = True
+        else:
+            handler._send_error('影片或字幕離線或無讀取權限', 503)
+    return True
+
+
 def route(handler, method, path, body):
     """Handle one `/api/subtitles` request. Return (status, JSON) or None."""
     if path != '/api/subtitles' and not path.startswith('/api/subtitles/'):
@@ -442,6 +543,15 @@ def route(handler, method, path, body):
                 raise ApiError(404, '字幕任務不存在')
             if method == 'GET':
                 return 200, {'task': _task_view(task)}
+        if (method == 'GET' and len(segments) == 6 and segments[:3] == ['api', 'subtitles', 'tasks']
+                and segments[4] == 'tracks'):
+            from uav_downloader.daemon.subtitle_files import srt_to_vtt
+            task_id = _id(segments[3], r'subtitle_[0-9a-f]{32}', '字幕任務 ID 格式無效')
+            try:
+                content = tasks.library_track(task_id, segments[5])
+            except FileNotFoundError:
+                raise ApiError(404, '影片庫字幕結果尚未完成或不存在') from None
+            return 200, {'content': content, 'vtt': srt_to_vtt(content)}
         if len(segments) == 5 and segments[:3] == ['api', 'subtitles', 'tasks'] and segments[4] == 'action' and method == 'POST':
             task_id = _id(segments[3], r'subtitle_[0-9a-f]{32}', '字幕任務 ID 格式無效')
             body = _obj(body); action = body.get('action')

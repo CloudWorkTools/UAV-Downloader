@@ -224,7 +224,31 @@
           </div></fieldset>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2"><fieldset><legend class="mb-2 text-sm">翻譯目標語言（辨識來源：日文）</legend><label class="flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-target-language" value="zh-TW" checked class="h-5 w-5 accent-brand-600">繁體中文</label><label class="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-target-language" value="en" class="h-5 w-5 accent-brand-600">英文</label></fieldset><fieldset><legend class="mb-2 text-sm">輸出字幕</legend><label class="flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-output-language" value="ja" checked class="h-5 w-5 accent-brand-600">日文</label><label class="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-output-language" value="zh-TW" class="h-5 w-5 accent-brand-600">繁體中文</label><label class="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" name="subtitle-output-language" value="en" class="h-5 w-5 accent-brand-600">英文</label></fieldset></div>
           <label class="flex min-h-11 items-center gap-2 text-sm"><input id="subtitle-allow-reasoning" type="checkbox" class="h-5 w-5 accent-brand-600">允許模型使用額外思考（可能增加費用）</label>
-          <h4 class="font-medium">可用影片</h4><div id="subtitle-video-errors" class="space-y-1 text-xs text-amber-300"></div><div id="subtitle-videos" data-testid="subtitle-videos" class="max-h-72 space-y-2 overflow-auto rounded border border-[#3e3e4e] p-2"><p class="text-sm text-gray-400">讀取影片清單中…</p></div>
+          <div class="space-y-2">
+            <h4 class="font-medium">已下載影片</h4>
+            <label for="subtitle-video-search" class="block text-sm">搜尋檔名或番號</label>
+            <input id="subtitle-video-search" type="search" class="min-h-10 w-full rounded border border-[#3e3e4e] bg-[#282832] px-3 text-sm">
+            <div id="subtitle-video-errors" class="space-y-1 text-xs text-amber-300"></div>
+            <div id="subtitle-videos" data-testid="subtitle-videos" class="max-h-72 space-y-2 overflow-auto rounded border border-[#3e3e4e] p-2"><p class="text-sm text-gray-400">讀取影片清單中…</p></div>
+          </div>
+          <section id="subtitle-library-player" hidden class="space-y-2 rounded border border-[#3e3e4e] p-3" aria-labelledby="subtitle-library-title">
+            <div class="flex items-center gap-2">
+              <h4 id="subtitle-library-title" tabindex="-1" class="min-w-0 flex-1 break-words font-medium">影片預覽</h4>
+              <button id="subtitle-library-close" type="button" class="min-h-10 rounded border border-[#3e3e4e] px-3 text-sm">關閉預覽</button>
+            </div>
+            <video id="subtitle-library-video" controls playsinline preload="metadata" class="max-h-96 w-full rounded bg-black"></video>
+            <p id="subtitle-library-error" role="status" class="text-sm text-amber-300"></p>
+            <div class="flex flex-wrap gap-2">
+              <button id="subtitle-library-trial" type="button" class="min-h-10 rounded bg-brand-600 px-3 text-sm text-white">試翻前 2 分鐘</button>
+              <button id="subtitle-library-full" type="button" class="min-h-10 rounded border border-[#3e3e4e] px-3 text-sm">翻譯整部</button>
+            </div>
+            <div id="subtitle-library-status" class="space-y-1 text-sm text-gray-300">
+              <p id="subtitle-library-phase" role="status"></p>
+              <progress id="subtitle-library-stage-progress" max="100" aria-label="目前階段進度" class="w-full" hidden></progress>
+              <p id="subtitle-library-position"></p>
+              <progress id="subtitle-library-timeline" aria-label="影片處理時間軸" class="w-full" hidden></progress>
+            </div>
+          </section>
           <button id="subtitle-submit" data-testid="subtitle-submit" type="button" class="h-11 w-full rounded bg-brand-600 px-4 font-semibold text-white">檢視摘要並提交</button>
         </section>
       </div>

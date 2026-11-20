@@ -7,6 +7,8 @@
     const state={videos:[],videoErrors:[],videoPartial:false,videoNotice:null,tasks:[],publications:[],results:[],selected:new Set(),activeVideo:null,preview:null};
     let submitting=false,resultsRequest=0,refreshInFlight=null;
     let pendingTaskRender=false,pendingResultsRender=false;
+    let libraryVideo=null, libraryTrigger=null, libraryResult=null, libraryTrackKey=null, libraryTrackUrls=[];
+    let libraryTrackRequest=0;
     const byId=id=>root.getElementById(id), el=(tag,text='',cls='')=>{const node=root.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;};
     function addSnapshotDetails(container,entries,label='檢視設定快照'){
       const details=el('details','','text-xs text-gray-400');const summary=el('summary',label,'cursor-pointer');details.append(summary);
@@ -20,6 +22,7 @@
     const stageLabels={vad:'語音區間',asr:'語音辨識',correction:'字幕校正',translation:'字幕翻譯'};
     const statusLabels={queued:'排隊中',running:'處理中',retry_wait:'等待重試',cancelling:'取消中',waiting_for_resume:'等待手動續跑',completed:'已完成',failed:'失敗',cancelled:'已取消'};
     const languageLabels={ja:'日文',en:'英文','zh-TW':'繁體中文'};
+    const libraryPhases={model:'準備辨識模型',audio:'讀取影片音訊',transcribe:'語音辨識',translation_model:'準備翻譯模型',translate_zh:'字幕翻譯',saving:'儲存字幕'};
     const sourceLabels={history:'下載歷史',configured:'影片目錄',smb:'NAS'};
     const publicationLabels={published:'已發布',failed:'儲存失敗',publishing:'發布中',not_requested:'未要求發布'};
     const label=(map,value,fallback='')=>map[value]||fallback||value||'—';
@@ -35,12 +38,174 @@
       const box=byId('subtitle-videos'); if(!box||box.contains(root.activeElement))return;
       box.replaceChildren();
       if(!state.videos.length){box.append(el('p','目前找不到可處理的影片。影片會從下載歷史與已設定的影片目錄載入。','text-sm text-gray-400'));return;}
+      const searchText=value=>String(value||'').normalize('NFKC').toLowerCase();
+      const query=searchText(byId('subtitle-video-search')?.value).trim().split(/\s+/).filter(Boolean);
+      const groups=new Map();
       for(const video of state.videos){
-        const row=el('label','', 'flex items-start gap-3 rounded-lg border border-[#3e3e4e] p-3');
-        const check=el('input');check.type='checkbox';check.value=video.video_id;check.dataset.testid=`subtitle-video-${video.video_id}`;check.checked=state.selected.has(video.video_id);check.className='mt-1 h-5 w-5 accent-brand-600';
-        check.addEventListener('change',()=>{check.checked?state.selected.add(video.video_id):state.selected.delete(video.video_id);});
-        const text=el('span',`${video.title || video.name || '未命名影片'} · ${label(sourceLabels,video.source,'影片')}`,'min-w-0 break-words text-sm');row.append(check,text);box.append(row);
+        const text=searchText([video.title,video.name,video.code].join(' '));
+        if(!query.every(word=>text.includes(word)))continue;
+        const folder=video.folder||'根目錄';
+        const storage=video.source==='smb'?'NAS／SMB':'本機';
+        const groupName=`${storage} · ${folder}`;
+        if(!groups.has(groupName))groups.set(groupName,[]);
+        groups.get(groupName).push(video);
       }
+      if(!groups.size){box.append(el('p','找不到符合的影片。','text-sm text-gray-400'));return;}
+      for(const [folder,videos] of groups){
+        const group=el('section','','space-y-2');
+        group.append(el('h5',folder,'break-words px-2 text-xs font-medium text-gray-400'));
+        for(const video of videos){
+          const row=el('div','','flex items-center gap-2 rounded-lg border border-[#3e3e4e] p-2');
+          const choice=el('label','','flex min-w-0 flex-1 items-start gap-2 p-1');
+          const title=video.title||video.name||'未命名影片';
+          const check=el('input');check.type='checkbox';check.value=video.video_id;check.dataset.testid=`subtitle-video-${video.video_id}`;check.checked=state.selected.has(video.video_id);check.className='mt-1 h-5 w-5 accent-brand-600';
+          check.addEventListener('change',()=>{check.checked?state.selected.add(video.video_id):state.selected.delete(video.video_id);});
+          choice.append(check,el('span',title,'min-w-0 break-words text-sm'));
+          const preview=el('button','預覽與翻譯','min-h-10 shrink-0 rounded border border-[#3e3e4e] px-2 text-xs');
+          preview.type='button';
+          preview.setAttribute('aria-label',`預覽與翻譯：${title}`);
+          preview.setAttribute('aria-controls','subtitle-library-player');
+          preview.addEventListener('click',()=>openLibraryVideo(video,preview));
+          row.append(choice,preview);
+          group.append(row);
+        }
+        box.append(group);
+      }
+    }
+    function setLibraryTracks(key){
+      const media=byId('subtitle-library-video');
+      libraryTrackRequest++;
+      libraryTrackKey=key;
+      media.replaceChildren();
+      for(const url of libraryTrackUrls)URL.revokeObjectURL(url);
+      libraryTrackUrls=[];
+    }
+    function appendLibraryTrack(language,src,labelText){
+      const track=el('track');
+      track.kind='subtitles';
+      track.srclang=language;
+      track.label=labelText;
+      track.src=src;
+      byId('subtitle-library-video').append(track);
+    }
+    function openLibraryVideo(video,trigger,result=null){
+      const player=byId('subtitle-library-player'), media=byId('subtitle-library-video');
+      if(!player||!media)return;
+      libraryVideo=video;
+      libraryTrigger=trigger;
+      libraryResult=result;
+      setLibraryTracks(null);
+      player.hidden=false;
+      const title=byId('subtitle-library-title');
+      title.textContent=video.title||video.name||'影片預覽';
+      byId('subtitle-library-error').textContent='';
+      media.src=`/api/subtitles/videos/${encodeURIComponent(video.video_id)}/media`;
+      updateLibraryStatus();
+      title.focus();
+    }
+    function closeLibraryVideo(){
+      if(!libraryVideo)return;
+      const media=byId('subtitle-library-video');
+      libraryVideo=null;
+      media.pause();
+      media.removeAttribute('src');
+      setLibraryTracks(null);
+      media.load();
+      byId('subtitle-library-player').hidden=true;
+      if(libraryTrigger?.isConnected)libraryTrigger.focus();
+      else byId('subtitle-video-search')?.focus();
+    }
+    function mediaTime(seconds){
+      const value=Math.floor(seconds);
+      return `${Math.floor(value/60)}:${String(value%60).padStart(2,'0')}`;
+    }
+    function addCompletedLibraryTracks(task){
+      const request=libraryTrackRequest;
+      for(const language of ['ja','zh-TW']){
+        const path=`/api/subtitles/tasks/${encodeURIComponent(task.task_id)}/tracks/${encodeURIComponent(language)}`;
+        api('GET',path).then(result=>{
+          if(libraryTrackRequest!==request||typeof result.vtt!=='string')return;
+          const url=URL.createObjectURL(new Blob([result.vtt],{type:'text/vtt'}));
+          libraryTrackUrls.push(url);
+          appendLibraryTrack(language,url,`${languageLabels[language]}（${task.trial_seconds?'試翻':'本次結果'}）`);
+        }).catch(error=>{
+          if(libraryTrackRequest===request)byId('subtitle-library-error').textContent=`字幕預覽載入失敗：${error.message}`;
+        });
+      }
+    }
+    function updateLibraryStatus(){
+      if(!libraryVideo)return;
+      const videoId=libraryVideo.video_id;
+      const tasks=state.tasks.filter(task=>task.video_id===videoId&&task.library_translation)
+        .sort((a,b)=>(b.created_at??0)-(a.created_at??0));
+      const latest=tasks[0];
+      const lastCompleted=tasks.find(task=>task.task_id===libraryResult&&task.status==='completed')
+        ||tasks.find(task=>task.status==='completed');
+      const video=state.videos.find(item=>item.video_id===videoId)||libraryVideo;
+      const trackKey=JSON.stringify([videoId,lastCompleted?.task_id,video.subtitle_languages]);
+      if(trackKey!==libraryTrackKey){
+        setLibraryTracks(trackKey);
+        for(const language of ['ja','zh-TW']){
+          if(!video.subtitle_languages?.includes(language))continue;
+          appendLibraryTrack(language,`/api/subtitles/videos/${encodeURIComponent(videoId)}/tracks/${encodeURIComponent(language)}`,languageLabels[language]);
+        }
+        if(lastCompleted)addCompletedLibraryTracks(lastCompleted);
+      }
+      const progress=byId('subtitle-library-stage-progress');
+      const timeline=byId('subtitle-library-timeline');
+      const position=byId('subtitle-library-position');
+      const phase=byId('subtitle-library-phase');
+      const percent=latest?.stage_progress??latest?.progress;
+      const phaseName=libraryPhases[latest?.phase]||stageLabels[latest?.current_stage];
+      const details=[phaseName&&latest?.status==='running'?phaseName:'',
+        Number.isFinite(percent)?`階段進度 ${percent}%`:'',
+        Number.isFinite(latest?.processed_cues)?`已翻譯 ${latest.processed_cues}／${latest.total_cues} 句`:'',
+        latest?.error];
+      const elapsed=latest?.status==='running'&&Number.isFinite(latest.created_at)
+        ? `已提交 ${mediaTime(Math.max(0,Date.now()/1000-latest.created_at))}`:'';
+      const message=latest?[latest.trial_seconds?'試翻':'整部翻譯',label(statusLabels,latest.status),...details,
+        Number.isFinite(percent)?'':elapsed].filter(Boolean).join(' · '):'尚未啟動翻譯';
+      if(phase.textContent!==message)phase.textContent=message;
+      progress.hidden=!Number.isFinite(percent);
+      if(!progress.hidden)progress.value=percent;
+      const processed=latest?.processed_seconds;
+      const duration=byId('subtitle-library-video').duration;
+      timeline.hidden=!Number.isFinite(processed)||!Number.isFinite(duration)||duration<=0;
+      if(!timeline.hidden){
+        const positionSeconds=Math.min(processed,duration);
+        timeline.max=duration;
+        timeline.value=positionSeconds;
+        position.textContent=`已處理至 ${mediaTime(positionSeconds)}／${mediaTime(duration)}（影片時間軸 ${Math.floor(positionSeconds/duration*100)}%）`;
+      }else{
+        position.textContent=Number.isFinite(processed)?`已處理至 ${mediaTime(processed)}`:'';
+      }
+      const working=tasks.some(task=>['queued','running','retry_wait','cancelling','waiting_for_resume'].includes(task.status));
+      for(const id of ['subtitle-library-trial','subtitle-library-full']){
+        const button=byId(id);
+        button.disabled=working||busyActions.has(`library:${videoId}`);
+      }
+    }
+    async function submitLibraryTranslation(trial){
+      if(!libraryVideo)return;
+      const video_id=libraryVideo.video_id;
+      const key=`library:${video_id}`;
+      if(busyActions.has(key))return;
+      busyActions.add(key);
+      libraryResult=null;
+      byId('subtitle-library-error').textContent='';
+      updateLibraryStatus();
+      try{
+        const item={video_id,library_translation:true};
+        if(trial)item.trial_seconds=120;
+        const result=await api('POST','/api/subtitles/tasks',{items:[item]});
+        if(!result.items?.[0]?.success)throw new Error(result.items?.[0]?.error||'字幕任務沒有成功提交。');
+        status('字幕任務已加入佇列。');
+        await refresh();
+      }catch(error){
+        if(libraryVideo?.video_id===video_id)byId('subtitle-library-error').textContent=error.message;
+        status(error.message,true);
+      }
+      finally{busyActions.delete(key);updateLibraryStatus();}
     }
     function renderVideoErrors(){const box=byId('subtitle-video-errors');if(!box)return;box.replaceChildren();if(state.videoNotice)box.append(el('p',state.videoNotice));for(const error of state.videoErrors){box.append(el('p',`${label(sourceLabels,error.source,'影片來源')}：${error.error||'目前無法讀取'}`));}}
     function renderTasks(preserveFocus=false){
@@ -69,9 +234,13 @@
           addAction('up','往前',()=>act(task,'reorder',{position:Math.max(0,index-1)}));
           addAction('down','往後',()=>act(task,'reorder',{position:index+1}));
         }
-        addAction('redo','重做階段',()=>openRedo(task));
-        if(['queued','waiting_for_resume'].includes(task.status)&&!task.ever_started&&!task.inputs?.length)addAction('settings','套用新設定',()=>applySettings(task));
-        addAction('results','查看字幕結果',()=>loadResults(task.video_id));
+        if(task.library_translation){
+          if(source&&task.status==='completed')addAction('results','播放字幕結果',()=>openLibraryVideo(source,root.activeElement,task.task_id));
+        }else{
+          addAction('redo','重做階段',()=>openRedo(task));
+          if(['queued','waiting_for_resume'].includes(task.status)&&!task.ever_started&&!task.inputs?.length)addAction('settings','套用新設定',()=>applySettings(task));
+          addAction('results','查看字幕結果',()=>loadResults(task.video_id));
+        }
         row.append(actions);box.append(row);
       }
       if(focusedTestId){const target=[...box.querySelectorAll('[data-testid]')].find(node=>node.dataset.testid===focusedTestId);target?.focus();}
@@ -168,10 +337,19 @@
     }
     async function refresh({scanVideos=false}={}){
       if(refreshInFlight){await refreshInFlight;if(scanVideos)return refresh({scanVideos:true});return state;}
-      refreshInFlight=(async()=>{try{const [videos,tasks]=await Promise.all([scanVideos?api('GET','/api/subtitles/videos'):Promise.resolve(null),api('GET','/api/subtitles/tasks')]);if(videos){state.videos=videos.videos||[];state.videoErrors=videos.errors||[];state.videoPartial=videos.partial===true;state.videoNotice=videos.notice||null;settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;renderVideos();renderVideoErrors();}state.tasks=tasks.tasks||[];state.publications=tasks.publications||[];renderTasks();renderPublications();const selector=byId('subtitle-result-video');if(scanVideos&&selector&&!selector.contains(root.activeElement)){const previous=selector.value;selector.replaceChildren();const known=new Set();for(const video of state.videos){const option=el('option',video.title||video.name||video.video_id);option.value=video.video_id;selector.append(option);known.add(video.video_id);}for(const task of state.tasks){if(known.has(task.video_id))continue;const option=el('option',`${task.video_id} · 來源可能離線`);option.value=task.video_id;selector.append(option);known.add(task.video_id);}if([...selector.options].some(option=>option.value===previous))selector.value=previous;else if(selector.options.length)selector.value=selector.options[0].value;}if(state.activeVideo)await loadResults(state.activeVideo);return state;}catch(error){status(error.message,true);return state;}})();
+      refreshInFlight=(async()=>{try{const [videos,tasks]=await Promise.all([scanVideos?api('GET','/api/subtitles/videos'):Promise.resolve(null),api('GET','/api/subtitles/tasks')]);if(videos){state.videos=videos.videos||[];state.videoErrors=videos.errors||[];state.videoPartial=videos.partial===true;state.videoNotice=videos.notice||null;settings.state.localVad=videos.capabilities?.local_vad||settings.state.localVad;renderVideos();renderVideoErrors();}state.tasks=tasks.tasks||[];state.publications=tasks.publications||[];renderTasks();renderPublications();updateLibraryStatus();const selector=byId('subtitle-result-video');if(scanVideos&&selector&&!selector.contains(root.activeElement)){const previous=selector.value;selector.replaceChildren();const known=new Set();for(const video of state.videos){const option=el('option',video.title||video.name||video.video_id);option.value=video.video_id;selector.append(option);known.add(video.video_id);}for(const task of state.tasks){if(known.has(task.video_id))continue;const option=el('option',`${task.video_id} · 來源可能離線`);option.value=task.video_id;selector.append(option);known.add(task.video_id);}if([...selector.options].some(option=>option.value===previous))selector.value=previous;else if(selector.options.length)selector.value=selector.options[0].value;}if(state.activeVideo)await loadResults(state.activeVideo);return state;}catch(error){status(error.message,true);return state;}})();
       try{return await refreshInFlight;}finally{refreshInFlight=null;}
     }
     function bind(){
+      byId('subtitle-video-search')?.addEventListener('input',renderVideos);
+      byId('subtitle-library-close')?.addEventListener('click',closeLibraryVideo);
+      byId('subtitle-library-trial')?.addEventListener('click',()=>submitLibraryTranslation(true));
+      byId('subtitle-library-full')?.addEventListener('click',()=>submitLibraryTranslation(false));
+      const media=byId('subtitle-library-video');
+      media?.addEventListener('loadedmetadata',updateLibraryStatus);
+      media?.addEventListener('error',()=>{
+        if(libraryVideo)byId('subtitle-library-error').textContent='無法播放這部影片，請檢查檔案是否仍在原位置，以及瀏覽器是否支援其格式。';
+      });
       byId('subtitle-submit')?.addEventListener('click',submitSelected);
       byId('subtitle-confirm-submit')?.addEventListener('click',event=>{event.preventDefault();confirmSubmit();});
       byId('subtitle-confirm-cancel')?.addEventListener('click',()=>byId('subtitle-confirm-dialog')?.close());
