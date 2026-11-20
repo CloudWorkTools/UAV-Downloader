@@ -19,6 +19,7 @@ from Crypto.Cipher import AES
 import requests
 
 from uav_downloader.core import config
+from uav_downloader.subtitles.engine import SubtitleError
 
 DEFAULT_URL = 'http://uav-speaches:8000/v1'
 DEFAULT_MODEL = 'Systran/faster-whisper-small'
@@ -28,6 +29,13 @@ PIPELINE_VERSION = 'openai-asr-tail-retry-cache-v2'
 TAIL_SECONDS = 30
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _LOCK = threading.RLock()
+
+
+class LibraryQualityError(SubtitleError):
+    """A safe-to-display failure to validate a specific span of source audio."""
+
+    def __init__(self, start_seconds, end_seconds):
+        super().__init__(f'原片第 {start_seconds:.3f} 至 {end_seconds:.3f} 秒無法確認字幕')
 
 
 def _folder():
@@ -139,10 +147,12 @@ def _request(settings, wav_path, language='ja', parameters=None, stage_errors=Fa
     headers = {}
     if settings.get('api_key'):
         headers['Authorization'] = 'Bearer ' + settings['api_key']
+    speech_timestamps = settings.get('_speech_timestamps') is True
     # Audio and credentials must not follow redirects or the download proxy.
     with requests.Session() as session:
         session.trust_env = False
-        if settings['base_url'] == DEFAULT_URL and settings.get('_install_model', True):
+        if (not speech_timestamps and settings['base_url'] == DEFAULT_URL
+                and settings.get('_install_model', True)):
             with session.post(
                     DEFAULT_URL + '/models/' + quote(settings['model'], safe='/'),
                     headers=headers, timeout=(10, 900), allow_redirects=False) as installed:
@@ -158,6 +168,10 @@ def _request(settings, wav_path, language='ja', parameters=None, stage_errors=Fa
         if timestamp_granularities is not None:
             data['timestamp_granularities[]'] = timestamp_granularities
         data.update(form_parameters)
+        if speech_timestamps:
+            endpoint = base_url + '/audio/speech/timestamps'
+            data = {'threshold': '0.5', 'min_silence_duration_ms': '2000',
+                    'speech_pad_ms': '400', 'max_speech_duration_s': '16'}
         with open(wav_path, 'rb') as audio, session.post(
                 endpoint, headers=headers,
                 files={'file': ('audio.wav', audio, 'audio/wav')},
@@ -347,6 +361,21 @@ def transcribe(settings, wav_path, output_base, log_path, cancel_check=None, pro
                     raise engine.SubtitleError('辨識 API 字幕片段過多')
                 engine._notify(progress_callback, 'transcribe_ja', min(100, int((position + step) * 100 / frames)))
     _prune_cache(cache)
+    return _write_transcription(output_base, cues)
+
+
+def transcribe_library(settings, wav_path, output_base, log_path, cancel_check=None, progress_callback=None):
+    """Require VAD and word alignment before emitting managed library subtitles."""
+    if settings['base_url'] != DEFAULT_URL:
+        return transcribe(settings, wav_path, output_base, log_path, cancel_check, progress_callback)
+    from uav_downloader.subtitles.asr_library import transcribe_managed
+
+    return transcribe_managed(settings, wav_path, output_base, log_path, cancel_check, progress_callback)
+
+
+def _write_transcription(output_base, cues):
+    from uav_downloader.subtitles import engine
+
     if not cues:
         return None
     path = output_base + '.srt'
