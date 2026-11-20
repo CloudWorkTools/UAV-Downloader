@@ -97,13 +97,20 @@
       for(const url of libraryTrackUrls)URL.revokeObjectURL(url);
       libraryTrackUrls=[];
     }
-    function appendLibraryTrack(language,src,labelText){
+    function appendLibraryTrack(language,src,labelText,{show=false}={}){
       const track=el('track');
       track.kind='subtitles';
       track.srclang=language;
       track.label=labelText;
       track.src=src;
+      if(show){
+        track.default=true;
+        track.addEventListener('error',()=>{
+          if(track.isConnected)byId('subtitle-library-error').textContent='繁中字幕無法載入，請重新開啟字幕結果。';
+        });
+      }
       byId('subtitle-library-video').append(track);
+      if(show)track.track.mode='showing';
     }
     function openLibraryVideo(video,trigger,result=null){
       const player=byId('subtitle-library-player'), media=byId('subtitle-library-video');
@@ -144,7 +151,7 @@
           if(libraryTrackRequest!==request||typeof result.vtt!=='string')return;
           const url=URL.createObjectURL(new Blob([result.vtt],{type:'text/vtt'}));
           libraryTrackUrls.push(url);
-          appendLibraryTrack(language,url,`${languageLabels[language]}（${task.trial_seconds?'試翻':'本次結果'}）`);
+          appendLibraryTrack(language,url,`${languageLabels[language]}（${task.trial_seconds?'試翻':'本次結果'}）`,{show:language==='zh-TW'});
         }).catch(error=>{
           if(libraryTrackRequest===request)byId('subtitle-library-error').textContent=`字幕預覽載入失敗：${error.message}`;
         });
