@@ -1100,6 +1100,20 @@
       "reviewer": "/root/planb_flow",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/1119de5b9bde09edbbb67d919c2dafc526fbd7f8c9f25b6d78aefe7b43c94baa.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "a0ec7ff321f43af4a4e0ff3aefbc623537506c4d4a70c2cce0ea45bd449ad632",
+      "reviewer": "/root/planb_flow",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/a0ec7ff321f43af4a4e0ff3aefbc623537506c4d4a70c2cce0ea45bd449ad632.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "6a4c4e8d215b4f6db500ee4d882648922daca26bc2cec20e0992fcbabafca178",
+      "reviewer": "/root/planb_flow",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/6a4c4e8d215b4f6db500ee4d882648922daca26bc2cec20e0992fcbabafca178.json"
     }
   ],
   "policy_inputs": [
