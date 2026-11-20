@@ -229,3 +229,17 @@ def test_read_only_smb_connection_preserves_missing_configured_directory(monkeyp
     assert writes == []
     with nas.open_smb_storage(settings, destination):
         assert writes == [destination]
+
+
+def test_srt_preview_preserves_timing_with_old_empty_and_multiline_translations():
+    from uav_downloader.daemon.subtitle_files import srt_to_vtt
+
+    source = (
+        '1\n00:00:05,000 --> 00:00:09,000\n第一行\n\n第二行\n\n'
+        '2\n00:00:10,000 --> 00:00:11,000\n\n\n'
+        '3\n00:00:12,000 --> 00:00:13,000\n下一句\n'
+    )
+    assert srt_to_vtt(source) == (
+        'WEBVTT\n\n00:00:05.000 --> 00:00:09.000\n第一行\n第二行\n\n'
+        '00:00:12.000 --> 00:00:13.000\n下一句\n\n'
+    )

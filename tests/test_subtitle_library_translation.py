@@ -23,7 +23,7 @@ def test_trial_clips_cues_and_full_uses_safe_publication(tmp_path, monkeypatch):
         assert (source, target) == ('ja', 'zh-TW')
         assert engine._translation_provider_state.profile is None
         callback(stage, 50)
-        return ['繁中字幕'] * len(texts)
+        return ['繁中字幕\n\n下一行', '  '][:len(texts)]
 
     monkeypatch.setattr(engine, 'translate_cues', translate)
     with engine._translation_profile_scope(SimpleNamespace(uses_api=True)):
@@ -45,7 +45,8 @@ def test_trial_clips_cues_and_full_uses_safe_publication(tmp_path, monkeypatch):
         exported = tmp_path / completed['publish_status']['zh-TW']['path']
         assert exported != old_translation
         assert [cue.timing for cue in engine.parse_srt(exported.read_text())] == [
-            '00:01:59,000 --> 00:02:01,000', '00:02:00,000 --> 00:02:03,000']
+            '00:01:59,000 --> 00:02:01,000']
+        assert engine.parse_srt(exported.read_text())[0].text == '繁中字幕\n下一行'
         assert old_translation.read_text() == '手動字幕'
 
 

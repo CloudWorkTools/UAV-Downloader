@@ -25,16 +25,29 @@ _VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.ts'}
 _NAS_IDENTITY_FIELDS = ('mode', 'host', 'share', 'directory', 'username', 'direct_path')
 
 
+def subtitle_cue_text(text):
+    return '\n'.join(line for line in text.splitlines() if line.strip()).strip()
+
+
 def srt_to_vtt(text):
     timestamps = r'(\d{2,}:[0-5]\d:[0-5]\d[,\.]\d{3})'
     blocks = ['WEBVTT']
-    for cue in engine.parse_srt(text):
+    normalized = text.lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n').strip()
+    if not normalized:
+        return 'WEBVTT\n\n'
+    # Old model output can contain paragraph breaks or empty cues.
+    cues = re.split(r'(?<=\n)[ \t]*\n(?=[ \t]*[0-9]+[ \t]*\n[^\n]*-->)', normalized)
+    for cue in cues:
+        index, _, tail = cue.partition('\n')
+        cue_timing, _, text = tail.partition('\n')
         timing = re.fullmatch(
-            timestamps + r'\s+-->\s+' + timestamps + r'(?:\s+[^\n]*)?', cue.timing)
-        if not timing:
+            timestamps + r'\s+-->\s+' + timestamps + r'(?:\s+[^\n]*)?', cue_timing.strip())
+        if not index.strip().isdigit() or not timing:
             raise ValueError('字幕時間碼格式無效')
         start, end = (part.replace(',', '.') for part in timing.groups())
-        blocks.append(f'{start} --> {end}\n{escape(cue.text, quote=False)}')
+        text = subtitle_cue_text(text)
+        if text:
+            blocks.append(f'{start} --> {end}\n{escape(text, quote=False)}')
     return '\n\n'.join(blocks) + '\n\n'
 
 

@@ -609,7 +609,7 @@ class SubtitleTaskManager:
         return self._source_manager.publish_result(task['video_id'], result, 'zh-TW')
 
     def _run_library_translation(self, task, generation):
-        from uav_downloader.daemon.subtitle_files import read_video_subtitle
+        from uav_downloader.daemon.subtitle_files import read_video_subtitle, subtitle_cue_text
 
         task_id, video_id = task['task_id'], task['video_id']
         limit = task['trial_seconds']
@@ -686,10 +686,14 @@ class SubtitleTaskManager:
                             report_translation, cancel)
                         if len(texts) != len(batch):
                             raise ValueError('字幕翻譯結果句數不符')
-                        translated.extend((start, end, text) for (start, end, _), text in zip(batch, texts))
+                        translated.extend((start, end, clean) for (start, end, _), text in zip(batch, texts)
+                                          if (clean := subtitle_cue_text(text)))
                         processed = max(processed, max(cue[1] for cue in batch) / 1000)
-                        progress('translate_zh', len(translated) * 100 // len(cues),
-                                 processed=processed, count=len(translated), total=len(cues))
+                        finished = offset + len(batch)
+                        progress('translate_zh', finished * 100 // len(cues),
+                                 processed=processed, count=finished, total=len(cues))
+                if not translated:
+                    raise LibraryTranslationError('翻譯模型未產生可顯示的繁中字幕')
             verify(video_id, source)
         progress('save', None)
         for language, rows in [('ja', cues), ('zh-TW', translated)]:
