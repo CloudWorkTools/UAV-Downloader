@@ -227,8 +227,8 @@
     {
       "path": "src/uav_downloader/daemon/subtitle_tasks.py",
       "kind": "python-module",
-      "md5": "9ad79dbf515691a9b24216e433bad7d2",
-      "semantic_hash": "9fbb611df87cfa9364a1e6a2ba99f29ef7df9a6dcbaa78b9dd1011842e6292c2"
+      "md5": "662aff374957ae1aa23bb80e55c719aa",
+      "semantic_hash": "992c638282d2b040599d5808555e9fadce4325ab03e63cd6fd16ec53feef29de"
     },
     {
       "path": "src/uav_downloader/daemon/subtitle_files.py",
