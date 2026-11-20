@@ -9,6 +9,7 @@
     let pendingTaskRender=false,pendingResultsRender=false;
     let libraryVideo=null, libraryTrigger=null, libraryResult=null, libraryTrackKey=null, libraryTrackUrls=[];
     let libraryTrackRequest=0;
+    let libraryCaptionLanguage=null;
     let activeFolder=null,currentJobs=[],submitNotice='';
     const byId=id=>root.getElementById(id), el=(tag,text='',cls='')=>{const node=root.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;};
     function addSnapshotDetails(container,entries,label='檢視設定快照'){
@@ -90,6 +91,36 @@
       }
       if(!shown)box.append(el('p','找不到符合的影片。','text-sm text-gray-400'));
     }
+    function applyLibraryCaption(){
+      const media=byId('subtitle-library-video');
+      const selector=byId('subtitle-library-caption');
+      const tracks=[...media.querySelectorAll('track')];
+      const language=libraryCaptionLanguage??'zh-TW';
+      for(const track of tracks)track.track.mode=track.srclang===language?'showing':'disabled';
+      if(!selector)return;
+      selector.replaceChildren(new Option('關閉字幕',''),...tracks.map(track=>new Option(track.label,track.srclang)));
+      selector.value=tracks.some(track=>track.srclang===language)?language:'';
+      selector.disabled=!tracks.length;
+    }
+    function bindLibraryCaption(){
+      const media=byId('subtitle-library-video');
+      if(!media||byId('subtitle-library-caption'))return;
+      const label=el('label','顯示字幕','flex flex-wrap items-center gap-2 text-sm text-gray-200');
+      const selector=el('select','','min-h-10 rounded border border-[#535366] bg-[#282832] px-3');
+      selector.id='subtitle-library-caption';
+      selector.append(new Option('關閉字幕',''));
+      selector.disabled=true;
+      label.append(selector);
+      media.after(label);
+      selector.addEventListener('change',()=>{
+        libraryCaptionLanguage=selector.value;
+        applyLibraryCaption();
+      });
+      media.textTracks.addEventListener('change',()=>{
+        const active=[...media.textTracks].find(track=>track.mode==='showing');
+        selector.value=active?.language||'';
+      });
+    }
     function setLibraryTracks(key){
       const media=byId('subtitle-library-video');
       libraryTrackRequest++;
@@ -97,21 +128,23 @@
       media.replaceChildren();
       for(const url of libraryTrackUrls)URL.revokeObjectURL(url);
       libraryTrackUrls=[];
+      applyLibraryCaption();
     }
-    function appendLibraryTrack(language,src,labelText,{show=false}={}){
+    function appendLibraryTrack(language,src,labelText){
+      const media=byId('subtitle-library-video');
+      const previous=[...media.querySelectorAll('track')].find(track=>track.srclang===language);
       const track=el('track');
       track.kind='subtitles';
       track.srclang=language;
       track.label=labelText;
       track.src=src;
-      if(show){
-        track.default=true;
-        track.addEventListener('error',()=>{
-          if(track.isConnected)byId('subtitle-library-error').textContent='繁中字幕無法載入，請重新開啟字幕結果。';
-        });
-      }
-      byId('subtitle-library-video').append(track);
-      if(show)track.track.mode='showing';
+      track.addEventListener('error',()=>{
+        if(track.isConnected&&track.track.mode==='showing')byId('subtitle-library-error').textContent=
+          `${languageLabels[language]}字幕無法載入，請重新開啟字幕結果。`;
+      });
+      if(previous)previous.replaceWith(track);
+      else media.append(track);
+      applyLibraryCaption();
     }
     function openLibraryVideo(video,trigger,result=null){
       const player=byId('subtitle-library-player'), media=byId('subtitle-library-video');
@@ -152,7 +185,7 @@
           if(libraryTrackRequest!==request||typeof result.vtt!=='string')return;
           const url=URL.createObjectURL(new Blob([result.vtt],{type:'text/vtt'}));
           libraryTrackUrls.push(url);
-          appendLibraryTrack(language,url,`${languageLabels[language]}（${task.trial_seconds?'試翻':'本次結果'}）`,{show:language==='zh-TW'});
+          appendLibraryTrack(language,url,`${languageLabels[language]}（${task.trial_seconds?'試翻':'本次結果'}）`);
         }).catch(error=>{
           if(libraryTrackRequest===request)byId('subtitle-library-error').textContent=`字幕預覽載入失敗：${error.message}`;
         });
@@ -170,7 +203,7 @@
       const trackKey=JSON.stringify([videoId,lastCompleted?.task_id,video.subtitle_languages]);
       if(trackKey!==libraryTrackKey){
         setLibraryTracks(trackKey);
-        for(const language of ['ja','zh-TW']){
+        for(const language of ['zh-TW','ja']){
           if(!video.subtitle_languages?.includes(language))continue;
           appendLibraryTrack(language,`/api/subtitles/videos/${encodeURIComponent(videoId)}/tracks/${encodeURIComponent(language)}`,languageLabels[language]);
         }
@@ -593,6 +626,7 @@
       return state;
     }
     function bind(){
+      bindLibraryCaption();
       byId('subtitle-video-search')?.addEventListener('input',renderVideos);
       byId('subtitle-library-close')?.addEventListener('click',closeLibraryVideo);
       byId('subtitle-library-trial')?.addEventListener('click',()=>submitLibraryTranslation(true));
