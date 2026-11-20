@@ -1,6 +1,6 @@
 # 系統流程與程式導航
 
-本索引涵蓋已運行服務上的 Web 批次下載提交：從勾選影片、預覽目的地，到任務加入佇列、整批儲存及啟動派送。本範圍包含提交時的選用字幕設定快照；下載執行的任務重試與發布邊界另見 `download.execute`；網站擷取細節、後續字幕處理及服務啟停尚未建立流程基線。
+本索引涵蓋已運行服務上的 Web 批次下載提交：從勾選影片、預覽目的地，到任務加入佇列、整批儲存及啟動派送。本範圍包含提交時的選用字幕設定快照；下載執行的任務重試與發布邊界另見 `download.execute`；網站擷取細節、下載任務的後續字幕處理及服務啟停尚未建立流程基線；影片庫的試翻、整片翻譯及字幕發布見 `subtitle.library`。
 
 閱讀程式前，依[同步政策](../agents/flow-docs-sync.md)讀取本索引、[manifest](../flow-manifest.json)、受影響流程與[共用契約](contracts.md)。流程圖描述現行實作；預期責任仍由既有規格及貢獻規範定義。早期基線的歷史驗證見[導入證據](../flow-evidence/adoption.md)；目前候選版本以 manifest 中的指紋與審查紀錄為準。
 
@@ -12,6 +12,7 @@
 | `storage.destination` | [儲存位置解析、衝突檢查與提交確認](storage.destination.mmd) | [download_batch.py](../../src/uav_downloader/daemon/download_batch.py) `folder_name`、`destination`；[nas.py](../../src/uav_downloader/daemon/nas.py) `load_settings`、`direct_destination`、`smb_destination`、`public_destination`；[storage.py](../../src/uav_downloader/core/storage.py) `storage_fs`、`registered_storage`；[smb_storage.py](../../src/uav_downloader/core/smb_storage.py) `SmbStorage` | 無 |
 | `queue.enqueue` | [批次任務建立、去重與持久化](queue.enqueue.mmd) | [task_manager.py](../../src/uav_downloader/daemon/task_manager.py) `TaskManager.add_task`、`_duplicate_reason`、`_save_tasks`、`start_dispatcher`、`DownloadTask.to_dict`；[download_files.py](../../src/uav_downloader/daemon/download_files.py) `video_key`、`DownloadFiles.snapshot`；[video_identity.py](../../src/uav_downloader/core/video_identity.py) `video_code` | `storage.destination` |
 | `download.execute` | [下載、重試、發布、取消與暫停](download.execute.mmd) | [task_manager.py](../../src/uav_downloader/daemon/task_manager.py) `TaskManager._run_task_with_retries`、`_run_task`、`_retry_publication`；[download_files.py](../../src/uav_downloader/daemon/download_files.py) `DownloadFiles.publish`；[nas.py](../../src/uav_downloader/daemon/nas.py) `upload_video` | `queue.enqueue`、`storage.destination` |
+| `subtitle.library` | [影片庫辨識、翻譯、發布及儲存重試](subtitle.library.mmd) | [影片庫任務 API](../../src/uav_downloader/daemon/subtitle_http.py) 接收字幕來源選項；[字幕任務](../../src/uav_downloader/daemon/subtitle_tasks.py) 檢查發布版本；[受管 Speaches](../../src/uav_downloader/subtitles/asr_library.py) 驗證辨識結果 | 無 |
 
 每個圖節點的檔案與符號映射以 manifest 為準。`download_batch.py` 使用原生 Python AST 模式，所有頂層函式均有映射，內部 `same_destination` 屬於 `destination`。混合職責 Python 模組採 `python-module`，Rust 與 JavaScript 採 `tree-sitter-module`，以整模組 AST 排除格式與一般註解差異。符號模式保留函式層級影響判定。HTML、CSS 及未支援的行為設定仍採明示 `file` 模式，保守按位元組比較；任何模式都不表示該檔案所有功能已納入流程。
 
@@ -35,7 +36,7 @@
 
 manifest 的 include 清單界定本次盤點。它涵蓋現有批次前端、HTTP 轉送、目的地、佇列建立與持久化依賴；`download_batch*.py` 與 `download-batch*.js` 的新檔會被檢查器要求明示登記。其他新檔或新增跨模組依賴仍需來源審查，檢查器不會自動推導呼叫圖。
 
-未覆蓋的第一方邏輯包括網站擷取、搜尋與瀏覽、提交後的字幕處理、服務重啟後恢復、各網站擷取與片段下載實作、服務啟停／監督／WebSocket 更新、CLI、桌面程式、Watcher、建置與部署。`download.execute` 描述執行中的取消及重試邊界，不涵蓋全部網站擷取細節。批次新增任務成功回應也不代表影片已下載完成。
+未覆蓋的第一方邏輯包括網站擷取、搜尋與瀏覽、下載任務提交後的字幕處理、服務重啟後恢復、各網站擷取與片段下載實作、服務啟停／監督／WebSocket 更新、CLI、桌面程式、Watcher、建置與部署。`download.execute` 描述執行中的取消及重試邊界，不涵蓋全部網站擷取細節。批次新增任務成功回應也不代表影片已下載完成。
 
 這是部分導入，不能宣稱全專案覆蓋。共用檔案雖以整檔摘要納入變更警示，其非批次功能仍為缺口；新增功能須連同依賴擴充流程及映射，不能只重算摘要。
 
