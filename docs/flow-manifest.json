@@ -101,8 +101,8 @@
     {
       "path": "src/uav_downloader/daemon/download_files.py",
       "kind": "python-module",
-      "md5": "38d44934d406b2187a6c7afe15517391",
-      "semantic_hash": "b86ebad397ec7fc52a3c74eb0ea1ec6aeead8e9609f626a13f02af3b9c521a7a"
+      "md5": "efe33ad215201df99221fda20850785c",
+      "semantic_hash": "a5017a40807f7df9dabc7471018ddb96e7620950c592bc80cfcfc50749ed4ba4"
     },
     {
       "path": "src/uav_downloader/daemon/nas.py",
@@ -113,14 +113,14 @@
     {
       "path": "src/uav_downloader/daemon/server.py",
       "kind": "python-module",
-      "md5": "846fab8ffb114401379489d75c23e745",
-      "semantic_hash": "2152b9f65c26cacc9b0c14643ac0400d4718a1d12c78c69998f5fd08ab6a717c"
+      "md5": "f2e7ccc1bc15741b4f9097a6c013a8f9",
+      "semantic_hash": "5ce1e451ed936fd40bc3256d8ad30b39e019cb2437ef023031089d439982ebea"
     },
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
       "kind": "python-module",
-      "md5": "e94c28ae491e465eb5932a3032d0ec8a",
-      "semantic_hash": "5164da4bc1f700b78b4d60c72ab83fe3bcc8ab031b08c4577e64edfbfddce245"
+      "md5": "bcf600f49d2d54945fa0c1d60fb29816",
+      "semantic_hash": "ee29c4039f2edbcd1a973a62153a357269a906e5c81fa5c6743d5521f0f5902c"
     },
     {
       "path": "src/uav_downloader/metadata.py",
@@ -148,7 +148,7 @@
     {
       "path": "uav-web/frontend/index.html",
       "kind": "file",
-      "md5": "f1f8d9aa0d0a6f4d249225541dd8fc1f"
+      "md5": "20fc642cbfac5e69313ec9def677821e"
     },
     {
       "path": "uav-web/frontend/video-selection.js",
@@ -175,8 +175,8 @@
       "path": "uav-web/frontend/mobile-actions.js",
       "kind": "tree-sitter-module",
       "language": "javascript",
-      "md5": "5aeac7cb129f375602167c023397f740",
-      "semantic_hash": "9e13ab0a7718e3fa8999999bd231b90f07ee8d0b8a2fb1f12624deaddb791440"
+      "md5": "b3bae59dcbd6c3930cf7078ba2400519",
+      "semantic_hash": "4e391f6362de059c7e1d36c611079b8ed74620f28d1f0bd97158ae76230463b2"
     },
     {
       "path": "uav-web/frontend/mobile-actions.css",
@@ -241,15 +241,15 @@
     {
       "path": "src/uav_downloader/sites/base.py",
       "kind": "python-module",
-      "md5": "0819f9c21397c45e64c6d2bb788465da",
-      "semantic_hash": "2ef46f4fad0a29f8e451fac6df55e58792af97348e1301b425cc6d076e2576b3"
+      "md5": "63213aa3bc103037d20595fe606ee98c",
+      "semantic_hash": "42a83d9ab440707476fe20f637df0ad56fcbba9ba5e1112fd3f2be9746ff7448"
     },
     {
       "path": "uav-web/frontend/task-selection.js",
       "kind": "tree-sitter-module",
-      "md5": "e2407d809c9d768265b656a8ee554525",
+      "md5": "5ffde94fff20a47f379af50bac171511",
       "language": "javascript",
-      "semantic_hash": "23b914a62f7505ff0be3975a96d1286e09621cf9f002ed09d02cc25191d7bdb8"
+      "semantic_hash": "6b5511cbccd177b5e19ce55959e94e89f1bdc9c5186293c128662334f4c0c14c"
     }
   ],
   "features": [
@@ -1286,105 +1286,105 @@
     {
       "feature": "download.batch",
       "fingerprint": "8cb0c1aae8d2a71b87f3dd3a52fc65c12a5cefde37bfae65154196394b55cc5f",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/8cb0c1aae8d2a71b87f3dd3a52fc65c12a5cefde37bfae65154196394b55cc5f.json"
     },
     {
       "feature": "download.execute",
       "fingerprint": "a8e77f001451fb9cc8bf3478cfee3415d1752db2973121fcb91673bfe51e2e4b",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.execute/a8e77f001451fb9cc8bf3478cfee3415d1752db2973121fcb91673bfe51e2e4b.json"
     },
     {
       "feature": "queue.enqueue",
       "fingerprint": "01fe6d61573bcfe723b5cad3104c7cf48735c17be94c54be70e0f9d86f6b85e3",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/queue.enqueue/01fe6d61573bcfe723b5cad3104c7cf48735c17be94c54be70e0f9d86f6b85e3.json"
     },
     {
       "feature": "storage.destination",
       "fingerprint": "73c0842fa16b90747c401283e3fdadacc69ac57413a94f5a48ea384aab56fe61",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/storage.destination/73c0842fa16b90747c401283e3fdadacc69ac57413a94f5a48ea384aab56fe61.json"
     },
     {
       "feature": "subtitle.library",
       "fingerprint": "e80f6b8f77b1f4d610b4b282c35d8ece9d50d52293fef338690f213f3271296d",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/subtitle.library/e80f6b8f77b1f4d610b4b282c35d8ece9d50d52293fef338690f213f3271296d.json"
     },
     {
       "feature": "download.batch",
       "fingerprint": "fe91a15fbe389943f776a53195b77f860e9c52898744539f18537df1960a9baf",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/fe91a15fbe389943f776a53195b77f860e9c52898744539f18537df1960a9baf.json"
     },
     {
       "feature": "download.execute",
       "fingerprint": "02d0f4386b5d5e959ebd4550fc8bb79808defdf779d1755463b470a4fbc71f81",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.execute/02d0f4386b5d5e959ebd4550fc8bb79808defdf779d1755463b470a4fbc71f81.json"
     },
     {
       "feature": "queue.enqueue",
       "fingerprint": "00f2fcffe1bd14239b45d8f087f93c3bc58c3d726b3b40fa9a666682bce5dbbb",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/queue.enqueue/00f2fcffe1bd14239b45d8f087f93c3bc58c3d726b3b40fa9a666682bce5dbbb.json"
     },
     {
       "feature": "storage.destination",
       "fingerprint": "851a5f51aec0c0bd685ed4cee69de4907b8ffd825cc3c67cd55686c3a213477e",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/storage.destination/851a5f51aec0c0bd685ed4cee69de4907b8ffd825cc3c67cd55686c3a213477e.json"
     },
     {
       "feature": "subtitle.library",
       "fingerprint": "1e8302d3b605a5cc896e0c5f6cf4db77a537326e85beb00c37aa9d139c5cb7f6",
-      "reviewer": "Codex 獨立審查代理 candidate_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 candidate_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/subtitle.library/1e8302d3b605a5cc896e0c5f6cf4db77a537326e85beb00c37aa9d139c5cb7f6.json"
     },
     {
       "feature": "download.batch",
       "fingerprint": "ede3fb78fe19e3d741d1e41e32141b6a56dc0530bbdf047d283216b61305f397",
-      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 force_merge_flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/ede3fb78fe19e3d741d1e41e32141b6a56dc0530bbdf047d283216b61305f397.json"
     },
     {
       "feature": "download.execute",
       "fingerprint": "eb06bc958b7a414c555c0b6f51c6980df397d02d893975ced288f1cb81967ca7",
-      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 force_merge_flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.execute/eb06bc958b7a414c555c0b6f51c6980df397d02d893975ced288f1cb81967ca7.json"
     },
     {
       "feature": "queue.enqueue",
       "fingerprint": "8691fce713452e5eec77b788272c81d5089e4061b1a085a9365f8ce8181bf403",
-      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 force_merge_flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/queue.enqueue/8691fce713452e5eec77b788272c81d5089e4061b1a085a9365f8ce8181bf403.json"
     },
     {
       "feature": "storage.destination",
       "fingerprint": "83cdba3751a5a7f5f2cf9bc47540982f69f41984e664c4cd95e46d679d2fc673",
-      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 force_merge_flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/storage.destination/83cdba3751a5a7f5f2cf9bc47540982f69f41984e664c4cd95e46d679d2fc673.json"
     },
     {
       "feature": "subtitle.library",
       "fingerprint": "58da9e0dfa4cc06bdc4af3ca400c1c138449721c131c6ae8a5b5e56e60b3f008",
-      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "reviewer": "Codex \u7368\u7acb\u5be9\u67e5\u4ee3\u7406 force_merge_flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/subtitle.library/58da9e0dfa4cc06bdc4af3ca400c1c138449721c131c6ae8a5b5e56e60b3f008.json"
     }
