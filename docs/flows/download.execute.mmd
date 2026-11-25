@@ -29,7 +29,7 @@ START -->|接受強制合併請求| FORCE
 FORCE -->|儲存成功| PARTIAL
 FORCE -->|合併或寫入失敗| FORCEFAIL
 FORCE -->|取消任務| CANCEL
-FORCE -->|服務停止| PAUSED
+FORCE -->|服務停止或沒有可用片段| PAUSED
 PARTIAL --> PAUSED
 PAUSECHECK -->|釋放成功且有合併請求，重新排入佇列| FORCE
 ATTEMPT -->|需要內建語音辨識| SUBTITLE

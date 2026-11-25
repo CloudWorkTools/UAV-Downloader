@@ -101,8 +101,8 @@
     {
       "path": "src/uav_downloader/daemon/download_files.py",
       "kind": "python-module",
-      "md5": "8f90323c63ebdcbf81cff4c18723815d",
-      "semantic_hash": "0575beae04d1ebad0e8e7f690bfdef56affaf31d33104798d5240de61a406af9"
+      "md5": "38d44934d406b2187a6c7afe15517391",
+      "semantic_hash": "b86ebad397ec7fc52a3c74eb0ea1ec6aeead8e9609f626a13f02af3b9c521a7a"
     },
     {
       "path": "src/uav_downloader/daemon/nas.py",
@@ -119,8 +119,8 @@
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
       "kind": "python-module",
-      "md5": "898c8d5db8b5098e47cc594ea4a1e60e",
-      "semantic_hash": "91081565d0c462c045da1413fc062ecfe5aed03cc6f1c87d7655bac22fd14dd1"
+      "md5": "e94c28ae491e465eb5932a3032d0ec8a",
+      "semantic_hash": "5164da4bc1f700b78b4d60c72ab83fe3bcc8ab031b08c4577e64edfbfddce245"
     },
     {
       "path": "src/uav_downloader/metadata.py",

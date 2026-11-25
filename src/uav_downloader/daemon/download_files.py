@@ -129,7 +129,7 @@ class DownloadFiles:
             if segments:
                 groups.append(segments)
         if not groups:
-            raise ValueError('找不到已下載的影片片段，請先續傳')
+            return None
         if len(groups) != 1:
             raise ValueError('找到多份片段目錄，無法確認哪些片段屬於同一份影片')
 

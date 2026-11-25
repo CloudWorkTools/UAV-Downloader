@@ -1670,7 +1670,8 @@ def test_concurrent_force_merges_keep_both_exports_for_same_name(manager, monkey
 
 
 
-def test_force_merge_stays_unavailable_for_byte_download_after_restart(manager, monkeypatch, tmp_path):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_force_merge_handles_byte_download_after_restart(manager, monkeypatch, tmp_path, legacy):
     import json
     import threading
 
@@ -1699,7 +1700,18 @@ def test_force_merge_stays_unavailable_for_byte_download_after_restart(manager, 
     assert 'progress_unit' not in record
     assert record['files']['progress_unit'] == 'bytes'
 
+    if legacy:
+        del record['files']['progress_unit']
+        manager._state_path.write_text(json.dumps([record]))
     restored = tm.TaskManager(state_path=manager._state_path)
-    assert not restored.list_tasks()[0]['can_force_merge']
-    assert restored.force_merge_tasks([task.task_id])['skipped'] == [task.task_id]
+    assert restored.list_tasks()[0]['can_force_merge'] is legacy
+    result = restored.force_merge_tasks([task.task_id])
+    if legacy:
+        assert result['accepted'] == [task.task_id]
+        restored._run_task_with_retries(restored.get_task(task.task_id))
+        assert '請先續傳' in restored.list_tasks()[0]['phase']
+        assert (Path(task.files.workdir) / 'fixture.mp4.part').read_bytes() == b'direct video bytes'
+        assert not (Path(task.dest) / '不完整影片').exists()
+    else:
+        assert result['skipped'] == [task.task_id]
     assert restored.list_tasks()[0]['status'] == 'paused'

@@ -878,8 +878,10 @@ class TaskManager:
                     destination, task.name, task.cancelled_event, task.paused_event, task.set_phase)
             if filename:
                 task.set_phase(f'已儲存不完整影片：不完整影片/{filename}。可繼續下載')
-            else:
+            elif task.paused_event.is_set() or task.cancelled_event.is_set():
                 task.set_phase('強制合併已停止，下載片段已保留')
+            else:
+                task.set_phase('找不到已下載的影片片段，請先續傳')
             self._finish_task(task, 'paused')
         except Exception as exc:
             task.error = safe_media_message(exc)
