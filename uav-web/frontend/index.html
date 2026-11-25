@@ -1056,7 +1056,8 @@
 
       container.innerHTML = tasks.map(t => {
         const merging = t.status === 'merging';
-        const mergePercent = merging && t.phase_total > 0 ? Math.floor(t.phase_done * 100 / t.phase_total) : null;
+        const showPhaseCount = t.phase_total > 0 && (!merging || t.phase === '強制合併影片片段');
+        const mergePercent = merging && showPhaseCount ? Math.floor(t.phase_done * 100 / t.phase_total) : null;
         const progressInfo = merging
           ? (mergePercent === null ? '處理中' : `${mergePercent}%（${t.phase_done}/${t.phase_total}）`)
           : `${t.progress || 0}%（${t.downloaded_segments || 0}/${t.total_segments || 0}）`;
@@ -1120,7 +1121,7 @@
               </div>
             </div>
             ${(t.folder_policy || t.force_merged_file) ? `<p class="text-xs text-gray-400 storage-path" title="${safe(t.final_dest || t.dest)}">儲存至：${safe(window.formatStoragePath(t.final_dest || t.dest))}</p>` : ''}
-            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 whitespace-pre-wrap break-words">${safe(t.phase)}${t.phase_total ? ` · ${safe(String(t.phase_done ?? 0))} / ${safe(t.phase_total)}` : ''}${mergePercent === null ? '' : ` · ${mergePercent}%`}</p>` : ''}
+            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 whitespace-pre-wrap break-words">${safe(t.phase)}${showPhaseCount ? ` · ${safe(String(t.phase_done ?? 0))} / ${safe(t.phase_total)}` : ''}${mergePercent === null ? '' : ` · ${mergePercent}%`}</p>` : ''}
             <!-- Progress Bar -->
             ${merging ? `<progress aria-label="${safe(t.phase || '強制合併進度')}" max="100"${mergePercent === null ? '' : ` value="${mergePercent}"`} class="block w-full h-2 accent-brand-500"></progress>`
               : t.total_segments > 0 && !['completed', 'skipped', 'cancelled'].includes(t.status) ? `<div class="space-y-1">

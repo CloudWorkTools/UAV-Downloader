@@ -187,6 +187,9 @@ try {
         check(meter()?.matches(':indeterminate') && taskList.textContent.includes(phase),
           'Unmeasured merge phases must show their label and indeterminate progress');
       }
+      renderTasks([{...merging, phase:'合併影片片段', phase_done:36, phase_total:40}]);
+      check(meter()?.matches(':indeterminate') && !taskList.textContent.includes('90%'),
+        'Late progress from the regular download must not be shown as force merge progress');
       renderTasks([{...merging, status:'completed', force_merged_file:'【強制合併】測試.mp4'}]);
       check(!meter() && taskList.textContent.includes('已下載'), 'Completed merge must remove the progress bar');
       renderTasks([task]);
