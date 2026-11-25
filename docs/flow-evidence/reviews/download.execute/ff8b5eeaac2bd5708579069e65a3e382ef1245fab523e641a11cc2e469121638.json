@@ -1,0 +1,56 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "ff8b5eeaac2bd5708579069e65a3e382ef1245fab523e641a11cc2e469121638",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 6d29171df11723709738f42070f0901473514fc1，候選 3c4c4060fc58a2ad4f96af50e4741d447e1fa800。本機 Python 235 項通過。",
+    "兩候選逐檔對各自基底計算的零上下文補丁識別一致。task_manager.py:876–926 在同個鎖中檢查暫停／取消，發布成功才標 `completed`、進度 100 與實際檔名；工作還在活動集合時不接受清除。封裝失敗保留原分片，取消先勝出時不發布，已發布後的收尾錯誤仍保留完成與警告。",
+    "download_files.py 仍讀單一任務的完整索引與避開 `.part`，使用可攜名稱的固定『【強制合併】』標記，原子發布拒絕覆寫，再遇同名會挑新字尾。正常下載既有正片查找略過有此標記的檔案，可重新新增完整下載；強制合併不寫入一般下載歷史或觸發一般影片的自動字幕。",
+    "task-selection.js:93–151 將完成紀錄拆為一般與強制合併。清除只送勾選類別的固定 IDs；server.py 與 task_manager.py 只刪當下已完成、非活動且列在請求內的紀錄。ID 省略使用既有清除全部行為，明示空值或不合格式回 400。保留影片、原片段及下載歷史。",
+    "獨立重跑 master 兩檔的合併／清除定向測試 15 項通過。node tests/task_menu.cjs 與 node tests/web_ui.cjs 同樣通過。",
+    "候選實際 Web 證據 live-ui.log 驗證單支、多支、全佇列及分組清除，四份 MP4 位於原指定目錄且 ffprobe 可讀為 H.264。"
+  ],
+  "limitations": [
+    "已確認保留原分片。清除只移除紀錄，隱藏任務暫存仍佔用原空間，完成紀錄沒有原工作續傳操作。",
+    "沿用三種儲存後端模擬證據，實體 NAS 尚未驗證。"
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "docs/flows/download.execute.mmd",
+    "src/uav_downloader/daemon/task_manager.py",
+    "src/uav_downloader/daemon/download_files.py",
+    "src/uav_downloader/daemon/server.py",
+    "src/uav_downloader/sites/base.py",
+    "src/uav_downloader/core/storage.py",
+    "src/uav_downloader/daemon/nas.py",
+    "uav-web/frontend/index.html",
+    "uav-web/frontend/task-selection.js",
+    "uav-web/frontend/mobile-actions.js",
+    "tests/test_daemon_downloads.py",
+    "tests/test_web_download_settings.py",
+    "tests/task_menu.cjs",
+    "tests/web_ui.cjs",
+    "docs/web-ui.md"
+  ],
+  "reused_evidence": [
+    "/tmp/uav-force-release.Ebwl6C/flow-review-delivery.json 的相同功能（沿用既有分片讀取、非本次變更的入口及目的地契約）。",
+    "本輪 master 共用補丁審查及與 live 的逐檔 patch ID 對比。"
+  ],
+  "additional_reads": [
+    {
+      "path": "src/uav_downloader/core/storage.py",
+      "reason": "核對既有目的地及共享路由與本輪變更的交界。"
+    },
+    {
+      "path": "src/uav_downloader/daemon/nas.py",
+      "reason": "核對既有目的地及共享路由與本輪變更的交界。"
+    }
+  ],
+  "token_usage": "unavailable"
+}

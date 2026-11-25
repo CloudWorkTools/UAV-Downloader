@@ -1,11 +1,13 @@
-window.createTaskSelection = ({taskAction}) => {
+window.createTaskSelection = ({taskAction, onTasks}) => {
   const selected = new Set();
   let eligible = new Set();
   let busy = false;
   let selecting = false;
-  const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'pausing', 'paused', 'failed'].includes(task?.status);
+  const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'pausing', 'paused', 'failed', 'merging'].includes(task?.status);
   let tasksById = new Map();
-  const groupOf = task => ['completed', 'skipped'].includes(task.status) ? 'completed' :
+  const forceMerged = task => task.status === 'completed' && !!task.force_merged_file;
+  const groupOf = task => forceMerged(task) ? 'force-merged' :
+    ['completed', 'skipped'].includes(task.status) ? 'completed' :
     ['pending', 'paused', 'failed', 'cancelled'].includes(task.status) ? 'waiting' : 'running';
   const canAction = (task, action) => ({
     edit: task?.subtitles_only ? [] : ['pending', 'preparing', 'downloading', 'paused', 'failed', 'cancelled'],
@@ -30,6 +32,15 @@ window.createTaskSelection = ({taskAction}) => {
     const toggle = document.getElementById('select-tasks-button');
     toggle.disabled = busy || !eligible.size;
     toggle.textContent = all ? '清除勾選' : '全選';
+    const selectMerged = document.getElementById('select-force-merged-button');
+    if (selectMerged) {
+      selectMerged.hidden = ![...tasksById.values()].some(forceMerged);
+      selectMerged.disabled = busy || selectMerged.hidden;
+    }
+    const clearCompleted = document.getElementById('clear-completed-button');
+    if (clearCompleted) {
+      clearCompleted.disabled = busy || ![...tasksById.values()].some(task => task.status === 'completed');
+    }
     const cancel = document.getElementById('cancel-tasks-button');
     const cancellable = selected.size;
     cancel.hidden = !cancellable;
@@ -43,6 +54,18 @@ window.createTaskSelection = ({taskAction}) => {
         button.disabled = busy || !count;
         if (action === 'retry') button.textContent = `重新開始所選 (${count})`;
       }
+    }
+    const mergeAll = document.getElementById('force-merge-all-button');
+    if (mergeAll) {
+      mergeAll.hidden = ![...tasksById.values()].some(task => task.can_force_merge);
+      mergeAll.disabled = busy || mergeAll.hidden;
+    }
+    const mergeSelected = document.getElementById('force-merge-selected-button');
+    if (mergeSelected) {
+      const count = [...selected].filter(id => tasksById.get(id)?.can_force_merge).length;
+      mergeSelected.textContent = `強制合併所選 (${count})`;
+      mergeSelected.hidden = !count;
+      mergeSelected.disabled = busy || !count;
     }
     document.querySelectorAll('#tasks-container input[type="checkbox"]').forEach(box => {
       box.checked = selected.has(box.dataset.taskId);
@@ -67,18 +90,37 @@ window.createTaskSelection = ({taskAction}) => {
     else { selecting = true; for (const id of eligible) selected.add(id); }
     update();
   }
-  let removalGroups = new Map();
-  function cancel(ids = [...selected]) {
+  function selectForceMerged() {
     if (busy) return;
+    selecting = true;
+    selected.clear();
+    for (const [id, task] of tasksById) if (forceMerged(task)) selected.add(id);
+    update();
+  }
+  let removalGroups = new Map();
+  let completedOnly = false;
+  function clearCompleted() {
+    cancel([...tasksById.keys()].filter(id => tasksById.get(id).status === 'completed'), true);
+  }
+  function cancel(ids = [...selected], onlyCompleted = false) {
+    if (busy) return;
+    completedOnly = onlyCompleted;
     removalGroups = new Map(ids.filter(id => tasksById.has(id)).map(id => [id, groupOf(tasksById.get(id))]));
     if (!removalGroups.size) return;
-    for (const group of ['running', 'completed', 'waiting']) {
+    for (const group of ['running', 'completed', 'force-merged', 'waiting']) {
       const count = [...removalGroups.values()].filter(value => value === group).length;
       const box = document.getElementById(`task-remove-${group}`);
       box.checked = count > 0;
       box.disabled = !count;
+      const row = box.closest?.('label');
+      if (row) row.hidden = onlyCompleted && (group === 'running' || group === 'waiting');
       document.getElementById(`task-remove-${group}-count`).textContent = String(count);
     }
+    document.getElementById('task-remove-title').textContent = onlyCompleted ? '清除已完成項目' : '取消下載與移除紀錄';
+    document.getElementById('task-remove-note').hidden = onlyCompleted;
+    document.getElementById('task-remove-description').textContent = onlyCompleted
+      ? '只清除勾選類別的任務紀錄，影片與下載歷史會保留。'
+      : '未完成任務會先取消並清除可確認歸屬的下載檔案。已完成影片與下載歷史會保留。';
     document.getElementById('task-remove-error').textContent = '';
     document.getElementById('task-remove-dialog').showModal();
   }
@@ -94,12 +136,20 @@ window.createTaskSelection = ({taskAction}) => {
     update();
     document.getElementById('task-remove-dialog').close();
     const status = document.getElementById('queue-action-status');
-    status.textContent = `正在取消、清理並移除 ${ids.length} 個任務…`;
+    const action = completedOnly ? 'clear_completed' : 'cancel_remove';
+    status.textContent = completedOnly ? '正在清除已完成紀錄…' : `正在取消、清理並移除 ${ids.length} 個任務…`;
     let preservedNotice = '';
     try {
-      const response = await fetch('/api/download/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'cancel_remove', task_ids:ids})});
+      const response = await fetch('/api/download/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, task_ids:ids})});
       const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || '批次取消失敗');
+      if (!response.ok || !result.success) throw new Error(result.error || '移除任務失敗');
+      if (completedOnly) {
+        const refresh = await fetch('/api/download/tasks');
+        if (!refresh.ok) throw new Error('清單更新失敗，請稍候重新整理');
+        onTasks?.((await refresh.json()).tasks || []);
+        status.textContent = `已清除 ${result.removed} 筆已完成紀錄，影片與下載歷史已保留。`;
+        return;
+      }
       const pending = new Set(ids);
       const unverified = new Set(result.unverified || []);
       if (unverified.size) preservedNotice = `；${unverified.size} 個任務缺少檔案歸屬紀錄，無法確認歸屬的檔案會保留，請手動檢查`;
@@ -127,7 +177,7 @@ window.createTaskSelection = ({taskAction}) => {
       }
       status.textContent = `已移除 ${removed} 個；${failures.length} 個失敗${preservedNotice}${pending.size ? `；${pending.size} 個仍在背景處理，完成後會自動移除紀錄` : ''}。${failures.length ? ` ${failures[0]}` : ''}`;
     } catch (error) {
-      status.textContent = `批次移除未完成：${error.message}；請確認清單後重試${preservedNotice}。`;
+      status.textContent = completedOnly ? error.message : `批次移除未完成：${error.message}；請確認清單後重試${preservedNotice}。`;
     } finally {
       busy = false;
       update();
@@ -142,6 +192,40 @@ window.createTaskSelection = ({taskAction}) => {
         if (canAction(tasksById.get(id), action) && await taskAction(action, id)) selected.delete(id);
       }
     } finally { busy = false; update(); }
+  }
+  let mergeIds = [];
+  function forceMerge(ids = [...selected]) {
+    if (busy) return;
+    mergeIds = (ids ?? [...tasksById.keys()]).filter(id => tasksById.get(id)?.can_force_merge);
+    if (!mergeIds.length) return;
+    document.getElementById('task-merge-count').textContent = String(mergeIds.length);
+    document.getElementById('task-merge-dialog').showModal();
+  }
+  async function confirmForceMerge(event) {
+    event.preventDefault();
+    if (busy || !mergeIds.length) return;
+    busy = true;
+    const ids = mergeIds;
+    mergeIds = [];
+    update();
+    document.getElementById('task-merge-dialog').close();
+    const status = document.getElementById('queue-action-status');
+    status.textContent = '正在送出強制合併請求…';
+    try {
+      const response = await fetch('/api/download/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'force_merge', task_ids: ids})
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || '無法開始強制合併');
+      status.textContent = `已排入 ${result.accepted.length} 個強制合併任務。略過 ${result.skipped.length} 個狀態已變更的任務。`;
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      busy = false;
+      update();
+    }
   }
   let editingIds = [];
   let savedNas = {};
@@ -264,5 +348,5 @@ window.createTaskSelection = ({taskAction}) => {
     if (!selecting) selected.clear();
     update();
   }
-  return {toggleMode, setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, confirmCancel, update, edit, saveEdit, updateEditStorage};
+  return {toggleMode, setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, selectForceMerged, clearCompleted, cancel, confirmCancel, forceMerge, confirmForceMerge, update, edit, saveEdit, updateEditStorage};
 };

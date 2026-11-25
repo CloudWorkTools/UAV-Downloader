@@ -335,6 +335,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 if action in ('cancel', 'cancel_remove'):
                     return self._send_json({'success': True, **self.task_manager.cancel_tasks(
                         body.get('task_ids'), remove_records=action == 'cancel_remove')})
+                if action == 'force_merge':
+                    return self._send_json({'success': True, **self.task_manager.force_merge_tasks(body.get('task_ids'))})
                 if action == 'update_settings':
                     result = self.task_manager.update_tasks(body.get('task_ids'), storage=body.get('storage'),
                                                             dest=body.get('dest'), subtitle_mode=body.get('subtitle_mode'),
@@ -347,7 +349,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 if action == 'remove_duplicates':
                     return self._send_json({'success': True, **self.task_manager.remove_duplicates()})
                 if action == 'clear_completed':
-                    return self._send_json({'success': True, 'removed': self.task_manager.clear_completed()})
+                    selection = {'task_ids': body['task_ids']} if 'task_ids' in body else {}
+                    return self._send_json({'success': True, 'removed': self.task_manager.clear_completed(**selection)})
                 if action == 'test_destination':
                     if task_id is not None and (not isinstance(task_id, str) or not task_id):
                         return self._send_error('task_id 必須是文字', 400)
