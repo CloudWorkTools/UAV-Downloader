@@ -1474,3 +1474,114 @@ def test_failed_status_is_visible_only_after_final_attempt(manager, monkeypatch)
     assert 'failed' not in observed[:first_failed]
     assert observed.count('downloading') >= 6
     assert task.status == 'failed'
+
+
+@pytest.fixture
+def hls_segments(tmp_path):
+    import shutil
+    import subprocess
+
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        pytest.skip('需要 FFmpeg 與 ffprobe')
+    subprocess.run([
+        'ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=64x64:r=10',
+        '-t', '4', '-c:v', 'libx264', '-threads', '1', '-g', '10', '-sc_threshold', '0',
+        '-f', 'segment', '-segment_time', '1', str(tmp_path / '%06d.ts'),
+    ], check=True)
+    return [path.read_bytes() for path in sorted(tmp_path.glob('*.ts'))]
+
+
+def assert_partial_video(path, frames):
+    import subprocess
+
+    count = subprocess.check_output([
+        'ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_frames',
+        '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', str(path),
+    ], text=True)
+    assert int(count) == frames
+
+
+def test_force_merge_restored_task_uses_only_saved_segments(manager, monkeypatch, tmp_path, hls_segments):
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/mimk-290', folder_policy='overwrite')
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    task.status, task.name = 'failed', '測試影片'
+    task.downloaded_segments, task.total_segments = 3, 4
+    segments = Path(task.files.workdir) / 'segments'
+    segments.mkdir()
+    for index in (2, 0, 3):
+        (segments / f'{index:06d}.mp4').write_bytes(hls_segments[index])
+    (segments / '000001.mp4.part').write_bytes(hls_segments[1])
+    original = Path(task.dest) / '測試影片.mp4'
+    original.write_bytes(b'existing-full-video')
+    manager._save_tasks()
+    create_site = MagicMock(side_effect=AssertionError('合併不應連線至原來源'))
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', create_site)
+    restored = tm.TaskManager(state_path=manager._state_path)
+    payload = restored.force_merge_tasks([task.task_id, 'missing', task.task_id])
+    assert payload == {'accepted': [task.task_id], 'skipped': ['missing']}
+    task = restored.get_task(task.task_id)
+    restored._run_task_with_retries(task)
+
+    assert task.status == 'paused', task.error
+    folder = Path(task.dest) / '不完整影片'
+    assert [p.name for p in folder.iterdir()] == ['測試影片.mp4']
+    assert_partial_video(folder / '測試影片.mp4', 30)
+    assert original.read_bytes() == b'existing-full-video'
+    assert len(list(segments.iterdir())) == 4
+    assert tm.get_history_manager().find_downloaded({'url': task.url, 'title': task.name}) is None
+    create_site.assert_not_called()
+
+
+def test_force_merge_waits_for_inflight_segment_before_export(manager, monkeypatch, hls_segments):
+    import threading
+
+    task = manager.add_task('https://missav.ai/mimk-290')
+    started, release = threading.Event(), threading.Event()
+
+    def download(job):
+        folder = Path(job._temp_folder)
+        folder.mkdir()
+        (folder / '000000.mp4').write_bytes(hls_segments[0])
+        job._progress_callback(1, 4, 0)
+        started.set()
+        assert release.wait(5)
+        (folder / '000002.mp4').write_bytes(hls_segments[2])
+        return not job._cancel_job
+
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    assert manager.start_now(task.task_id)
+    try:
+        assert started.wait(5)
+        assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
+        assert manager.force_merge_tasks([task.task_id])['skipped'] == [task.task_id]
+        assert not (Path(task.dest) / '不完整影片').exists()
+    finally:
+        release.set()
+        task.thread.join(5)
+    assert not task.thread.is_alive()
+    manager._run_task_with_retries(task)
+
+    assert task.status == 'paused', task.error
+    assert_partial_video(Path(task.dest) / '不完整影片' / 'MIMK-290.mp4', 20)
+    assert len(list((Path(task.files.workdir) / 'segments').glob('*.mp4'))) == 2
+
+
+def test_force_merge_failure_keeps_segments_and_can_retry(manager):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    task.status, task.name = 'failed', 'MIMK-290'
+    task.downloaded_segments, task.total_segments = 1, 2
+    segments = Path(task.files.workdir) / 'segments'
+    segments.mkdir()
+    corrupt = segments / '000001.mp4'
+    corrupt.write_bytes(b'corrupt')
+
+    assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
+    manager._run_task_with_retries(task)
+
+    assert task.status == 'failed'
+    assert '封裝失敗' in task.error
+    assert not list((Path(task.dest) / '不完整影片').glob('*.mp4'))
+    assert corrupt.read_bytes() == b'corrupt'
+    assert manager.list_tasks()[0]['can_force_merge']

@@ -3,7 +3,7 @@ window.createTaskSelection = ({taskAction}) => {
   let eligible = new Set();
   let busy = false;
   let selecting = false;
-  const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'pausing', 'paused', 'failed'].includes(task?.status);
+  const canCancel = task => ['pending', 'preparing', 'downloading', 'subtitles', 'uploading', 'publishing', 'pausing', 'paused', 'failed', 'merging'].includes(task?.status);
   let tasksById = new Map();
   const groupOf = task => ['completed', 'skipped'].includes(task.status) ? 'completed' :
     ['pending', 'paused', 'failed', 'cancelled'].includes(task.status) ? 'waiting' : 'running';
@@ -43,6 +43,18 @@ window.createTaskSelection = ({taskAction}) => {
         button.disabled = busy || !count;
         if (action === 'retry') button.textContent = `重新開始所選 (${count})`;
       }
+    }
+    const mergeAll = document.getElementById('force-merge-all-button');
+    if (mergeAll) {
+      mergeAll.hidden = ![...tasksById.values()].some(task => task.can_force_merge);
+      mergeAll.disabled = busy || mergeAll.hidden;
+    }
+    const mergeSelected = document.getElementById('force-merge-selected-button');
+    if (mergeSelected) {
+      const count = [...selected].filter(id => tasksById.get(id)?.can_force_merge).length;
+      mergeSelected.textContent = `強制合併所選 (${count})`;
+      mergeSelected.hidden = !count;
+      mergeSelected.disabled = busy || !count;
     }
     document.querySelectorAll('#tasks-container input[type="checkbox"]').forEach(box => {
       box.checked = selected.has(box.dataset.taskId);
@@ -142,6 +154,40 @@ window.createTaskSelection = ({taskAction}) => {
         if (canAction(tasksById.get(id), action) && await taskAction(action, id)) selected.delete(id);
       }
     } finally { busy = false; update(); }
+  }
+  let mergeIds = [];
+  function forceMerge(ids = [...selected]) {
+    if (busy) return;
+    mergeIds = (ids ?? [...tasksById.keys()]).filter(id => tasksById.get(id)?.can_force_merge);
+    if (!mergeIds.length) return;
+    document.getElementById('task-merge-count').textContent = String(mergeIds.length);
+    document.getElementById('task-merge-dialog').showModal();
+  }
+  async function confirmForceMerge(event) {
+    event.preventDefault();
+    if (busy || !mergeIds.length) return;
+    busy = true;
+    const ids = mergeIds;
+    mergeIds = [];
+    update();
+    document.getElementById('task-merge-dialog').close();
+    const status = document.getElementById('queue-action-status');
+    status.textContent = '正在送出強制合併請求…';
+    try {
+      const response = await fetch('/api/download/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'force_merge', task_ids: ids})
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || '無法開始強制合併');
+      status.textContent = `已排入 ${result.accepted.length} 個強制合併任務。略過 ${result.skipped.length} 個狀態已變更的任務。`;
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      busy = false;
+      update();
+    }
   }
   let editingIds = [];
   let savedNas = {};
@@ -264,5 +310,5 @@ window.createTaskSelection = ({taskAction}) => {
     if (!selecting) selected.clear();
     update();
   }
-  return {toggleMode, setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, confirmCancel, update, edit, saveEdit, updateEditStorage};
+  return {toggleMode, setTasks, canAction, perform, canCancel, has: id => selected.has(id), toggle, toggleAll, cancel, confirmCancel, forceMerge, confirmForceMerge, update, edit, saveEdit, updateEditStorage};
 };

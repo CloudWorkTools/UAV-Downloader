@@ -759,3 +759,14 @@ def test_batch_cancel_remove_preserves_unverified_files(web_settings):
     assert result['unverified'] == [task.task_id]
     assert server.task_manager.get_task(task.task_id) is None
     assert file.read_bytes() == b'preserve'
+
+
+def test_force_merge_api_validates_selection_and_skips_tasks_without_segments(web_settings):
+    request, server, _ = web_settings
+    task = server.task_manager.add_task('https://missav.ai/merge-example')
+    action = {'action': 'force_merge'}
+    assert request('/api/download/action', {**action, 'task_ids': 'invalid'})[0] == 400
+    code, result = request('/api/download/action', {**action, 'task_ids': [task.task_id]})
+    assert code == 200
+    assert result == {'success': True, 'accepted': [], 'skipped': [task.task_id]}
+    assert task.status == 'pending'
