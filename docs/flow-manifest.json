@@ -98,8 +98,8 @@
     {
       "path": "src/uav_downloader/daemon/download_files.py",
       "kind": "python-module",
-      "md5": "38d44934d406b2187a6c7afe15517391",
-      "semantic_hash": "b86ebad397ec7fc52a3c74eb0ea1ec6aeead8e9609f626a13f02af3b9c521a7a"
+      "md5": "efe33ad215201df99221fda20850785c",
+      "semantic_hash": "a5017a40807f7df9dabc7471018ddb96e7620950c592bc80cfcfc50749ed4ba4"
     },
     {
       "path": "src/uav_downloader/daemon/nas.py",
@@ -110,14 +110,14 @@
     {
       "path": "src/uav_downloader/daemon/server.py",
       "kind": "python-module",
-      "md5": "7e49b07ca7c439ce07f14512e12bc951",
-      "semantic_hash": "5c05c39b9fc6cb1f05a6689c8e01a852834e0579b6e4fb490913d2fc8b763029"
+      "md5": "7846e5c7dddb339fa17da9a4bd4a2968",
+      "semantic_hash": "75b57c5a7b8a862bf260327fd2f17d243c5028be28a60a7eefaccfaad1776046"
     },
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
       "kind": "python-module",
-      "md5": "940565e1a77a9fe75693d2488bc71b70",
-      "semantic_hash": "52e228265f1fbb684102eba6a5917bd24f8a7966fb817e26a2818f58a0d55b17"
+      "md5": "369279f41b0d33a5fb08bb82a2180876",
+      "semantic_hash": "bf0664c385cc10094c50285cc1eca94dacbfc0aa107a3bfe669047f7d051dcc3"
     },
     {
       "path": "src/uav_downloader/metadata.py",
@@ -145,7 +145,7 @@
     {
       "path": "uav-web/frontend/index.html",
       "kind": "file",
-      "md5": "edb6182ae03e5cfd7668cbed068aeabc"
+      "md5": "a040eed7b49244c846211f8e97b926ae"
     },
     {
       "path": "uav-web/frontend/video-selection.js",
@@ -172,8 +172,8 @@
       "path": "uav-web/frontend/mobile-actions.js",
       "kind": "tree-sitter-module",
       "language": "javascript",
-      "md5": "5aeac7cb129f375602167c023397f740",
-      "semantic_hash": "9e13ab0a7718e3fa8999999bd231b90f07ee8d0b8a2fb1f12624deaddb791440"
+      "md5": "b3bae59dcbd6c3930cf7078ba2400519",
+      "semantic_hash": "4e391f6362de059c7e1d36c611079b8ed74620f28d1f0bd97158ae76230463b2"
     },
     {
       "path": "uav-web/frontend/mobile-actions.css",
@@ -220,15 +220,15 @@
     {
       "path": "src/uav_downloader/sites/base.py",
       "kind": "python-module",
-      "md5": "0819f9c21397c45e64c6d2bb788465da",
-      "semantic_hash": "2ef46f4fad0a29f8e451fac6df55e58792af97348e1301b425cc6d076e2576b3"
+      "md5": "63213aa3bc103037d20595fe606ee98c",
+      "semantic_hash": "42a83d9ab440707476fe20f637df0ad56fcbba9ba5e1112fd3f2be9746ff7448"
     },
     {
       "path": "uav-web/frontend/task-selection.js",
       "kind": "tree-sitter-module",
-      "md5": "e2407d809c9d768265b656a8ee554525",
+      "md5": "5ffde94fff20a47f379af50bac171511",
       "language": "javascript",
-      "semantic_hash": "23b914a62f7505ff0be3975a96d1286e09621cf9f002ed09d02cc25191d7bdb8"
+      "semantic_hash": "6b5511cbccd177b5e19ce55959e94e89f1bdc9c5186293c128662334f4c0c14c"
     }
   ],
   "features": [
@@ -1149,6 +1149,34 @@
       "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/storage.destination/0d88f4f686f88e63d9210d31cfa605b6f13684b964e63b4d3cd61e2408002086.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "3ce5d0d88cfffa7d1211699631d9c063cc0000c0fb4eb510dac7c5a51eca7d7c",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/3ce5d0d88cfffa7d1211699631d9c063cc0000c0fb4eb510dac7c5a51eca7d7c.json"
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "79c0c79c86214792c8fce39b9330834e4a1e021e6c56576703a858a751e0bc92",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.execute/79c0c79c86214792c8fce39b9330834e4a1e021e6c56576703a858a751e0bc92.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "f48805b36a48df5048810eac38ea49d73d34ba890f634ee239947018cecce907",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/f48805b36a48df5048810eac38ea49d73d34ba890f634ee239947018cecce907.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "c5de040891b584f73000da9bf5eea41c30ea9e53a16f31e99ab6b0227336dc9e",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/c5de040891b584f73000da9bf5eea41c30ea9e53a16f31e99ab6b0227336dc9e.json"
     }
   ],
   "policy_inputs": [

@@ -64,6 +64,7 @@ class DownloadTask:
     staging_dir: str = ''
     folder_policy: str = ''
     subtitle_request: Optional[dict] = field(default=None, repr=False)
+    force_merged_file: str = ""
     _force_merge_requested: bool = field(default=False, repr=False)
 
     def set_phase(self, message, done=0, total=0):
@@ -163,6 +164,7 @@ class TaskManager:
                     smb_destinations.add(task.dest)
                 if files:
                     task.files = DownloadFiles.restore(task.dest, task.task_id, files, task.staging_dir)
+                    task.force_merged_file = files.get('force_merged_file', '')
                     if files.get('progress_unit') == 'bytes':
                         task.progress_unit = 'bytes'
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
@@ -198,6 +200,8 @@ class TaskManager:
                 record['subtitle_request'] = task.subtitle_request
                 if isinstance(task.files, DownloadFiles):
                     record['files'] = task.files.snapshot()
+                    if task.force_merged_file:
+                        record['files']['force_merged_file'] = task.force_merged_file
                     if task.progress_unit == 'bytes':
                         record['files']['progress_unit'] = 'bytes'
                 records.append(record)
@@ -445,7 +449,8 @@ class TaskManager:
     def list_tasks(self) -> List[Dict[str, Any]]:
         with self._lock:
             # Return ordered list, newest first
-            return [dict(task.to_dict(), can_force_merge=task.can_force_merge())
+            return [dict(task.to_dict(), can_force_merge=task.can_force_merge(),
+                         force_merged_file=task.force_merged_file)
                     for task in reversed(list(self._tasks.values()))]
 
     def pause_task(self, task_id: str) -> bool:
@@ -478,7 +483,8 @@ class TaskManager:
             task = self._tasks.get(task_id)
             if not task or task_id in self._active or task.status not in (('completed', 'paused', 'failed', 'cancelled') if subtitles_only else ('paused', 'failed', 'cancelled')):
                 return False
-            if subtitles_only and (not task.name or not task.enable_subtitles or task.subtitle_mode == 'none'):
+            if subtitles_only and (task.force_merged_file or not task.name or not task.enable_subtitles
+                                   or task.subtitle_mode == 'none'):
                 return False
             self._restore_task_password(task.nas_settings)
             if task.dest.startswith('smb:') and not task.nas_settings.get('enabled'):
@@ -603,10 +609,15 @@ class TaskManager:
         if task.remove_after_cancel and task.status in ('completed', 'skipped', 'cancelled'):
             self.remove_task(task.task_id, defer_save=defer_save)
 
-    def clear_completed(self) -> int:
+    def clear_completed(self, task_ids=...) -> int:
+        if task_ids is not ... and (not isinstance(task_ids, list) or not task_ids
+                                    or any(not isinstance(tid, str) or not tid for tid in task_ids)):
+            raise ValueError('請提供非空的 task_ids 文字清單')
+        selected = None if task_ids is ... else set(task_ids)
         with self._lock:
             ids = [task_id for task_id, task in self._tasks.items()
-                   if task.status == 'completed' and task_id not in self._active]
+                   if task.status == 'completed' and task_id not in self._active
+                   and (selected is None or task_id in selected)]
             for task_id in ids:
                 del self._tasks[task_id]
             self._save_tasks()
@@ -616,7 +627,8 @@ class TaskManager:
         with self._lock:
             groups = {}
             for task in self._tasks.values():
-                groups.setdefault(video_key(task.url, task.name), []).append(task)
+                if not task.force_merged_file:
+                    groups.setdefault(video_key(task.url, task.name), []).append(task)
             removed, protected_count = [], 0
             for tasks in groups.values():
                 protected = [task for task in tasks if task.task_id in self._active or task.task_id in self._queue
@@ -674,7 +686,7 @@ class TaskManager:
                     return '相同影片仍有未完成任務，請先完成或取消該任務'
             return ''
         for other in self._tasks.values():
-            if (other is not task and other.status not in ("failed", "cancelled", "skipped")
+            if (other is not task and not other.force_merged_file and other.status not in ("failed", "cancelled", "skipped")
                     and video_key(other.url, other.name) == key):
                 return "相同番號或網址已在佇列或已完成，已略過"
         entry = get_history_manager().find_downloaded({'url': task.url, 'title': task.name}, similarity_threshold=1.0)
@@ -847,7 +859,8 @@ class TaskManager:
             task._retry_attempt = None
             with self._lock:
                 self._active.pop(task.task_id, None)
-                if task.paused_event.is_set() and not task.cancelled_event.is_set():
+                if (task.paused_event.is_set() and not task.cancelled_event.is_set()
+                        and not task.force_merged_file):
                     task.status = 'paused'
                     task.error = None
                 if not force_merge and task._force_merge_requested:
@@ -861,6 +874,22 @@ class TaskManager:
             self._save_tasks()
 
     def _run_force_merge(self, task):
+        def commit(publish_file, source, target):
+            # Serialize the final publish with cancellation and the shutdown snapshot.
+            with self._lock:
+                if task.cancelled_event.is_set() or task.paused_event.is_set():
+                    return False
+                publish_file(source, target)
+                task.force_merged_file = os.path.basename(target)
+                task.progress = 100
+                task.status = 'completed'
+                task.set_phase(f'已儲存強制合併影片：{task.force_merged_file}')
+                try:
+                    self._save_tasks()
+                except FileExistsError as exc:
+                    raise OSError('強制合併成果已儲存，任務狀態寫入失敗') from exc
+                return True
+
         try:
             with ExitStack() as storage:
                 self._restore_task_password(task.nas_settings)
@@ -874,23 +903,26 @@ class TaskManager:
                             task.files.filesystem = storage_fs(task.files.workdir)
                     elif mode == 'direct':
                         nas.direct_destination(task.nas_settings)
-                filename = task.files.export_partial(
-                    destination, task.name, task.cancelled_event, task.paused_event, task.set_phase)
-            if filename:
-                task.set_phase(f'已儲存不完整影片：不完整影片/{filename}。可繼續下載')
-            elif task.paused_event.is_set() or task.cancelled_event.is_set():
+                task.files.export_partial(
+                    destination, task.name, task.cancelled_event, task.paused_event, task.set_phase, commit)
+            if task.force_merged_file:
+                return
+            if task.paused_event.is_set() or task.cancelled_event.is_set():
                 task.set_phase('強制合併已停止，下載片段已保留')
             else:
                 task.set_phase('找不到已下載的影片片段，請先續傳')
             self._finish_task(task, 'paused')
         except Exception as exc:
             task.error = safe_media_message(exc)
-            task.set_phase('強制合併失敗')
-            self._finish_task(task, 'failed')
+            if task.force_merged_file:
+                task.set_phase(f'已儲存強制合併影片：{task.force_merged_file}，收尾時發生錯誤')
+            else:
+                task.set_phase('強制合併失敗')
+                self._finish_task(task, 'failed')
         finally:
             with self._lock:
                 task._force_merge_requested = False
-                if task.cancelled_event.is_set():
+                if task.cancelled_event.is_set() and not task.force_merged_file:
                     task.status = 'cancelling'
 
     def _retry_publication(self, task, action):

@@ -22,7 +22,7 @@ window.addEventListener('DOMContentLoaded', () => {
     queue: ['下載功能', [['新增任務', 'queue-add-mobile'], ['批次處理', 'batch'], ['佇列整理', 'organize']]],
     selection: ['影片選取', ['select-page-button', 'download-selected-button', 'browse-clear-mobile']],
     batch: ['批次處理', ['queue-selection-mode', 'select-tasks-button', 'pause-tasks-button', 'resume-tasks-button', 'retry-tasks-button', 'force-merge-selected-button', 'edit-tasks-button', 'cancel-tasks-button']],
-    organize: ['佇列整理', ['resume-unfinished-button', 'force-merge-all-button', 'remove-duplicate-tasks-button', 'clear-completed-button', 'queue-probe-mobile']],
+    organize: ['佇列整理', ['resume-unfinished-button', 'force-merge-all-button', 'remove-duplicate-tasks-button', 'select-force-merged-button', 'clear-completed-button', 'queue-probe-mobile']],
   };
   let stack = [];
   let page;

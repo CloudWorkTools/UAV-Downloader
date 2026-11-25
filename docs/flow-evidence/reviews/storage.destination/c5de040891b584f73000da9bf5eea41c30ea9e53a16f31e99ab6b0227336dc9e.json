@@ -1,0 +1,46 @@
+{
+  "feature": "storage.destination",
+  "fingerprint": "c5de040891b584f73000da9bf5eea41c30ea9e53a16f31e99ab6b0227336dc9e",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 6a967ce15a0490404bcd77ff6b0c44fb4c211541，候選 6428a8fe437cbedb62e7f31062501d8038d710d2。本機 Python 235 項通過。",
+    "目的地 preview/submit 的本機、direct、SMB 及上傳判斷未改。強制合併沿用該任務原位置。本機、direct、smb 使用目標後端，upload 仍將本機暫存成品傳到原設定的 NAS 子目錄。",
+    "原目錄既有檔案保護仍由不可覆寫原子發布完成。新成品進入原目錄的一般檔案筆數，既有同影片掃描因固定檔名標記分辨正式完整影片與這種成品。"
+  ],
+  "limitations": [
+    "沒有登入真實 NAS 驗證這次原目錄發布。"
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "docs/flows/storage.destination.mmd",
+    "src/uav_downloader/daemon/download_batch.py",
+    "src/uav_downloader/daemon/nas.py",
+    "src/uav_downloader/core/storage.py",
+    "src/uav_downloader/core/smb_storage.py",
+    "src/uav_downloader/daemon/download_files.py"
+  ],
+  "reused_evidence": [
+    "/tmp/uav-force-master.vUCFfu/flow-review.json 的相同功能（沿用既有分片讀取、非本次變更的入口及目的地契約）。"
+  ],
+  "additional_reads": [
+    {
+      "path": "src/uav_downloader/daemon/nas.py",
+      "reason": "核對既有目的地及共享路由與本輪變更的交界。"
+    },
+    {
+      "path": "src/uav_downloader/core/storage.py",
+      "reason": "核對既有目的地及共享路由與本輪變更的交界。"
+    },
+    {
+      "path": "src/uav_downloader/core/smb_storage.py",
+      "reason": "核對既有目的地及共享路由與本輪變更的交界。"
+    }
+  ],
+  "token_usage": "unavailable"
+}
