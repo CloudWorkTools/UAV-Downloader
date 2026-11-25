@@ -770,3 +770,33 @@ def test_force_merge_api_validates_selection_and_skips_tasks_without_segments(we
     assert code == 200
     assert result == {'success': True, 'accepted': [], 'skipped': [task.task_id]}
     assert task.status == 'pending'
+
+
+def test_clear_completed_selection_validates_ids_and_only_removes_selected_records(web_settings):
+    request, server, _ = web_settings
+    tasks = [server.task_manager.add_task(f'https://missav.ai/clear-example-{i}') for i in range(4)]
+    tasks[0].status = tasks[1].status = tasks[2].status = 'completed'
+    server.task_manager._active[tasks[2].task_id] = tasks[2]
+    video = Path(tasks[0].dest) / '【強制合併】影片.mp4'
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b'keep')
+    action = {'action': 'clear_completed'}
+    for invalid in (None, [], 'invalid', [tasks[0].task_id, None]):
+        assert request('/api/download/action', {**action, 'task_ids': invalid})[0] == 400
+    ids = [tasks[0].task_id, tasks[2].task_id, tasks[3].task_id, 'unknown', tasks[0].task_id]
+    assert request('/api/download/action', {**action, 'task_ids': ids}) == (200, {'success': True, 'removed': 1})
+    assert server.task_manager.get_task(tasks[0].task_id) is None
+    assert all(server.task_manager.get_task(task.task_id) is task for task in tasks[1:])
+    assert video.read_bytes() == b'keep'
+    assert request('/api/download/action', action) == (200, {'success': True, 'removed': 1})
+
+
+def test_retry_subtitles_api_rejects_force_merged_task(web_settings):
+    request, server, _ = web_settings
+    task = server.task_manager.add_task('https://missav.ai/partial-subtitles',
+                                        enable_subtitles=True, subtitle_mode='ja')
+    task.status, task.name = 'completed', 'Partial'
+    task.force_merged_file = '【強制合併】Partial.mp4'
+    status, _ = request('/api/download/action', {'action': 'retry_subtitles', 'task_id': task.task_id})
+    assert status == 409
+    assert task.status == 'completed'

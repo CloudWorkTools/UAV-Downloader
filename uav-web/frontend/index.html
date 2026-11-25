@@ -246,13 +246,14 @@
           <button id="resume-unfinished-button" onclick="resumeUnfinishedTasks()" disabled title="不用勾選，繼續等待中、已暫停或失敗的任務；執行中的任務不會重複啟動" class="h-10 px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs rounded-lg disabled:opacity-40">續傳未完成</button>
           <button id="force-merge-all-button" onclick="taskSelection.forceMerge(null)" hidden disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">強制合併未完成影片</button>
 <button id="remove-duplicate-tasks-button" onclick="removeDuplicateTasks()" disabled title="移除已略過及同番號的多餘清單紀錄，保留檔案、歷史及可續傳任務" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">移除重複番號</button>
-          <button id="clear-completed-button" onclick="clearCompletedTasks()" disabled title="只從下載清單移除已完成紀錄，保留影片及下載歷史" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">清除已完成項目</button>
+          <button id="clear-completed-button" onclick="taskSelection.clearCompleted()" disabled title="只從下載清單移除已完成紀錄，保留影片及下載歷史" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">清除已完成項目</button>
           <button id="queue-probe-mobile" onclick="testDownloadDestination(this)" class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">測試下載目的地</button>
             </div>
           </details>
         </div>
         <div id="queue-batch-actions" hidden class="mt-3 flex flex-wrap items-center gap-2" aria-label="所選任務操作">
 <button id="select-tasks-button" onclick="taskSelection.toggleAll()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">全選</button><span id="queue-selection-count" role="status" class="text-xs text-gray-300">已選 0 項</span><button id="pause-tasks-button" hidden onclick="taskSelection.perform('pause')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">暫停所選</button><button id="resume-tasks-button" hidden onclick="taskSelection.perform('resume')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">繼續所選</button><button id="retry-tasks-button" hidden onclick="taskSelection.perform('retry')" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">重新開始所選</button><button id="edit-tasks-button" hidden onclick="taskSelection.edit()" disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">修改所選設定</button>
+          <button id="select-force-merged-button" onclick="taskSelection.selectForceMerged()" hidden disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">只選強制合併</button>
           <button id="force-merge-selected-button" onclick="taskSelection.forceMerge()" hidden disabled class="h-10 px-3.5 bg-[#282832] border border-[#3e3e4e] text-xs rounded-lg disabled:opacity-40">強制合併所選</button>
           <button id="cancel-tasks-button" hidden onclick="taskSelection.cancel()" disabled class="h-11 px-3.5 bg-rose-600 hover:bg-rose-700 text-white text-xs rounded-lg disabled:opacity-40">取消／移除所選 (0)</button>
         </div>
@@ -537,26 +538,27 @@
   <dialog id="task-merge-dialog" aria-labelledby="task-merge-title" aria-describedby="task-merge-description" class="bg-[#1a1a22] text-white rounded-xl p-5 w-[min(95vw,28rem)] max-h-[90dvh] overflow-y-auto overscroll-contain border border-[#3e3e4e] backdrop:bg-black/70">
     <form method="dialog" onsubmit="taskSelection.confirmForceMerge(event)" class="space-y-4">
       <h2 id="task-merge-title" class="text-lg font-semibold">強制合併 <span id="task-merge-count"></span> 支影片</h2>
-      <p id="task-merge-description" class="text-sm text-gray-300">正在下載的任務會先暫停。已下載的片段會合併成 MP4，另存到目的地的「不完整影片」資料夾。成品可能跳段，原片段會保留供續傳。</p>
+      <p id="task-merge-description" class="text-sm text-gray-300">正在下載的任務會先暫停。已下載的片段會合併成 MP4，直接存入原指定目錄，檔名會標記「強制合併」。成品可能跳段。</p>
       <div class="flex justify-end gap-3">
         <button type="button" autofocus onclick="this.closest('dialog').close()" class="min-h-11 px-3">返回</button>
         <button type="submit" class="min-h-11 px-4 bg-brand-600 hover:bg-brand-700 rounded-lg">確認強制合併</button>
       </div>
     </form>
   </dialog>
-  <dialog id="task-remove-dialog" aria-labelledby="task-remove-title" class="bg-[#1a1a22] text-white rounded-xl p-5 w-[min(95vw,28rem)] max-h-[90dvh] overflow-y-auto border border-[#3e3e4e] backdrop:bg-black/70">
-    <form onsubmit="taskSelection.confirmCancel(event)" class="space-y-4">
+  <dialog id="task-remove-dialog" aria-labelledby="task-remove-title" aria-describedby="task-remove-description" class="bg-[#1a1a22] text-white rounded-xl p-5 w-[min(95vw,28rem)] max-h-[90dvh] overflow-y-auto overscroll-contain border border-[#3e3e4e] backdrop:bg-black/70">
+    <form method="dialog" onsubmit="taskSelection.confirmCancel(event)" class="space-y-4">
       <h2 id="task-remove-title" class="text-lg font-semibold">取消下載與移除紀錄</h2>
-      <p class="text-sm text-gray-300">勾選要移除的任務類別，可選一種或多種：</p>
+      <p class="text-sm text-gray-300">勾選要移除的任務類別。</p>
       <div class="space-y-2">
         <label class="min-h-11 flex items-center gap-3"><input id="task-remove-running" type="checkbox" class="w-4 h-4 accent-brand-600">正在下載 <span class="ml-auto"><span id="task-remove-running-count">0</span> 筆</span></label>
-        <label class="min-h-11 flex items-center gap-3"><input id="task-remove-completed" type="checkbox" class="w-4 h-4 accent-brand-600">已下載完成 <span class="ml-auto"><span id="task-remove-completed-count">0</span> 筆</span></label>
+        <label class="min-h-11 flex items-center gap-3"><input id="task-remove-completed" type="checkbox" class="w-4 h-4 accent-brand-600">一般已完成 <span class="ml-auto"><span id="task-remove-completed-count">0</span> 筆</span></label>
+        <label class="min-h-11 flex items-center gap-3"><input id="task-remove-force-merged" type="checkbox" class="w-4 h-4 accent-brand-600">強制合併 <span class="ml-auto"><span id="task-remove-force-merged-count">0</span> 筆</span></label>
         <label class="min-h-11 flex items-center gap-3"><input id="task-remove-waiting" type="checkbox" class="w-4 h-4 accent-brand-600">等候下載 <span class="ml-auto"><span id="task-remove-waiting-count">0</span> 筆</span></label>
       </div>
-      <p class="text-xs text-gray-400">正在下載包含準備、字幕及傳送中；已完成包含已略過；等候包含暫停、失敗及已取消。</p>
-      <p class="text-sm text-gray-300">未完成任務會先取消並清除可確認歸屬的下載檔案，再移除紀錄。無法確認歸屬的檔案會保留；已完成影片與下載歷史也會保留。</p>
+      <p id="task-remove-note" class="text-xs text-gray-400">正在下載包含準備、字幕及傳送中。一般已完成包含已略過，等候包含暫停、失敗及已取消。</p>
+      <p id="task-remove-description" class="text-sm text-gray-300">已完成影片與下載歷史會保留。</p>
       <p id="task-remove-error" role="alert" class="text-sm text-rose-400"></p>
-      <div class="flex justify-end gap-3"><button type="button" onclick="document.getElementById('task-remove-dialog').close()" class="min-h-11 px-3">返回</button><button type="submit" class="min-h-11 px-4 bg-rose-600 rounded-lg">確認移除</button></div>
+      <div class="flex justify-end gap-3"><button type="button" autofocus onclick="document.getElementById('task-remove-dialog').close()" class="min-h-11 px-3">返回</button><button type="submit" class="min-h-11 px-4 bg-rose-600 rounded-lg">確認移除</button></div>
     </form>
   </dialog>
 
@@ -660,12 +662,10 @@
       return batchController.open(urls);
     }};
     const selection = createVideoSelection({startDownload: startSingleDownload, startBatch: urls => downloadBatch.open(urls)});
-    const taskSelection = createTaskSelection({taskAction});
+    const taskSelection = createTaskSelection({taskAction, onTasks: renderTasks});
     const busyTaskActions = new Set();
-    let clearingCompleted = false;
     let removingDuplicates = false;
     let resumingUnfinished = false;
-    let completedTaskCount = 0;
     let watcherTargetsData = {};
 
     // WebSocket connection
@@ -1034,8 +1034,6 @@
       renderBackendActivity();
       document.getElementById('resume-unfinished-button').disabled = resumingUnfinished || !tasks.some(task => ['pending', 'paused', 'failed'].includes(task.status));
       document.getElementById('resume-unfinished-button').hidden = !tasks.some(task => ['pending', 'paused', 'failed'].includes(task.status));
-      completedTaskCount = tasks.filter(task => task.status === 'completed').length;
-      document.getElementById('clear-completed-button').disabled = clearingCompleted || !completedTaskCount;
       const priority = {downloading: 0, preparing: 1, uploading: 1, subtitles: 1, publishing: 1, pausing: 1, cancelling: 1, merging: 1, pending: 2, paused: 3};
       tasks = [...tasks]
         .sort((a, b) => (priority[a.status] ?? 4) - (priority[b.status] ?? 4));
@@ -1082,7 +1080,8 @@
         } else if (t.status === 'skipped') {
           statusBadge = `<span class="text-sm text-gray-400" title="${safe(t.error)}">已略過重複影片</span>`;
         } else if (t.status === 'completed') {
-          statusBadge = `<span class="px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-medium">已完成</span>`;
+          statusBadge = `<span class="px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-medium">${t.force_merged_file ? '已下載' : '已完成'}</span>`;
+          if (t.force_merged_file) statusBadge += '<span class="px-2 py-0.5 text-xs rounded border border-amber-500/30 bg-amber-500/10 text-amber-300">強制合併</span>';
         } else if (t.status === 'cancelled') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-gray-500/20 text-gray-400 border border-gray-500/30 rounded font-medium">已取消</span>`;
         } else if (t.status === 'failed') {
@@ -1108,14 +1107,14 @@
                 ${taskSelection.canAction(t, 'edit') ? `<button onclick="taskSelection.edit('${t.task_id}')" class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded">設定</button>` : ''}
                 ${t.can_force_merge ? `<button onclick="taskSelection.forceMerge(['${t.task_id}'])" class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded">強制合併</button>` : ''}
                 ${[ ['start_now', '立即下載'], ['pause', '暫停'], ['resume', '繼續'], ['retry', t.status === 'cancelled' ? '重新開始' : '重試'], ['remove', '移除紀錄'] ].filter(([action]) => taskSelection.canAction(t, action)).map(([action, label]) => `<button onclick="taskAction('${action}', '${t.task_id}')" title="${action === 'start_now' ? '立即執行此任務，不受同時下載數上限限制' : ''}" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${label}</button>`).join('')}
-                ${t.status === 'completed' && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
+                ${t.status === 'completed' && !t.force_merged_file && (t.error?.startsWith('影片已完成，但字幕生成失敗') || ['en', 'zh', 'all'].includes(t.subtitle_mode)) ? `<button onclick="taskAction('retry_subtitles', '${t.task_id}')" ${busyTaskActions.has(t.task_id) ? 'disabled' : ''} class="h-8 px-2.5 text-xs bg-[#282832] border border-[#3e3e4e] rounded disabled:opacity-40">${t.error?.startsWith('影片已完成，但字幕生成失敗') ? '重試字幕' : '重新產生字幕'}</button>` : ''}
                 ${taskSelection.canCancel(t) ?
                   `<button onclick="taskSelection.cancel(['${t.task_id}'])" class="h-8 px-2.5 text-xs bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 rounded transition">取消下載</button>` : ''}
                   </div>
                 </details>
               </div>
             </div>
-            ${t.folder_policy ? `<p class="text-xs text-gray-400 storage-path" title="${safe(t.final_dest || t.dest)}">儲存至：${safe(window.formatStoragePath(t.final_dest || t.dest))}</p>` : ''}
+            ${(t.folder_policy || t.force_merged_file) ? `<p class="text-xs text-gray-400 storage-path" title="${safe(t.final_dest || t.dest)}">儲存至：${safe(window.formatStoragePath(t.final_dest || t.dest))}</p>` : ''}
             ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 whitespace-pre-wrap break-words">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
             <!-- Progress Bar -->
             ${t.total_segments > 0 && !['completed', 'skipped', 'cancelled'].includes(t.status) ? `<div class="space-y-1">
@@ -1183,29 +1182,6 @@
       } finally {
         removingDuplicates = false;
         button.disabled = latestDownloadTasks.length < 2 && !latestDownloadTasks.some(task => task.status === 'skipped');
-      }
-    }
-
-    async function clearCompletedTasks() {
-      if (clearingCompleted || !completedTaskCount) return;
-      clearingCompleted = true;
-      const button = document.getElementById('clear-completed-button');
-      button.disabled = true;
-      try {
-        const response = await fetch('/api/download/action', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({action: 'clear_completed'})
-        });
-        const result = await response.json();
-        if (!response.ok || !result.success) throw new Error(result.error || '清除已完成項目失敗');
-        const refresh = await fetch('/api/download/tasks');
-        if (!refresh.ok) throw new Error('清單更新失敗，請稍候重新整理');
-        renderTasks((await refresh.json()).tasks || []);
-      } catch (error) {
-        alert(error.message);
-      } finally {
-        clearingCompleted = false;
-        button.disabled = !completedTaskCount;
       }
     }
 

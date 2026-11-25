@@ -1502,8 +1502,11 @@ def assert_partial_video(path, frames):
 
 
 def test_force_merge_restored_task_uses_only_saved_segments(manager, monkeypatch, tmp_path, hls_segments):
+    import json
+
     manager._state_path = tmp_path / 'tasks.json'
-    task = manager.add_task('https://missav.ai/mimk-290', folder_policy='overwrite')
+    task = manager.add_task('https://missav.ai/mimk-290', folder_policy='overwrite',
+                            enable_subtitles=True, subtitle_mode='ja')
     task.files = tm.DownloadFiles(task.dest, task.task_id)
     task.status, task.name = 'failed', '測試影片'
     task.downloaded_segments, task.total_segments = 3, 4
@@ -1523,10 +1526,17 @@ def test_force_merge_restored_task_uses_only_saved_segments(manager, monkeypatch
     task = restored.get_task(task.task_id)
     restored._run_task_with_retries(task)
 
-    assert task.status == 'paused', task.error
-    folder = Path(task.dest) / '不完整影片'
-    assert [p.name for p in folder.iterdir()] == ['測試影片.mp4']
-    assert_partial_video(folder / '測試影片.mp4', 30)
+    assert task.status == 'completed', task.error
+    assert task.progress == 100
+    assert task.force_merged_file == '【強制合併】測試影片.mp4'
+    assert task.force_merged_file in task.phase
+    assert_partial_video(Path(task.dest) / task.force_merged_file, 30)
+    record, = json.loads(manager._state_path.read_text())
+    assert 'force_merged_file' not in record
+    assert record['files']['force_merged_file'] == task.force_merged_file
+    reloaded = tm.TaskManager(state_path=manager._state_path)
+    assert reloaded.list_tasks()[0]['force_merged_file'] == task.force_merged_file
+    assert not reloaded.restart_task(task.task_id, subtitles_only=True)
     assert original.read_bytes() == b'existing-full-video'
     assert len(list(segments.iterdir())) == 4
     assert tm.get_history_manager().find_downloaded({'url': task.url, 'title': task.name}) is None
@@ -1555,15 +1565,17 @@ def test_force_merge_waits_for_inflight_segment_before_export(manager, monkeypat
         assert started.wait(5)
         assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
         assert manager.force_merge_tasks([task.task_id])['skipped'] == [task.task_id]
-        assert not (Path(task.dest) / '不完整影片').exists()
+        assert not list(Path(task.dest).glob('【強制合併】*.mp4'))
     finally:
         release.set()
         task.thread.join(5)
     assert not task.thread.is_alive()
     manager._run_task_with_retries(task)
 
-    assert task.status == 'paused', task.error
-    assert_partial_video(Path(task.dest) / '不完整影片' / 'MIMK-290.mp4', 20)
+    assert task.status == 'completed', task.error
+    assert_partial_video(Path(task.dest) / '【強制合併】MIMK-290.mp4', 20)
+    assert not tm.existing_video(task.dest, task.url)
+    assert manager.add_task(task.url).status == 'pending'
     assert len(list((Path(task.files.workdir) / 'segments').glob('*.mp4'))) == 2
 
 
@@ -1582,7 +1594,7 @@ def test_force_merge_failure_keeps_segments_and_can_retry(manager):
 
     assert task.status == 'failed'
     assert '封裝失敗' in task.error
-    assert not list((Path(task.dest) / '不完整影片').glob('*.mp4'))
+    assert not list(Path(task.dest).glob('【強制合併】*.mp4'))
     assert corrupt.read_bytes() == b'corrupt'
     assert manager.list_tasks()[0]['can_force_merge']
 
@@ -1608,28 +1620,29 @@ def test_force_merge_interrupted_snapshot_restores_paused_and_is_rollback_compat
 
 
 def test_force_merge_keeps_both_exports_for_same_long_name(manager, hls_segments):
+    from uav_downloader.daemon.download_files import FORCE_MERGE_PREFIX, _truncate_target_name
+
     task = manager.add_task('https://missav.ai/mimk-290')
     task.files = tm.DownloadFiles(task.dest, task.task_id)
-    task.status, task.name = 'failed', '影' * 82
+    task.status, task.name = 'failed', '影' * 96
     task.downloaded_segments, task.total_segments = 1, 2
     segments = Path(task.files.workdir) / 'segments'
     segments.mkdir()
     (segments / '000000.mp4').write_bytes(hls_segments[0])
-    output = Path(task.dest) / '不完整影片'
-
-    assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
-    manager._queue.remove(task.task_id)
-    manager._run_task_with_retries(task)
-    original, = output.glob('*.mp4')
-    before = original.read_bytes()
+    longest_folder = str(Path(task.files.workdir) / '.uav-partial-12345678')
+    original_stem = _truncate_target_name(task.name, longest_folder, Path(task.files.workdir).name,
+                                          marker=FORCE_MERGE_PREFIX)
+    original = Path(task.dest) / f'{original_stem}.mp4'
+    original.write_bytes(b'existing-partial-video')
 
     assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
     manager._run_task_with_retries(task)
-    assert task.status == 'paused', task.error
-    other, = set(output.glob('*.mp4')) - {original}
-    assert original.read_bytes() == before
-    assert_partial_video(other, 10)
-
+    assert task.status == 'completed', task.error
+    assert task.force_merged_file.startswith(FORCE_MERGE_PREFIX)
+    assert len(task.force_merged_file.encode()) <= 255
+    assert task.force_merged_file != original.name
+    assert original.read_bytes() == b'existing-partial-video'
+    assert_partial_video(Path(task.dest) / task.force_merged_file, 10)
 
 
 def test_concurrent_force_merges_keep_both_exports_for_same_name(manager, monkeypatch, hls_segments):
@@ -1648,7 +1661,7 @@ def test_concurrent_force_merges_keep_both_exports_for_same_name(manager, monkey
     real_publish = tm.DownloadFiles.publish
 
     def concurrent_publish(files, *args, **kwargs):
-        if (Path(files.workdir) / '同名影片.mp4').exists():
+        if (Path(files.workdir) / '【強制合併】同名影片.mp4').exists():
             barrier.wait()
         return real_publish(files, *args, **kwargs)
 
@@ -1662,8 +1675,8 @@ def test_concurrent_force_merges_keep_both_exports_for_same_name(manager, monkey
         worker.join(15)
         assert not worker.is_alive()
 
-    assert all(task.status == 'paused' for task in tasks), [task.error for task in tasks]
-    outputs = list((Path(tasks[0].dest) / '不完整影片').glob('*.mp4'))
+    assert all(task.status == 'completed' for task in tasks), [task.error for task in tasks]
+    outputs = list(Path(tasks[0].dest).glob('【強制合併】*.mp4'))
     assert len(outputs) == 2
     for output in outputs:
         assert_partial_video(output, 10)
@@ -1711,7 +1724,83 @@ def test_force_merge_handles_byte_download_after_restart(manager, monkeypatch, t
         restored._run_task_with_retries(restored.get_task(task.task_id))
         assert '請先續傳' in restored.list_tasks()[0]['phase']
         assert (Path(task.files.workdir) / 'fixture.mp4.part').read_bytes() == b'direct video bytes'
-        assert not (Path(task.dest) / '不完整影片').exists()
+        assert not list(Path(task.dest).glob('【強制合併】*.mp4'))
     else:
         assert result['skipped'] == [task.task_id]
     assert restored.list_tasks()[0]['status'] == 'paused'
+
+
+def test_force_merge_upload_finishes_before_shutdown_and_smb_close_error(manager, monkeypatch, tmp_path, hls_segments):
+    from contextlib import contextmanager
+
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.nas_settings = dict(enabled=True, mode='upload', host='nas', share='share',
+                             directory='original', password='saved-secret')
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    task.status, task.name = 'failed', 'MIMK-290'
+    task.downloaded_segments, task.total_segments = 1, 2
+    segments = Path(task.files.workdir) / 'segments'
+    segments.mkdir()
+    (segments / '000000.mp4').write_bytes(hls_segments[0])
+    remote = tmp_path / 'remote'
+    remote.mkdir()
+
+    @contextmanager
+    def connect(settings, destination):
+        assert settings['directory'] == 'original'
+        assert destination == str(remote)
+        yield
+        assert task.status == 'completed'
+        assert manager.clear_completed([task.task_id]) == 0
+        manager.stop_dispatcher()
+        raise OSError('SMB close failed')
+
+    monkeypatch.setattr(tm.nas, 'smb_destination', lambda: str(remote))
+    monkeypatch.setattr(tm.nas, 'open_smb_storage', connect)
+    assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
+    manager._run_task_with_retries(task)
+
+    assert task.status == 'completed'
+    assert '收尾時發生錯誤' in task.phase
+    assert task.force_merged_file == '【強制合併】MIMK-290.mp4'
+    assert not list(Path(task.dest).glob('*.mp4'))
+    assert_partial_video(remote / task.force_merged_file, 10)
+    assert (segments / '000000.mp4').is_file()
+    restored = tm.TaskManager(state_path=manager._state_path)
+    result, = restored.list_tasks()
+    assert result['status'] == 'completed'
+    assert result['progress'] == 100
+    assert result['force_merged_file'] == task.force_merged_file
+
+
+@pytest.mark.parametrize('stop_service', [False, True])
+def test_force_merge_stopped_before_publish_leaves_no_output(manager, monkeypatch, hls_segments, stop_service):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    task.status, task.name = 'failed', 'MIMK-290'
+    task.downloaded_segments, task.total_segments = 1, 2
+    segments = Path(task.files.workdir) / 'segments'
+    segments.mkdir()
+    (segments / '000000.mp4').write_bytes(hls_segments[0])
+
+    original_publish = tm.DownloadFiles.publish
+
+    def publish(files, *args, commit, **kwargs):
+        def stop_before_commit(*publication):
+            if stop_service:
+                manager.stop_dispatcher()
+            else:
+                assert manager.cancel_task(task.task_id)
+            return commit(*publication)
+
+        return original_publish(files, *args, commit=stop_before_commit, **kwargs)
+
+    monkeypatch.setattr(tm.DownloadFiles, 'publish', publish)
+    assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
+    manager._run_task_with_retries(task)
+
+    assert task.status == ('paused' if stop_service else 'cancelled')
+    assert not task.force_merged_file
+    assert not list(Path(task.dest).glob('*.mp4'))
+    assert (segments / '000000.mp4').is_file() is stop_service

@@ -107,22 +107,23 @@ def _portable_filename_fits(dest_folder, target_name):
             len(part_name.encode('utf-8')) <= 255)
 
 
-def _truncate_target_name(name, dest_folder, dirname):
+def _truncate_target_name(name, dest_folder, dirname, *, marker="", suffix=""):
     """Cap both Windows path units and POSIX component bytes, keeping a UID."""
-    if _portable_filename_fits(dest_folder, name):
-        return name
+    target_name = marker + name + suffix
+    if _portable_filename_fits(dest_folder, target_name):
+        return target_name
 
     uid = re.sub(r'[^\w]', '', dirname)[-8:] or 'video'
-    suffix = '_' + uid
-    if not _portable_filename_fits(dest_folder, suffix):
+    suffix = suffix or '_' + uid
+    if not _portable_filename_fits(dest_folder, marker + suffix):
         raise OSError('Destination path is too long for a portable filename')
 
-    best = suffix
+    best = marker + suffix
     low, high = 0, len(name)
     while low <= high:
         middle = (low + high) // 2
         prefix = name[:middle].rstrip()
-        candidate = prefix + suffix if prefix else suffix
+        candidate = marker + prefix + suffix
         if _portable_filename_fits(dest_folder, candidate):
             best = candidate
             low = middle + 1
