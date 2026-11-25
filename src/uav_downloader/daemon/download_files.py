@@ -142,10 +142,6 @@ class DownloadFiles:
             longest_folder = max((target, export.workdir), key=lambda path: len(path.encode('utf-16-le')))
             stem = _truncate_target_name(name, longest_folder, os.path.basename(self.workdir))
             filename = f'{stem}.mp4'
-            if target_fs.exists(os.path.join(target, filename)):
-                suffix = uuid.uuid4().hex[:8]
-                stem = _truncate_target_name(f'{name}_{suffix}', longest_folder, suffix)
-                filename = f'{stem}.mp4'
             remux_dir = os.path.join(export.workdir, 'remux')
             filesystem.makedirs(remux_dir)
             merged = os.path.join(remux_dir, 'merged.ts')
@@ -168,11 +164,22 @@ class DownloadFiles:
             if cancelled.is_set() or paused.is_set():
                 return None
             filesystem.remove(merged)
-            filesystem.replace(output, os.path.join(export.workdir, filename))
             stage('儲存不完整影片')
-            export.publish(cancelled)
-            if export.published:
-                return filename
+            for attempt in range(2):
+                if attempt or target_fs.exists(os.path.join(target, filename)):
+                    suffix = uuid.uuid4().hex[:8]
+                    stem = _truncate_target_name(f'{name}_{suffix}', longest_folder, suffix)
+                    filename = f'{stem}.mp4'
+                staged = os.path.join(export.workdir, filename)
+                filesystem.replace(output, staged)
+                try:
+                    export.publish(cancelled)
+                except FileExistsError:
+                    if attempt:
+                        raise
+                    output = staged
+                else:
+                    return filename if export.published else None
         finally:
             export.filesystem.rmtree(export.workdir, ignore_errors=True)
 

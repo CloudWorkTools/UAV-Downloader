@@ -1629,3 +1629,41 @@ def test_force_merge_keeps_both_exports_for_same_long_name(manager, hls_segments
     other, = set(output.glob('*.mp4')) - {original}
     assert original.read_bytes() == before
     assert_partial_video(other, 10)
+
+
+
+def test_concurrent_force_merges_keep_both_exports_for_same_name(manager, monkeypatch, hls_segments):
+    import threading
+
+    tasks = [manager.add_task(f'https://missav.ai/mimk-{i}') for i in (290, 291)]
+    for task in tasks:
+        task.files = tm.DownloadFiles(task.dest, task.task_id)
+        task.status, task.name = 'failed', '同名影片'
+        task.downloaded_segments, task.total_segments = 1, 2
+        segments = Path(task.files.workdir) / 'segments'
+        segments.mkdir()
+        (segments / '000000.mp4').write_bytes(hls_segments[0])
+
+    barrier = threading.Barrier(2, timeout=10)
+    real_publish = tm.DownloadFiles.publish
+
+    def concurrent_publish(files, *args, **kwargs):
+        if (Path(files.workdir) / '同名影片.mp4').exists():
+            barrier.wait()
+        return real_publish(files, *args, **kwargs)
+
+    monkeypatch.setattr(tm.DownloadFiles, 'publish', concurrent_publish)
+    ids = [task.task_id for task in tasks]
+    assert manager.force_merge_tasks(ids)['accepted'] == ids
+    workers = [threading.Thread(target=manager._run_task_with_retries, args=(task,)) for task in tasks]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(15)
+        assert not worker.is_alive()
+
+    assert all(task.status == 'paused' for task in tasks), [task.error for task in tasks]
+    outputs = list((Path(tasks[0].dest) / '不完整影片').glob('*.mp4'))
+    assert len(outputs) == 2
+    for output in outputs:
+        assert_partial_video(output, 10)
