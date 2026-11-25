@@ -1,0 +1,43 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "a27aa549b70e127792fa78cd174242828459507747e163567fd4a37f7ad0aea6",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 b044b92784fbf9534c58fcc5d6a15290bf0c5e15，候選 9cb5bb304ce273556db937817beac3ca8693546a。交付測試 294 項與 7 個子測試通過。",
+    "download_files.py:156–166 先回報 0，再於每個分片資料寫完後遞增。重新封裝、儲存和 TaskManager 的等待階段使用現有 set_phase 預設計數零，續用 GET 及 WebSocket 欄位，未增加快照或 API 欄位。",
+    "index.html:1058–1063、1123–1127 的 `merging` 進度與下載百分比分開，分片有總數時顯示向下取整百分比與分片數，無總數只顯示階段及不定量 progress。成功、取消或失敗離開 merging 後不再出現合併進度。",
+    "獨立測試 11 項合併用例通過。node tests/task_menu.cjs、node tests/web_ui.cjs 與 git diff --check 通過。依 git diff 核對無新增程式碼註解或 lint 抑制。以 ffprobe 核對實際範例成品為 H.264。",
+    "以候選實際 TaskManager.start_now、_run_task 內 progress_cb、force_merge_tasks、list_tasks 及線程屏障重現：接受請求後 phase_total 一開始是 0，等舊下載回報續行，合法快照為 merging / 下載影片片段 / 2 / 3。",
+    "實際 TaskManager 重現先前可達的快照 merging / 下載影片片段 / 2 / 3。修補後 renderTasks:1058–1063、1123–1127 只有當期強制合併分片計數可顯示數字。原下載回報晚到時使用不定量進度條，既有文字與正常下載進度保留。docs/flows/contracts.md 的等待描述已同步。",
+    "獨立重新執行 node tests/task_menu.cjs 和 node tests/web_ui.cjs 均通過。先前候選在新增的普通合併回報測試失敗，修正版通過。Rust/Python 實際服務與 Chrome WebSocket 依序驗證 33%、66%、封裝、儲存、已下載及封裝失敗。以 ffprobe 核對修正版範例為 H.264。未新增程式碼註解或 lint 抑制。",
+    "視覺獨立審查 PASS，桌面 1280×900、手機 390×844。對應 9cb5bb304ce273556db937817beac3ca8693546a，重新開圖：desktop-done.png、desktop-failed.png、mobile-done.png、mobile-failed.png、mobile-one.png、mobile-remux.png。比對 SHA-256 沿用前次開圖：desktop-one.png、desktop-remux.png、desktop-store.png、desktop-two.png、mobile-store.png、mobile-two.png。兩組畫面的分片數、百分比、封裝、儲存、成功及錯誤狀態可讀，任務卡沒有遮擋。"
+  ],
+  "limitations": [
+    "手機右下角原有浮動選單與底部後端工作摘要同區，但任務卡沒有遮擋。",
+    "畫面採合成媒體及注入失敗驗證。實體 NAS 並未重測。"
+  ],
+  "newly_read_paths": [
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/contracts.md",
+    "docs/flows/download.execute.mmd",
+    "docs/web-ui.md",
+    "src/uav_downloader/daemon/download_files.py",
+    "src/uav_downloader/daemon/task_manager.py",
+    "uav-web/frontend/index.html",
+    "tests/test_daemon_downloads.py",
+    "tests/task_menu.cjs"
+  ],
+  "reused_evidence": [
+    "沿用 PR #40 的 download.execute 語意審查與 8502ef6 前輪的相關證據，重審這次變動的進度呈現、契約及回歸。"
+  ],
+  "additional_reads": [
+    {
+      "path": "src/uav_downloader/daemon/task_manager.py",
+      "reason": "驗證等待階段、欄位預設、完成／失敗狀態以及序列化，核對這次 export_partial 新傳值。"
+    }
+  ],
+  "token_usage": "unavailable"
+}

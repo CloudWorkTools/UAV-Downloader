@@ -153,15 +153,16 @@ class DownloadFiles:
             merged = os.path.join(remux_dir, 'merged.ts')
             output = os.path.join(remux_dir, 'out.mp4')
             segments = sorted(groups[0])
+            stage('強制合併影片片段', 0, len(segments))
             with storage_open(merged, 'wb') as out:
-                for index, (_, path) in enumerate(segments):
-                    stage('強制合併影片片段', index, len(segments))
+                for index, (_, path) in enumerate(segments, start=1):
                     with storage_open(path, 'rb') as source:
                         while chunk := source.read(1024 * 1024):
                             if cancelled.is_set() or paused.is_set():
                                 return None
                             out.write(chunk)
-            stage('重新封裝不完整影片', len(segments), len(segments))
+                    stage('強制合併影片片段', index, len(segments))
+            stage('重新封裝不完整影片')
             if not remux_to_mp4(merged, output, remux_dir,
                                 lambda: cancelled.is_set() or paused.is_set()):
                 if cancelled.is_set() or paused.is_set():

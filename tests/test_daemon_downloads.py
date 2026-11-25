@@ -1524,8 +1524,18 @@ def test_force_merge_restored_task_uses_only_saved_segments(manager, monkeypatch
     payload = restored.force_merge_tasks([task.task_id, 'missing', task.task_id])
     assert payload == {'accepted': [task.task_id], 'skipped': ['missing']}
     task = restored.get_task(task.task_id)
+    set_phase = MagicMock(wraps=task.set_phase)
+    monkeypatch.setattr(task, 'set_phase', set_phase)
     restored._run_task_with_retries(task)
 
+    assert [phase_call.args for phase_call in set_phase.call_args_list[:6]] == [
+        ('強制合併影片片段', 0, 3),
+        ('強制合併影片片段', 1, 3),
+        ('強制合併影片片段', 2, 3),
+        ('強制合併影片片段', 3, 3),
+        ('重新封裝不完整影片',),
+        ('儲存不完整影片',),
+    ]
     assert task.status == 'completed', task.error
     assert task.progress == 100
     assert task.force_merged_file == '【強制合併】測試影片.mp4'

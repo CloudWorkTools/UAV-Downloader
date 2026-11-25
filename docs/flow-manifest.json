@@ -98,8 +98,8 @@
     {
       "path": "src/uav_downloader/daemon/download_files.py",
       "kind": "python-module",
-      "md5": "efe33ad215201df99221fda20850785c",
-      "semantic_hash": "a5017a40807f7df9dabc7471018ddb96e7620950c592bc80cfcfc50749ed4ba4"
+      "md5": "cb277b74e740ff951e3841a9496aaf74",
+      "semantic_hash": "b66d18614ec1ce9084185eda18a9da440b2d10a0d0a03568926a83f524f4d435"
     },
     {
       "path": "src/uav_downloader/daemon/nas.py",
@@ -145,7 +145,7 @@
     {
       "path": "uav-web/frontend/index.html",
       "kind": "file",
-      "md5": "a040eed7b49244c846211f8e97b926ae"
+      "md5": "0214e9d06a7c00f24eafbff8fee0fbbd"
     },
     {
       "path": "uav-web/frontend/video-selection.js",
@@ -1177,6 +1177,34 @@
       "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/storage.destination/c5de040891b584f73000da9bf5eea41c30ea9e53a16f31e99ab6b0227336dc9e.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "b8c507396f0707d674ffc586186db53a113eac5dd39b837fc9736e0bf40da58c",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/b8c507396f0707d674ffc586186db53a113eac5dd39b837fc9736e0bf40da58c.json"
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "a27aa549b70e127792fa78cd174242828459507747e163567fd4a37f7ad0aea6",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.execute/a27aa549b70e127792fa78cd174242828459507747e163567fd4a37f7ad0aea6.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "543f1df895dcb79a173da2a1cfcbc0d1cf754a63003658d567cc3a5902c0b8d2",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/543f1df895dcb79a173da2a1cfcbc0d1cf754a63003658d567cc3a5902c0b8d2.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "dd340341be8d28109742b2d593ed146d58e3bbba785907d46fcb883c8e9351d1",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/dd340341be8d28109742b2d593ed146d58e3bbba785907d46fcb883c8e9351d1.json"
     }
   ],
   "policy_inputs": [

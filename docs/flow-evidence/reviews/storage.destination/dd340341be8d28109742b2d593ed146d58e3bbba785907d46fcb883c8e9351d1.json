@@ -1,0 +1,30 @@
+{
+  "feature": "storage.destination",
+  "fingerprint": "dd340341be8d28109742b2d593ed146d58e3bbba785907d46fcb883c8e9351d1",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 b044b92784fbf9534c58fcc5d6a15290bf0c5e15，候選 9cb5bb304ce273556db937817beac3ca8693546a。交付測試 294 項與 7 個子測試通過。",
+    "本次 download_files.py 差異只搬動 stage 呼叫並重設封裝的分片計數。沒有改變目的地探測、區域儲存後端選擇、暫存讀寫路徑、不可覆寫發布、分片排序或保留。",
+    "相對 8502ef6 的非證據差異僅有呈現層、共用契約、回歸與一張文件圖。此功能既有入口與行為證據仍適用。"
+  ],
+  "limitations": [],
+  "newly_read_paths": [
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/contracts.md",
+    "src/uav_downloader/daemon/download_files.py",
+    "src/uav_downloader/daemon/task_manager.py"
+  ],
+  "reused_evidence": [
+    "沿用 PR #40 的 storage.destination 語意審查與 8502ef6 前輪的相關證據，重審這次變動的進度呈現、契約及回歸。"
+  ],
+  "additional_reads": [
+    {
+      "path": "src/uav_downloader/daemon/task_manager.py",
+      "reason": "驗證等待階段、欄位預設、完成／失敗狀態以及序列化，核對這次 export_partial 新傳值。"
+    }
+  ],
+  "token_usage": "unavailable"
+}

@@ -1,0 +1,27 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "b8c507396f0707d674ffc586186db53a113eac5dd39b837fc9736e0bf40da58c",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 b044b92784fbf9534c58fcc5d6a15290bf0c5e15，候選 9cb5bb304ce273556db937817beac3ca8693546a。交付測試 294 項與 7 個子測試通過。",
+    "候選與基準的批次請求、提交、字幕快照和目的地預覽程式碼無差異。index.html 差異只在 renderTasks 處理 `merging` 進度，沒有改動批次送出、選取及共用路由。",
+    "本輪獨立執行 node tests/web_ui.cjs 和 node tests/task_menu.cjs 均通過。",
+    "相對 8502ef6 的非證據差異僅有呈現層、共用契約、回歸與一張文件圖。此功能既有入口與行為證據仍適用。"
+  ],
+  "limitations": [],
+  "newly_read_paths": [
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/contracts.md",
+    "uav-web/frontend/index.html",
+    "tests/web_ui.cjs",
+    "tests/task_menu.cjs"
+  ],
+  "reused_evidence": [
+    "沿用 PR #40 的 download.batch 語意審查與 8502ef6 前輪的相關證據，重審這次變動的進度呈現、契約及回歸。"
+  ],
+  "additional_reads": [],
+  "token_usage": "unavailable"
+}
