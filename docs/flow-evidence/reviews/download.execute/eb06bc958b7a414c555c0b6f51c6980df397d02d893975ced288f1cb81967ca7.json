@@ -1,0 +1,72 @@
+{
+  "fingerprint": "eb06bc958b7a414c555c0b6f51c6980df397d02d893975ced288f1cb81967ca7",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 0ee655636fd19e2f688c8a966c22498d1f55e0ff，候選 9aa799a2d4b0f5991de514da5308b7f24ed403f0。",
+    "候選測試日誌 213 項通過，實際 Rust Web 與 Python daemon 產出四個可讀 H.264 MP4。",
+    "用真實媒體先匯出，再以公開 cancel_tasks 取消第二次排程中的封裝，核對既有輸出未改變、暫存分片按既有取消規則清除、狀態 cancelled。",
+    "base.py:949–1058 片段 `.part` 發布與 executor 結束，task_manager.py:548–582、813–886 等待舊工作結束後以既有佇列重新派發。Linux 本機及掛載目的地採既有 ffmpeg，SMB 直接路徑依來源暫存或其後端選擇，upload 使用暫存後原子傳送。",
+    "相對第一輪的停機問題已由載入 `merging` 轉 `paused` 並附保留片段訊息修復。",
+    "長檔名以實際目標及工作目錄選出較長路徑，套用既有可攜名稱限制。原子發布遇 `FileExistsError` 時，工作檔改名後才重送，未覆寫第一份。a1642ab 專測 7 項獨立通過，a60f5da 交付證據 focused-release.log 10 項通過。",
+    "使用真實 TS 與模擬 SMB 後端驗證 direct、smb（原 SmbStorage.remux_to_mp4）及 upload 三模式，各輸出為 H.264 且保留分片。此次進度單位修補未觸及上述儲存實作。",
+    "實際載入基準 TaskManager 產生的舊位元組進度快照，該暫存區只有 fixture.mp4.part，候選仍回報 can_force_merge=True。新候選保存 bytes 子鍵後，同候選重新載入則不再顯示操作。",
+    "9aa799a 候選的 focused-delivery.log 顯示 11 項定向測試通過。ui-delivery.log 的實際 Rust Web/Python daemon 操作排入 5 筆，完成 4 筆，四份 MP4 都用 ffprobe 驗證為 H.264。第五筆保留暫停並顯示續傳提示。",
+    "以基準版本的 TaskManager 產生未加進度單位的舊暫停紀錄，確認候選接受後不發布、保留原 .part、回到 paused 並提示續傳，接著可經 restart_task 正常排回下載佇列。使用新版 bytes 子鍵的任務重啟後會跳過。",
+    "download_files.py:115–134 現有可讀工作目錄但無完整分片時直接返回，task_manager.py:875–886 依中斷訊號或缺片分開顯示提示。docs/flows/download.execute.mmd 和 contracts.md:72 同步描述既有紀錄的執行時核對。"
+  ],
+  "limitations": [
+    "隔離候選沒有 graph 索引，已用候選原始碼、diff 和定向執行核對；主要 checkout 的 graph 覆蓋僅供導航。",
+    "本輪沒有對真實 NAS 進行強制合併。",
+    "未保存單位的舊暫停紀錄可能仍依計數顯示強制合併。沒有可用分片時會回到暫停並提示續傳，新版的已知位元組任務不會顯示。"
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "docs/flows/download.execute.mmd",
+    "src/uav_downloader/daemon/download_files.py",
+    "src/uav_downloader/daemon/task_manager.py",
+    "src/uav_downloader/daemon/server.py",
+    "src/uav_downloader/sites/base.py",
+    "src/uav_downloader/core/storage.py",
+    "src/uav_downloader/core/smb_storage.py",
+    "src/uav_downloader/daemon/nas.py",
+    "uav-web/src/routes.rs",
+    "uav-web/frontend/index.html",
+    "uav-web/frontend/mobile-actions.js",
+    "uav-web/frontend/task-selection.js",
+    "docs/web-ui.md",
+    "tests/test_daemon_downloads.py",
+    "tests/test_web_download_settings.py",
+    "tests/task_menu.cjs"
+  ],
+  "reused_evidence": [
+    "docs/flow-evidence/reviews/download.execute/02d0f4386b5d5e959ebd4550fc8bb79808defdf779d1755463b470a4fbc71f81.json（僅沿用與此次差異無關的既有流程、契約與測試結論）",
+    "已重用首輪 flow-review.json 中與修正無關的候選差異、原流程與路由證據。",
+    "針對 dffa5d7 到 9aa799a 的增量核對，沿用三模式模擬儲存、原子發布、回滾快照及不相關路由的既有驗證。"
+  ],
+  "additional_reads": [
+    {
+      "path": "src/uav_downloader/core/storage.py",
+      "reason": "核對這次改動跨到的既有後端或路由邊界。"
+    },
+    {
+      "path": "src/uav_downloader/core/smb_storage.py",
+      "reason": "核對這次改動跨到的既有後端或路由邊界。"
+    },
+    {
+      "path": "src/uav_downloader/daemon/nas.py",
+      "reason": "核對這次改動跨到的既有後端或路由邊界。"
+    },
+    {
+      "path": "uav-web/src/routes.rs",
+      "reason": "核對這次改動跨到的既有後端或路由邊界。"
+    }
+  ],
+  "token_usage": "unavailable",
+  "feature": "download.execute"
+}

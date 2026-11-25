@@ -1,0 +1,34 @@
+{
+  "fingerprint": "ede3fb78fe19e3d741d1e41e32141b6a56dc0530bbdf047d283216b61305f397",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 0ee655636fd19e2f688c8a966c22498d1f55e0ff，候選 9aa799a2d4b0f5991de514da5308b7f24ed403f0。",
+    "server.py:287–295 仍獨立處理 preview/submit。download_batch.py:109–150 的字幕請求驗證、同 request_id 快取、提交回復、派送與結果未改。",
+    "最新進度單位標記只寫入 `files` 快照子物件；批次回應的 `DownloadTask.to_dict()` 欄位已回到原版，Preview/Submit 仍走原分支。"
+  ],
+  "limitations": [
+    "隔離候選沒有 graph 索引，已用候選原始碼、diff 和定向執行核對；主要 checkout 的 graph 覆蓋僅供導航。"
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "docs/flows/download.batch.mmd",
+    "src/uav_downloader/daemon/download_batch.py",
+    "src/uav_downloader/daemon/server.py",
+    "uav-web/frontend/index.html",
+    "uav-web/frontend/mobile-actions.js"
+  ],
+  "reused_evidence": [
+    "docs/flow-evidence/reviews/download.batch/fe91a15fbe389943f776a53195b77f860e9c52898744539f18537df1960a9baf.json（僅沿用與此次差異無關的既有流程、契約與測試結論）",
+    "已重用首輪 flow-review.json 中與修正無關的候選差異、原流程與路由證據。",
+    "針對 dffa5d7 到 9aa799a 的增量核對，沿用三模式模擬儲存、原子發布、回滾快照及不相關路由的既有驗證。"
+  ],
+  "additional_reads": [],
+  "token_usage": "unavailable",
+  "feature": "download.batch"
+}
