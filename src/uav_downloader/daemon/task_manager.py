@@ -163,6 +163,8 @@ class TaskManager:
                     smb_destinations.add(task.dest)
                 if files:
                     task.files = DownloadFiles.restore(task.dest, task.task_id, files, task.staging_dir)
+                    if files.get('progress_unit') == 'bytes':
+                        task.progress_unit = 'bytes'
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
                 task.cleanup_unverified = task.cleanup_unverified or (not task.subtitles_only and not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused"))
                 if task.status == 'merging':
@@ -196,6 +198,8 @@ class TaskManager:
                 record['subtitle_request'] = task.subtitle_request
                 if isinstance(task.files, DownloadFiles):
                     record['files'] = task.files.snapshot()
+                    if task.progress_unit == 'bytes':
+                        record['files']['progress_unit'] = 'bytes'
                 records.append(record)
             snapshot = json.dumps(records, ensure_ascii=False)
             if snapshot == self._last_snapshot:

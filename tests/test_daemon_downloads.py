@@ -1667,3 +1667,39 @@ def test_concurrent_force_merges_keep_both_exports_for_same_name(manager, monkey
     assert len(outputs) == 2
     for output in outputs:
         assert_partial_video(output, 10)
+
+
+
+def test_force_merge_stays_unavailable_for_byte_download_after_restart(manager, monkeypatch, tmp_path):
+    import json
+    import threading
+
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://supjav.com/example.html')
+    started, release = threading.Event(), threading.Event()
+
+    def download(job):
+        job._progress_unit = 'bytes'
+        Path(job._dest_folder, 'fixture.mp4.part').write_bytes(b'direct video bytes')
+        job._progress_callback(10, 20, 0)
+        started.set()
+        assert release.wait(5)
+        return False
+
+    monkeypatch.setattr(tm.M3U8Sites, 'CreateSite', lambda url, savepath, **kw: job_at(savepath, download))
+    assert manager.start_now(task.task_id)
+    try:
+        assert started.wait(5)
+        assert manager.pause_task(task.task_id)
+    finally:
+        release.set()
+        task.thread.join(5)
+    assert not task.thread.is_alive()
+    record = json.loads(manager._state_path.read_text())[0]
+    assert 'progress_unit' not in record
+    assert record['files']['progress_unit'] == 'bytes'
+
+    restored = tm.TaskManager(state_path=manager._state_path)
+    assert not restored.list_tasks()[0]['can_force_merge']
+    assert restored.force_merge_tasks([task.task_id])['skipped'] == [task.task_id]
+    assert restored.list_tasks()[0]['status'] == 'paused'

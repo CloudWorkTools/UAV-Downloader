@@ -119,8 +119,8 @@
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
       "kind": "python-module",
-      "md5": "9c22342167737053c2de550bb9033127",
-      "semantic_hash": "ede7921a76141c19c59d1b44eb36c6b7406cd997fe5778f3cb20184068060d9c"
+      "md5": "898c8d5db8b5098e47cc594ea4a1e60e",
+      "semantic_hash": "91081565d0c462c045da1413fc062ecfe5aed03cc6f1c87d7655bac22fd14dd1"
     },
     {
       "path": "src/uav_downloader/metadata.py",
