@@ -513,6 +513,67 @@ def _http_get(url, headers=None, timeout=20):
         **config.proxy_request_kwargs())
 
 
+def remux_to_mp4(merged_ts, out_mp4, workdir, cancelled):
+    backend = storage_fs(merged_ts)
+    if backend.remote:
+        return backend.remux_to_mp4(merged_ts, out_mp4, cancelled)
+    ffmpeg = locate_ffmpeg()
+    if not ffmpeg:
+        print('[合成] 找不到 ffmpeg，無法重新封裝 MP4', flush=True)
+        return False
+    ff_dir = _ffmpeg_safe_dir(workdir)
+    in_arg = os.path.join(ff_dir, os.path.basename(merged_ts))
+    out_arg = os.path.join(ff_dir, os.path.basename(out_mp4))
+    log_path = os.path.join(workdir, 'ffmpeg.log')
+    cmd = [ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
+           '-fflags', '+genpts', '-i', in_arg,
+           '-c', 'copy', '-movflags', '+faststart',
+           '-avoid_negative_ts', 'make_zero', out_arg]
+    print('正在重新封裝為可正常拖曳的 MP4 ...', flush=True)
+    try:
+        with storage_open(log_path, 'wb') as errf:
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=errf,
+                                    **_no_window_kwargs())
+            while True:
+                try:
+                    proc.wait(timeout=0.3)
+                    break
+                except subprocess.TimeoutExpired:
+                    if cancelled():
+                        proc.kill()
+                        proc.wait()
+                        return False
+    except StorageWriteError:
+        raise
+    except Exception as e:
+        print(f'[合成] ffmpeg 執行錯誤: {e}', flush=True)
+        return False
+    if cancelled():
+        return False
+    try:
+        if proc.returncode == 0 and storage_fs(out_mp4).exists(out_mp4) and storage_fs(out_mp4).getsize(out_mp4) > 0:
+            return True
+    except OSError as exc:
+        raise StorageWriteError(out_mp4, exc) from exc
+    tail = ''
+    try:
+        with storage_open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            tail = f.read()[-800:]
+    except StorageWriteError:
+        raise
+    except Exception:
+        pass
+    storage_failure = re.search(
+        r'no space left|disk (?:is )?full|input/output error|'
+        r'i/o error|device (?:is )?not ready|no such device|'
+        r'device not connected|error (?:writing|closing)|'
+        r'failed to (?:write|flush)', tail, re.IGNORECASE)
+    if storage_failure:
+        raise StorageWriteError(out_mp4, OSError(tail.strip()))
+    print(f'[合成] ffmpeg 重新封裝失敗 rc={proc.returncode}: {tail}', flush=True)
+    return False
+
 class M3U8Crawler:
     """A base class for all m3u8 crawl website tools."""
     skip_pattern = False
@@ -539,7 +600,6 @@ class M3U8Crawler:
         self._t_future = None
         self._t2_executor = None
         self._cancel_job = None
-        self._ffmpeg_proc = None
         self._extra_headers = {}   # subclass may set (e.g. Referer)
         self._dirName = None
         self._dest_folder = None
@@ -884,66 +944,7 @@ class M3U8Crawler:
         return spent_time
 
     def _remux_to_mp4(self, merged_ts, out_mp4, workdir):
-        backend = storage_fs(merged_ts)
-        if backend.remote:
-            return backend.remux_to_mp4(merged_ts, out_mp4, lambda: self._cancel_job)
-        ffmpeg = locate_ffmpeg()
-        if not ffmpeg:
-            print('[合成] 找不到 ffmpeg，無法重新封裝 MP4', flush=True)
-            return False
-        ff_dir = _ffmpeg_safe_dir(workdir)
-        in_arg = os.path.join(ff_dir, os.path.basename(merged_ts))
-        out_arg = os.path.join(ff_dir, os.path.basename(out_mp4))
-        log_path = os.path.join(workdir, 'ffmpeg.log')
-        cmd = [ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
-               '-fflags', '+genpts', '-i', in_arg,
-               '-c', 'copy', '-movflags', '+faststart',
-               '-avoid_negative_ts', 'make_zero', out_arg]
-        print('正在重新封裝為可正常拖曳的 MP4 ...', flush=True)
-        try:
-            with storage_open(log_path, 'wb') as errf:
-                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                                        stdout=subprocess.DEVNULL, stderr=errf,
-                                        **_no_window_kwargs())
-                self._ffmpeg_proc = proc
-                try:
-                    while True:
-                        try:
-                            proc.wait(timeout=0.3); break
-                        except subprocess.TimeoutExpired:
-                            if self._cancel_job:
-                                proc.kill(); proc.wait(); return False
-                finally:
-                    self._ffmpeg_proc = None
-        except StorageWriteError:
-            raise
-        except Exception as e:
-            print(f'[合成] ffmpeg 執行錯誤: {e}', flush=True)
-            return False
-        if self._cancel_job:
-            return False
-        try:
-            if proc.returncode == 0 and storage_fs(out_mp4).exists(out_mp4) and storage_fs(out_mp4).getsize(out_mp4) > 0:
-                return True
-        except OSError as exc:
-            raise StorageWriteError(out_mp4, exc) from exc
-        tail = ''
-        try:
-            with storage_open(log_path, 'r', encoding='utf-8', errors='replace') as f:
-                tail = f.read()[-800:]
-        except StorageWriteError:
-            raise
-        except Exception:
-            pass
-        storage_failure = re.search(
-            r'no space left|disk (?:is )?full|input/output error|'
-            r'i/o error|device (?:is )?not ready|no such device|'
-            r'device not connected|error (?:writing|closing)|'
-            r'failed to (?:write|flush)', tail, re.IGNORECASE)
-        if storage_failure:
-            raise StorageWriteError(out_mp4, OSError(tail.strip()))
-        print(f'[合成] ffmpeg 重新封裝失敗 rc={proc.returncode}: {tail}', flush=True)
-        return False
+        return remux_to_mp4(merged_ts, out_mp4, workdir, lambda: self._cancel_job)
 
     def _scrape(self, task):
         """Download and decrypt one segment. task=(seq_num, url)"""
@@ -998,7 +999,8 @@ class M3U8Crawler:
                 speed_str = f"{speed/1024:.0f} KB/s" if speed < 1024*1024 else f"{speed/1024/1024:.1f} MB/s"
                 print(f'\r下載中: {done}/{self._job_total} 片段 | {speed_str} | 剩餘 {rem_str}  ', end='', flush=True)
                 if self._progress_callback:
-                    self._progress_callback(done, self._job_total, speed)
+                    total = len(self._tsList)
+                    self._progress_callback(total - remain, total, speed)
             return True
         except StorageWriteError as exc:
             self._storage_error = exc
@@ -1014,6 +1016,8 @@ class M3U8Crawler:
         total = len(self._tsList)
         self._job_total = len(self._pending_set)
         print(f'共 {total} 片段，已完成 {total - self._job_total}，剩餘 {self._job_total}...', flush=True)
+        if getattr(self, '_progress_callback', None):
+            self._progress_callback(total - self._job_total, total, 0)
 
         max_rounds = max(1, int(getattr(
             self, '_segment_retry_rounds',
@@ -1124,10 +1128,6 @@ class M3U8Crawler:
             try: self._t_executor.shutdown(wait=False, cancel_futures=True)
             except TypeError: self._t_executor.shutdown(wait=False)
             self._t_executor = None
-        proc = getattr(self, '_ffmpeg_proc', None)
-        if proc is not None:
-            try: proc.kill()
-            except Exception: pass
         if cleanup:
             self.cleanup_temp()
         print("\n下載已取消", flush=True)

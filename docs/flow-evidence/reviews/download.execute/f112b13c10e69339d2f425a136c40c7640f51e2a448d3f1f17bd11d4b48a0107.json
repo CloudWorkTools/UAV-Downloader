@@ -1,0 +1,48 @@
+{
+  "feature": "download.execute",
+  "fingerprint": "f112b13c10e69339d2f425a136c40c7640f51e2a448d3f1f17bd11d4b48a0107",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 986ae950c15b82d8daa8aea6daa2c05423784743，候選 152e3e5fed7b035a9095c35a9d75bbeaaa44311f。候選 python.log 記錄 218 項測試通過。",
+    "四個核心檔案 download_files.py、sites/base.py、mobile-actions.js、task-selection.js 與已審查部署候選位元組相同。用基準各自計算零上下文 patch ID，task_manager.py、server.py、index.html 與新增測試也和部署版相符。",
+    "master 的管理器全文差異僅在原有字幕尾段文案，Rust/daemon 的字幕代理及 HTML 字幕與搜尋區塊是原基底差異。這些分支與 force_merge 分開，未改變先停止寫入、保留片段、重新派送、取消、重新封裝及原子另存。",
+    "master 的 nas.py:381–392 保留兩參數的 open_smb_storage 並沿用既有建立遠端子目錄行為，force_merge 的 smb/upload 呼叫同樣只傳兩參數。",
+    "同候選實際 Rust Web 及 Python daemon 測試，單項、所選與全佇列路徑累計接受五筆，四份輸出以 ffprobe 讀得 H.264，舊紀錄缺片仍停在暫停與續傳提示。證據為 ui.log 與 exact.aQgLoh。",
+    "download.execute.mmd 在 master 原流程增加強制合併的各狀態分支，既有下載圖不混入部署分支另外具備的字幕整片流程。"
+  ],
+  "limitations": [
+    "隔離候選證據採 git 來源差異與候選實際測試，主要 checkout 的圖索引僅供導航。",
+    "本輪沒有對真實 NAS 進行強制合併。",
+    "未保存單位的舊暫停紀錄可能仍依計數顯示強制合併。沒有可用分片時會回到暫停並提示續傳，新版的已知位元組任務不會顯示。"
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "docs/flows/download.execute.mmd",
+    "src/uav_downloader/daemon/task_manager.py",
+    "src/uav_downloader/daemon/download_files.py",
+    "src/uav_downloader/daemon/server.py",
+    "src/uav_downloader/daemon/nas.py",
+    "src/uav_downloader/sites/base.py",
+    "uav-web/frontend/index.html",
+    "uav-web/frontend/mobile-actions.js",
+    "uav-web/frontend/task-selection.js",
+    "tests/test_daemon_downloads.py",
+    "tests/task_menu.cjs"
+  ],
+  "reused_evidence": [
+    "/tmp/uav-force-release.Ebwl6C/flow-review-delivery.json 的同功能審查（部署候選 9aa799a2d4b0f5991de514da5308b7f24ed403f0，指紋 eb06bc958b7a414c555c0b6f51c6980df397d02d893975ced288f1cb81967ca7），重用未變的分片及發布驗證與對應流程核對。"
+  ],
+  "additional_reads": [
+    {
+      "path": "src/uav_downloader/daemon/nas.py",
+      "reason": "確認 master 基底的代理或儲存邊界沒有改變被重用的結論。"
+    }
+  ],
+  "token_usage": "unavailable"
+}
