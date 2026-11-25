@@ -20,7 +20,17 @@ PAUSE["暫停後保留片段及可能已發布的檔案供續傳"]
 PAUSECHECK{"連線釋放失敗？"}
 PAUSED["任務已暫停"]
 RELEASEFAIL["本次嘗試清理或釋放失敗；停止自動重試，清理可能已移除部分歸屬檔案"]
-START --> ATTEMPT
+FORCE["強制合併使用原佇列名額；等待下載停止後讀取同任務已寫完的片段"]
+PARTIAL["依片段編號封裝 MP4，另存至不完整影片資料夾並保留原片段"]
+FORCEFAIL["合併或寫入失敗，顯示錯誤並保留原片段供重試"]
+START -->|一般下載| ATTEMPT
+START -->|接受強制合併請求| FORCE
+FORCE -->|儲存成功| PARTIAL
+FORCE -->|合併或寫入失敗| FORCEFAIL
+FORCE -->|取消任務| CANCEL
+FORCE -->|服務停止或沒有可用片段| PAUSED
+PARTIAL --> PAUSED
+PAUSECHECK -->|釋放成功且有合併請求，重新排入佇列| FORCE
 ATTEMPT --> RESULT
 RESULT -->|成功| PUBLISH
 RESULT -->|失敗且仍可重試| WAIT

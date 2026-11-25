@@ -140,6 +140,38 @@ try {
       await new Promise(resolve => setTimeout(resolve, 0));
       check(!removal.open && removalRequests.length === 1, 'Confirmed category was not processed once');
       check(taskSelection.has('running') && taskSelection.has('waiting') && !taskSelection.has('done'), 'Removal changed unchecked selections');
+      taskSelection.toggleMode();
+      renderTasks([
+        {...task, task_id:'slice-a', can_force_merge:true},
+        {...task, task_id:'slice-b', status:'failed', can_force_merge:true},
+        {...task, task_id:'no-slices', status:'pending'}
+      ]);
+      const mergeActions = [];
+      window.fetch = async (_url, options) => {
+        const payload = JSON.parse(options.body);
+        mergeActions.push(payload);
+        return {ok:true, json:async () => ({success:true, accepted:payload.task_ids, skipped:[]})};
+      };
+      const mergeDialog = document.getElementById('task-merge-dialog');
+      const mergeMenu = document.querySelector('#tasks-container details');
+      mergeMenu.querySelector('summary').click();
+      mergeMenu.querySelector('button[onclick*=forceMerge]').click();
+      check(mergeDialog.open && document.getElementById('task-merge-count').textContent === '1', 'Single merge must confirm one task');
+      mergeDialog.querySelector('button[type=button]').click();
+      check(!mergeDialog.open && !mergeActions.length, 'Returning must not submit a merge');
+      await new Promise(resolve => setTimeout(resolve, 0));
+      document.getElementById('queue-selection-mode').click();
+      document.getElementById('select-tasks-button').click();
+      const mergeSelected = document.getElementById('force-merge-selected-button');
+      check(mergeSelected.textContent.includes('(2)'), 'Selection must count only tasks with segments');
+      mergeSelected.click();
+      mergeDialog.querySelector('button[type=submit]').click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      document.getElementById('force-merge-all-button').click();
+      mergeDialog.querySelector('button[type=submit]').click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      check(mergeActions.length === 2 && mergeActions.every(payload => payload.action === 'force_merge' &&
+        payload.task_ids.join() === 'slice-a,slice-b'), 'Both batch entries must submit exactly the eligible tasks');
       document.body.innerHTML = '<p>MENU_TEST_PASS</p>';
     })().catch(error => { document.body.innerHTML = '<p>MENU_TEST_FAIL: ' + error.message + '</p>'; });
     </script>`);

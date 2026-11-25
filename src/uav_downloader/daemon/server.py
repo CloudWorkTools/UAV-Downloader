@@ -335,6 +335,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 if action in ('cancel', 'cancel_remove'):
                     return self._send_json({'success': True, **self.task_manager.cancel_tasks(
                         body.get('task_ids'), remove_records=action == 'cancel_remove')})
+                if action == 'force_merge':
+                    return self._send_json({'success': True, **self.task_manager.force_merge_tasks(body.get('task_ids'))})
                 if action == 'update_settings':
                     result = self.task_manager.update_tasks(body.get('task_ids'), storage=body.get('storage'),
                                                             dest=body.get('dest'), subtitle_mode=body.get('subtitle_mode'),

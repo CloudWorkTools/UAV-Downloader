@@ -32,7 +32,9 @@
       "src/uav_downloader/subtitles/profiles.py",
       "src/uav_downloader/subtitles/settings.py",
       "src/uav_downloader/subtitles/asr.py",
-      "src/uav_downloader/core/media_errors.py"
+      "src/uav_downloader/core/media_errors.py",
+      "src/uav_downloader/sites/base.py",
+      "uav-web/frontend/task-selection.js"
     ],
     "exclude": {}
   },
@@ -96,8 +98,8 @@
     {
       "path": "src/uav_downloader/daemon/download_files.py",
       "kind": "python-module",
-      "md5": "b40ee32fd37728dfec6564ef84ac24e3",
-      "semantic_hash": "b36e8ff1bb21ecfb6844b1b526c8fba24dff36de71b695cf45137b3d84c73c62"
+      "md5": "38d44934d406b2187a6c7afe15517391",
+      "semantic_hash": "b86ebad397ec7fc52a3c74eb0ea1ec6aeead8e9609f626a13f02af3b9c521a7a"
     },
     {
       "path": "src/uav_downloader/daemon/nas.py",
@@ -108,14 +110,14 @@
     {
       "path": "src/uav_downloader/daemon/server.py",
       "kind": "python-module",
-      "md5": "026e6eb93eba427c439eaab0bc0677d6",
-      "semantic_hash": "b9cb95a1b93e6ec41f648c129fe05941c3ca2b13fcbfbe5780b4fc340019f942"
+      "md5": "7e49b07ca7c439ce07f14512e12bc951",
+      "semantic_hash": "5c05c39b9fc6cb1f05a6689c8e01a852834e0579b6e4fb490913d2fc8b763029"
     },
     {
       "path": "src/uav_downloader/daemon/task_manager.py",
       "kind": "python-module",
-      "md5": "87d78db288beccd89a0bf71d69105673",
-      "semantic_hash": "b5439ffcff6ed7b4e8590a18a586af6dd980499a33b5146e0add5b768f73c5d7"
+      "md5": "940565e1a77a9fe75693d2488bc71b70",
+      "semantic_hash": "52e228265f1fbb684102eba6a5917bd24f8a7966fb817e26a2818f58a0d55b17"
     },
     {
       "path": "src/uav_downloader/metadata.py",
@@ -143,7 +145,7 @@
     {
       "path": "uav-web/frontend/index.html",
       "kind": "file",
-      "md5": "d276b2661c20317fe0982495bda33e3b"
+      "md5": "edb6182ae03e5cfd7668cbed068aeabc"
     },
     {
       "path": "uav-web/frontend/video-selection.js",
@@ -170,8 +172,8 @@
       "path": "uav-web/frontend/mobile-actions.js",
       "kind": "tree-sitter-module",
       "language": "javascript",
-      "md5": "bf40255dd58abde2be538b2985a499be",
-      "semantic_hash": "b828c65b276c9d7bb40ff1874fc7d2e84f7a1f488ce2cafd99ecb4f52c3850bb"
+      "md5": "5aeac7cb129f375602167c023397f740",
+      "semantic_hash": "9e13ab0a7718e3fa8999999bd231b90f07ee8d0b8a2fb1f12624deaddb791440"
     },
     {
       "path": "uav-web/frontend/mobile-actions.css",
@@ -214,6 +216,19 @@
       "kind": "python-module",
       "md5": "53f5cf60b4921b9af5a93638b108a506",
       "semantic_hash": "6e92047c220bc3e310b911206cfafdde50b565e08303b44f67e324b2a3bdef76"
+    },
+    {
+      "path": "src/uav_downloader/sites/base.py",
+      "kind": "python-module",
+      "md5": "0819f9c21397c45e64c6d2bb788465da",
+      "semantic_hash": "2ef46f4fad0a29f8e451fac6df55e58792af97348e1301b425cc6d076e2576b3"
+    },
+    {
+      "path": "uav-web/frontend/task-selection.js",
+      "kind": "tree-sitter-module",
+      "md5": "e2407d809c9d768265b656a8ee554525",
+      "language": "javascript",
+      "semantic_hash": "23b914a62f7505ff0be3975a96d1286e09621cf9f002ed09d02cc25191d7bdb8"
     }
   ],
   "features": [
@@ -745,6 +760,54 @@
         },
         {
           "node": "NEXT",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "FORCE",
+          "path": "uav-web/frontend/index.html"
+        },
+        {
+          "node": "FORCE",
+          "path": "uav-web/frontend/task-selection.js"
+        },
+        {
+          "node": "FORCE",
+          "path": "uav-web/frontend/mobile-actions.js"
+        },
+        {
+          "node": "FORCE",
+          "path": "src/uav_downloader/daemon/server.py"
+        },
+        {
+          "node": "FORCE",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "PARTIAL",
+          "path": "src/uav_downloader/daemon/download_files.py"
+        },
+        {
+          "node": "PARTIAL",
+          "path": "src/uav_downloader/sites/base.py"
+        },
+        {
+          "node": "PARTIAL",
+          "path": "src/uav_downloader/daemon/task_manager.py"
+        },
+        {
+          "node": "PARTIAL",
+          "path": "src/uav_downloader/daemon/nas.py"
+        },
+        {
+          "node": "PARTIAL",
+          "path": "src/uav_downloader/core/smb_storage.py"
+        },
+        {
+          "node": "FORCEFAIL",
+          "path": "src/uav_downloader/daemon/download_files.py"
+        },
+        {
+          "node": "FORCEFAIL",
           "path": "src/uav_downloader/daemon/task_manager.py"
         }
       ]

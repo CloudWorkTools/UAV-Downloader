@@ -1,9 +1,11 @@
 """Exact video identity checks and files owned by one Web download task."""
 import os
+import re
 import uuid
 
-from uav_downloader.core.storage import storage_fs
+from uav_downloader.core.storage import storage_fs, storage_open
 from uav_downloader.core.video_identity import canonical_code, video_code
+from uav_downloader.sites.base import _truncate_target_name, remux_to_mp4
 
 
 VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.ts'}
@@ -102,6 +104,84 @@ class DownloadFiles:
                 (target_fs.replace if overwrite else self.filesystem.publish)(source, target)
             if not replacing:
                 self.published.append(target)
+
+    def export_partial(self, destination, name, cancelled, paused, stage):
+        filesystem = storage_fs(self.workdir)
+        if filesystem.islink(self.workdir) or not filesystem.isdir(self.workdir):
+            raise ValueError('找不到此任務的片段暫存目錄')
+        if not name or '/' in name or '\\' in name or name in ('.', '..'):
+            raise ValueError('影片檔名無效')
+
+        groups = []
+        for directory in filesystem.listdir(self.workdir):
+            folder = os.path.join(self.workdir, directory)
+            if filesystem.islink(folder) or not filesystem.isdir(folder):
+                continue
+            segments = []
+            for entry in filesystem.listdir(folder):
+                if cancelled.is_set() or paused.is_set():
+                    return None
+                match = re.fullmatch(r'([0-9]{6,})\.mp4', entry)
+                if match:
+                    path = os.path.join(folder, entry)
+                    if not filesystem.islink(path) and filesystem.isfile(path) and filesystem.getsize(path):
+                        segments.append((int(match[1]), path))
+            if segments:
+                groups.append(segments)
+        if not groups:
+            return None
+        if len(groups) != 1:
+            raise ValueError('找到多份片段目錄，無法確認哪些片段屬於同一份影片')
+
+        target = os.path.join(destination, '不完整影片')
+        target_fs = storage_fs(target)
+        if target_fs.islink(target):
+            raise ValueError('不完整影片的存放目錄不可使用符號連結')
+        export = DownloadFiles(target, 'partial', self.workdir)
+        try:
+            longest_folder = max((target, export.workdir), key=lambda path: len(path.encode('utf-16-le')))
+            stem = _truncate_target_name(name, longest_folder, os.path.basename(self.workdir))
+            filename = f'{stem}.mp4'
+            remux_dir = os.path.join(export.workdir, 'remux')
+            filesystem.makedirs(remux_dir)
+            merged = os.path.join(remux_dir, 'merged.ts')
+            output = os.path.join(remux_dir, 'out.mp4')
+            segments = sorted(groups[0])
+            with storage_open(merged, 'wb') as out:
+                for index, (_, path) in enumerate(segments):
+                    stage('強制合併影片片段', index, len(segments))
+                    with storage_open(path, 'rb') as source:
+                        while chunk := source.read(1024 * 1024):
+                            if cancelled.is_set() or paused.is_set():
+                                return None
+                            out.write(chunk)
+            stage('重新封裝不完整影片', len(segments), len(segments))
+            if not remux_to_mp4(merged, output, remux_dir,
+                                lambda: cancelled.is_set() or paused.is_set()):
+                if cancelled.is_set() or paused.is_set():
+                    return None
+                raise RuntimeError('不完整影片封裝失敗，已保留下載片段')
+            if cancelled.is_set() or paused.is_set():
+                return None
+            filesystem.remove(merged)
+            stage('儲存不完整影片')
+            for attempt in range(2):
+                if attempt or target_fs.exists(os.path.join(target, filename)):
+                    suffix = uuid.uuid4().hex[:8]
+                    stem = _truncate_target_name(f'{name}_{suffix}', longest_folder, suffix)
+                    filename = f'{stem}.mp4'
+                staged = os.path.join(export.workdir, filename)
+                filesystem.replace(output, staged)
+                try:
+                    export.publish(cancelled)
+                except FileExistsError:
+                    if attempt:
+                        raise
+                    output = staged
+                else:
+                    return filename if export.published else None
+        finally:
+            export.filesystem.rmtree(export.workdir, ignore_errors=True)
 
     def cleanup(self, *, cancelled=False):
         if cancelled:
