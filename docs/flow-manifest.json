@@ -1121,6 +1121,34 @@
       "reviewer": "/root/flow_review",
       "verdict": "pass",
       "evidence": "docs/flow-evidence/reviews/download.batch/82b0bcfa60e8f578261b52941b03ae210b4b8ce773af0942ec59fffec27c2205.json"
+    },
+    {
+      "feature": "download.batch",
+      "fingerprint": "62cc170c5f639a08b8007f62a7c6cac219dc1754f6cb8410601ecd73c49b24e4",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.batch/62cc170c5f639a08b8007f62a7c6cac219dc1754f6cb8410601ecd73c49b24e4.json"
+    },
+    {
+      "feature": "download.execute",
+      "fingerprint": "f112b13c10e69339d2f425a136c40c7640f51e2a448d3f1f17bd11d4b48a0107",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/download.execute/f112b13c10e69339d2f425a136c40c7640f51e2a448d3f1f17bd11d4b48a0107.json"
+    },
+    {
+      "feature": "queue.enqueue",
+      "fingerprint": "5afbc3f7969d17021678e6d9096e8bf719852f6527ca7b048e03dd438f9e37e4",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/queue.enqueue/5afbc3f7969d17021678e6d9096e8bf719852f6527ca7b048e03dd438f9e37e4.json"
+    },
+    {
+      "feature": "storage.destination",
+      "fingerprint": "0d88f4f686f88e63d9210d31cfa605b6f13684b964e63b4d3cd61e2408002086",
+      "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+      "verdict": "pass",
+      "evidence": "docs/flow-evidence/reviews/storage.destination/0d88f4f686f88e63d9210d31cfa605b6f13684b964e63b4d3cd61e2408002086.json"
     }
   ],
   "policy_inputs": [

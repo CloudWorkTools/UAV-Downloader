@@ -1,0 +1,43 @@
+{
+  "feature": "download.batch",
+  "fingerprint": "62cc170c5f639a08b8007f62a7c6cac219dc1754f6cb8410601ecd73c49b24e4",
+  "reviewer": "Codex 獨立審查代理 force_merge_flow_review",
+  "verdict": "pass",
+  "findings": [],
+  "evidence": [
+    "比較基準 986ae950c15b82d8daa8aea6daa2c05423784743，候選 152e3e5fed7b035a9095c35a9d75bbeaaa44311f。候選 python.log 記錄 218 項測試通過。",
+    "server.py:287–295 的批次 preview/submit 與 route/client 對應函式沿用 master 基準。新增 action 在 server.py:333–339，與批次請求分流。",
+    "批次路徑的字幕設定快照、識別碼快取、目的地重查及回復行為維持 master 基準。手機選單與 HTML 的此次功能補丁等同已審查部署候選，master 既有的字幕工具及搜尋差異不參與下載佇列。"
+  ],
+  "limitations": [
+    "隔離候選證據採 git 來源差異與候選實際測試，主要 checkout 的圖索引僅供導航。"
+  ],
+  "newly_read_paths": [
+    "docs/agents/flow-docs-sync.md",
+    "docs/agents/review-efficiency.md",
+    "docs/flow-manifest.json",
+    "docs/flows/README.md",
+    "docs/flows/contracts.md",
+    "docs/flows/download.batch.mmd",
+    "src/uav_downloader/daemon/server.py",
+    "src/uav_downloader/daemon/download_batch.py",
+    "uav-web/src/routes.rs",
+    "uav-web/src/client.rs",
+    "uav-web/frontend/index.html",
+    "uav-web/frontend/mobile-actions.js"
+  ],
+  "reused_evidence": [
+    "/tmp/uav-force-release.Ebwl6C/flow-review-delivery.json 的同功能審查（部署候選 9aa799a2d4b0f5991de514da5308b7f24ed403f0，指紋 ede3fb78fe19e3d741d1e41e32141b6a56dc0530bbdf047d283216b61305f397），重用未變的分片及發布驗證與對應流程核對。"
+  ],
+  "additional_reads": [
+    {
+      "path": "uav-web/src/routes.rs",
+      "reason": "確認 master 基底的代理或儲存邊界沒有改變被重用的結論。"
+    },
+    {
+      "path": "uav-web/src/client.rs",
+      "reason": "確認 master 基底的代理或儲存邊界沒有改變被重用的結論。"
+    }
+  ],
+  "token_usage": "unavailable"
+}
