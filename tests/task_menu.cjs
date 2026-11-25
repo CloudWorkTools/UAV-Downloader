@@ -172,6 +172,25 @@ try {
       await new Promise(resolve => setTimeout(resolve, 0));
       check(mergeActions.length === 2 && mergeActions.every(payload => payload.action === 'force_merge' &&
         payload.task_ids.join() === 'slice-a,slice-b'), 'Both batch entries must submit exactly the eligible tasks');
+      const merging = {...task, status:'merging', progress:95, downloaded_segments:95,
+        phase:'強制合併影片片段', phase_done:12, phase_total:40};
+      const taskList = document.getElementById('tasks-container');
+      renderTasks([merging]);
+      const meter = () => taskList.querySelector('progress');
+      check(meter()?.value === 30, 'Force merge must show progress for copied segments');
+      check(taskList.textContent.includes('12 / 40') && taskList.textContent.includes('30%') &&
+        !taskList.textContent.includes('95%'), 'Force merge must show its own count and percentage');
+      renderTasks([{...merging, phase_done:24}]);
+      check(meter()?.value === 60, 'Force merge progress must follow new snapshots');
+      for (const phase of ['等待強制合併', '重新封裝不完整影片', '儲存不完整影片']) {
+        renderTasks([{...merging, phase, phase_done:0, phase_total:0}]);
+        check(meter()?.matches(':indeterminate') && taskList.textContent.includes(phase),
+          'Unmeasured merge phases must show their label and indeterminate progress');
+      }
+      renderTasks([{...merging, status:'completed', force_merged_file:'【強制合併】測試.mp4'}]);
+      check(!meter() && taskList.textContent.includes('已下載'), 'Completed merge must remove the progress bar');
+      renderTasks([task]);
+      check(!meter() && taskList.textContent.includes('10%'), 'Regular downloads must keep their download progress');
       document.body.innerHTML = '<p>MENU_TEST_PASS</p>';
     })().catch(error => { document.body.innerHTML = '<p>MENU_TEST_FAIL: ' + error.message + '</p>'; });
     </script>`);

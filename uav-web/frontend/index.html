@@ -1055,7 +1055,12 @@
       }
 
       container.innerHTML = tasks.map(t => {
-        const downloadInfo = `影片：${t.name || t.url}\n網址：${t.url}\n暫存區：${t.staging_dir || '未另設'}\n下載 path：${t.dest || ''}\n最終位置：${t.final_dest || t.dest || ''}\n畫質：${t.resolution || '自動'}\n下載執行緒：${t.max_workers || '預設'}\n字幕：${t.subtitle_mode || 'none'}\n封面：${t.download_cover ? '下載' : '不下載'}\n進度：${t.progress || 0}%（${t.downloaded_segments || 0}/${t.total_segments || 0}）\n速度：${t.speed_formatted || '0 B/s'}\n階段：${t.phase || t.status}\n建立：${t.created_at || ''}\n更新：${t.updated_at || ''}`;
+        const merging = t.status === 'merging';
+        const mergePercent = merging && t.phase_total > 0 ? Math.floor(t.phase_done * 100 / t.phase_total) : null;
+        const progressInfo = merging
+          ? (mergePercent === null ? '處理中' : `${mergePercent}%（${t.phase_done}/${t.phase_total}）`)
+          : `${t.progress || 0}%（${t.downloaded_segments || 0}/${t.total_segments || 0}）`;
+        const downloadInfo = `影片：${t.name || t.url}\n網址：${t.url}\n暫存區：${t.staging_dir || '未另設'}\n下載 path：${t.dest || ''}\n最終位置：${t.final_dest || t.dest || ''}\n畫質：${t.resolution || '自動'}\n下載執行緒：${t.max_workers || '預設'}\n字幕：${t.subtitle_mode || 'none'}\n封面：${t.download_cover ? '下載' : '不下載'}\n進度：${progressInfo}\n速度：${t.speed_formatted || '0 B/s'}\n階段：${t.phase || t.status}\n建立：${t.created_at || ''}\n更新：${t.updated_at || ''}`;
         let statusBadge = '';
         if (t.status === 'downloading') {
           statusBadge = `<span class="px-2 py-0.5 text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded font-medium">${t.progress >= 100 ? '合併影片中' : `下載中 (${t.speed_formatted})`}</span>`;
@@ -1069,7 +1074,7 @@
           statusBadge = '<span class="text-sm text-gray-400">等待下載</span>';
         } else if (t.status === 'publishing') {
           statusBadge = '<span class="text-sm text-sky-400">整理並儲存影片中</span>';
-        } else if (t.status === 'merging') {
+        } else if (merging) {
           statusBadge = '<span class="text-sm text-sky-400">強制合併中</span>';
         } else if (t.status === 'uploading') {
           statusBadge = '<span class="text-sm text-sky-400">傳送到 NAS 中</span>';
@@ -1115,9 +1120,10 @@
               </div>
             </div>
             ${(t.folder_policy || t.force_merged_file) ? `<p class="text-xs text-gray-400 storage-path" title="${safe(t.final_dest || t.dest)}">儲存至：${safe(window.formatStoragePath(t.final_dest || t.dest))}</p>` : ''}
-            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 whitespace-pre-wrap break-words">${safe(t.phase)}${t.phase_total ? ` · ${safe(t.phase_done)} / ${safe(t.phase_total)}` : ''}</p>` : ''}
+            ${t.error ? `<p role="alert" title="${safe(t.error)}" class="text-xs text-rose-400 whitespace-pre-wrap break-words">${safe(t.error)}</p>` : t.phase ? `<p title="${safe(t.phase)}" class="text-xs text-gray-400 whitespace-pre-wrap break-words">${safe(t.phase)}${t.phase_total ? ` · ${safe(String(t.phase_done ?? 0))} / ${safe(t.phase_total)}` : ''}${mergePercent === null ? '' : ` · ${mergePercent}%`}</p>` : ''}
             <!-- Progress Bar -->
-            ${t.total_segments > 0 && !['completed', 'skipped', 'cancelled'].includes(t.status) ? `<div class="space-y-1">
+            ${merging ? `<progress aria-label="${safe(t.phase || '強制合併進度')}" max="100"${mergePercent === null ? '' : ` value="${mergePercent}"`} class="block w-full h-2 accent-brand-500"></progress>`
+              : t.total_segments > 0 && !['completed', 'skipped', 'cancelled'].includes(t.status) ? `<div class="space-y-1">
               <div class="w-full bg-[#282832] h-1 rounded-full overflow-hidden">
                 <div class="bg-gradient-to-r from-brand-600 to-rose-400 h-full transition-all duration-300" style="width: ${t.progress}%"></div>
               </div>
