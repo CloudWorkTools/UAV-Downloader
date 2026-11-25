@@ -1585,3 +1585,47 @@ def test_force_merge_failure_keeps_segments_and_can_retry(manager):
     assert not list((Path(task.dest) / '不完整影片').glob('*.mp4'))
     assert corrupt.read_bytes() == b'corrupt'
     assert manager.list_tasks()[0]['can_force_merge']
+
+
+
+def test_force_merge_interrupted_snapshot_restores_paused_and_is_rollback_compatible(manager, tmp_path):
+    import json
+
+    manager._state_path = tmp_path / 'tasks.json'
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    task.status, task.name = 'failed', 'MIMK-290'
+    task.downloaded_segments, task.total_segments = 1, 2
+    assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
+    assert 'progress_unit' not in json.loads(manager._state_path.read_text())[0]
+
+    restored = tm.TaskManager(state_path=manager._state_path)
+    result = restored.list_tasks()[0]
+    assert result['status'] == 'paused'
+    assert '中斷強制合併' in result['phase']
+    assert result['can_force_merge']
+
+
+
+def test_force_merge_keeps_both_exports_for_same_long_name(manager, hls_segments):
+    task = manager.add_task('https://missav.ai/mimk-290')
+    task.files = tm.DownloadFiles(task.dest, task.task_id)
+    task.status, task.name = 'failed', '影' * 82
+    task.downloaded_segments, task.total_segments = 1, 2
+    segments = Path(task.files.workdir) / 'segments'
+    segments.mkdir()
+    (segments / '000000.mp4').write_bytes(hls_segments[0])
+    output = Path(task.dest) / '不完整影片'
+
+    assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
+    manager._queue.remove(task.task_id)
+    manager._run_task_with_retries(task)
+    original, = output.glob('*.mp4')
+    before = original.read_bytes()
+
+    assert manager.force_merge_tasks([task.task_id])['accepted'] == [task.task_id]
+    manager._run_task_with_retries(task)
+    assert task.status == 'paused', task.error
+    other, = set(output.glob('*.mp4')) - {original}
+    assert original.read_bytes() == before
+    assert_partial_video(other, 10)

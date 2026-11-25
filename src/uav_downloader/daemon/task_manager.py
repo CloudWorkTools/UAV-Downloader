@@ -93,7 +93,6 @@ class DownloadTask:
             "progress": round(self.progress, 1),
             "downloaded_segments": self.downloaded_segments,
             "total_segments": self.total_segments,
-            "progress_unit": self.progress_unit,
             "speed_bps": round(self.speed_bps, 1),
             "speed_formatted": self._format_speed(),
             "error": self.error,
@@ -166,6 +165,9 @@ class TaskManager:
                     task.files = DownloadFiles.restore(task.dest, task.task_id, files, task.staging_dir)
                 # Old snapshots have no file ownership manifest; never assume their files were removed.
                 task.cleanup_unverified = task.cleanup_unverified or (not task.subtitles_only and not files and task.status not in ("pending", "completed", "skipped", "cancelled", "paused"))
+                if task.status == 'merging':
+                    task.status = 'paused'
+                    task.set_phase('服務重啟中斷強制合併，已保留原片段')
                 if task.status == 'pausing':
                     task.status = 'paused'
                 if task.status not in ("completed", "skipped", "cancelled", "failed", "paused"):

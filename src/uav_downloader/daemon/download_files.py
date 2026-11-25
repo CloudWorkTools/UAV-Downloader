@@ -5,7 +5,7 @@ import uuid
 
 from uav_downloader.core.storage import storage_fs, storage_open
 from uav_downloader.core.video_identity import canonical_code, video_code
-from uav_downloader.sites.base import remux_to_mp4
+from uav_downloader.sites.base import _truncate_target_name, remux_to_mp4
 
 
 VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.ts'}
@@ -137,11 +137,15 @@ class DownloadFiles:
         target_fs = storage_fs(target)
         if target_fs.islink(target):
             raise ValueError('不完整影片的存放目錄不可使用符號連結')
-        filename = f'{name}.mp4'
-        if target_fs.exists(os.path.join(target, filename)):
-            filename = f'{name}（{uuid.uuid4().hex[:8]}）.mp4'
         export = DownloadFiles(target, 'partial', self.workdir)
         try:
+            longest_folder = max((target, export.workdir), key=lambda path: len(path.encode('utf-16-le')))
+            stem = _truncate_target_name(name, longest_folder, os.path.basename(self.workdir))
+            filename = f'{stem}.mp4'
+            if target_fs.exists(os.path.join(target, filename)):
+                suffix = uuid.uuid4().hex[:8]
+                stem = _truncate_target_name(f'{name}_{suffix}', longest_folder, suffix)
+                filename = f'{stem}.mp4'
             remux_dir = os.path.join(export.workdir, 'remux')
             filesystem.makedirs(remux_dir)
             merged = os.path.join(remux_dir, 'merged.ts')
